@@ -1,0 +1,16 @@
+{
+  "name": "定位派个人 IP 内容工作台",
+  "short_name": "定位派",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "description": "帮助个人创作者完成定位、研究、选题、创作和复盘的内容工作台",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "/icon-512.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

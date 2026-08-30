@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>定位派 · 三套配色方案预览</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Inter', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f1f2f4; color: #1f2328; }
+.page { max-width: 1380px; margin: 0 auto; padding: 40px 24px 80px; }
+.page > header { text-align: center; margin-bottom: 40px; }
+.page > header h1 { font: 600 30px/1.2 'Noto Serif SC', serif; margin: 0 0 8px; letter-spacing: -.03em; }
+.page > header p { margin: 0; color: #656d76; font-size: 13px; }
+.themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+@media (max-width: 1100px) { .themes { grid-template-columns: 1fr; } }
+.theme { border-radius: 18px; overflow: hidden; box-shadow: 0 14px 40px rgba(0,0,0,.10); display: flex; flex-direction: column; }
+.theme-head { padding: 20px 22px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; border-bottom: 1px solid var(--line); }
+.theme-head h2 { margin: 0; font-size: 17px; letter-spacing: -.02em; }
+.theme-head .ref { font-size: 10px; margin-top: 4px; letter-spacing: .05em; }
+.theme-body { padding: 22px; display: flex; flex-direction: column; gap: 20px; }
+.swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.swatch { border-radius: 8px; padding: 8px; font: 500 9px 'DM Mono'; }
+.swatch span { display: block; margin-top: 4px; }
+.mock { border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+.mock-top { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.mock-top .brand { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; }
+.mock-brand-mark { width: 20px; height: 20px; border: 1.5px solid var(--accent); border-radius: 6px; display: grid; place-items: center; font-size: 9px; color: var(--accent); }
+.mock-top nav { display: flex; gap: 14px; font-size: 11px; color: var(--muted); }
+.mock-top nav b { color: var(--ink); }
+.mock-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px; }
+.mock-card { padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-strong); }
+.mock-card h4 { margin: 0 0 5px; font: 600 13px 'Noto Serif SC', serif; }
+.mock-card p { margin: 0; font-size: 10px; color: var(--muted); line-height: 1.6; }
+.mock-tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font: 500 9px 'DM Mono'; margin-bottom: 8px; }
+.mock-btn-row { display: flex; gap: 8px; padding: 0 14px 14px; }
+.mock-btn { flex: 1; padding: 9px 0; border-radius: 8px; font-size: 11px; font-weight: 600; text-align: center; }
+.btn-primary { background: var(--btn-bg); color: var(--btn-fg); }
+.btn-ghost { border: 1px solid var(--line); color: var(--muted); }
+.mock-input { margin: 0 14px 14px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 11px; }
+.mock-row { display: flex; align-items: center; gap: 9px; padding: 9px 14px; border-top: 1px solid var(--line); font-size: 11px; }
+.mock-row .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--positive); }
+.mock-row .meta { margin-left: auto; color: var(--muted); font: 500 9px 'DM Mono'; }
+.type-sample { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-strong); }
+.type-sample .big { font: 600 22px/1.2 'Noto Serif SC', serif; margin-bottom: 8px; letter-spacing: -.03em; }
+.type-sample .mid { font: 500 12px/1.8 'Noto Serif SC', serif; }
+.type-sample .small { margin-top: 8px; color: var(--muted); font-size: 10px; }
+.type-sample .mono { margin-top: 8px; color: var(--accent); font: 500 9px 'DM Mono'; letter-spacing: .08em; }
+/* A · GitHub Primer light */
+.theme-a { --canvas: #ffffff; --surface: #f6f8fa; --surface-strong: #ffffff; --ink: #1f2328; --muted: #656d76; --line: #d0d7de; --accent: #0969da; --accent-soft: #ddf4ff; --amber: #9a6700; --coral: #cf222e; --positive: #1a7f37; --btn-bg: #1f2328; --btn-fg: #ffffff; background: var(--canvas); color: var(--ink); }
+/* B · Radix sage + teal */
+.theme-b { --canvas: #fbfcfc; --surface: #f2f5f4; --surface-strong: #ffffff; --ink: #18211e; --muted: #7b8883; --line: #d5dfdc; --accent: #0d9488; --accent-soft: #dff5f1; --amber: #8f6b1f; --coral: #c55a4d; --positive: #2d7d5a; --btn-bg: #18211e; --btn-fg: #ffffff; background: var(--canvas); color: var(--ink); }
+/* C · Linear dark */
+.theme-c { --canvas: #08090a; --surface: #0f1011; --surface-strong: #191a1b; --ink: #f7f8f8; --muted: #8a8f98; --line: #23252a; --accent: #5e6ad2; --accent-soft: rgba(94,106,210,.15); --amber: #e0a04a; --coral: #ef7f6d; --positive: #27a644; --btn-bg: #5e6ad2; --btn-fg: #ffffff; background: var(--canvas); color: var(--ink); }
+.theme-c .type-sample, .theme-c .mock-card { border-color: rgba(255,255,255,.08); }
+.theme-c .swatch { border: 1px solid rgba(255,255,255,.08); }
+.theme-c .theme-head { border-color: rgba(255,255,255,.08); }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>定位派 · 三套配色方案</h1>
+    <p>基于 GitHub 开源设计系统真实色值规划：GitHub Primer · Radix UI · Linear</p>
+  </header>
+  <main class="themes">
+
+    <section class="theme theme-a">
+      <div class="theme-head">
+        <div>
+          <h2>A · 编辑部</h2>
+          <div class="ref" style="color:var(--muted)">GitHub Primer · 浅色 · 内容证据</div>
+        </div>
+        <div class="mock-brand-mark">定</div>
+      </div>
+      <div class="theme-body">
+        <div class="swatches">
+          <div class="swatch" style="background:#ffffff;border:1px solid #d0d7de;color:#1f2328">canvas<span>#ffffff</span></div>
+          <div class="swatch" style="background:#f6f8fa;color:#1f2328">surface<span>#f6f8fa</span></div>
+          <div class="swatch" style="background:#1f2328;color:#ffffff">ink<span>#1f2328</span></div>
+          <div class="swatch" style="background:#0969da;color:#ffffff">accent<span>#0969da</span></div>
+          <div class="swatch" style="background:#d0d7de;color:#1f2328">line<span>#d0d7de</span></div>
+        </div>
+        <div class="mock">
+          <div class="mock-top">
+            <div class="brand"><span class="mock-brand-mark">定</span>定位派</div>
+            <nav><b>工作台</b><span>热点研究</span><span>选题助手</span></nav>
+          </div>
+          <div class="mock-grid">
+            <div class="mock-card"><span class="mock-tag" style="color:#bb5d70;background:#f4dce2">小红书</span><h4>别再迷信个人 IP：先把一件小事做成</h4><p>商业创业 · 观点型 · 讨论 1204</p></div>
+            <div class="mock-card"><span class="mock-tag" style="color:#0969da;background:#ddf4ff">爆款结构</span><h4>反常识开场 → 真实案例 → 方法拆解</h4><p>保留来源引用和事实核验</p></div>
+          </div>
+          <div class="mock-input">写下你的真实经历，不需要组织得很完美...</div>
+          <div class="mock-btn-row"><div class="mock-btn btn-ghost">暂时想不到</div><div class="mock-btn btn-primary">生成我的定位</div></div>
+          <div class="mock-row"><span class="dot"></span>内容策略已同步<span class="meta">TODAY / 14:20</span></div>
+        </div>
+        <div class="type-sample">
+          <div class="mono">EDITORIAL / CONTENT EVIDENCE</div>
+          <div class="big">编辑部，冷调内容证据</div>
+          <div class="mid">基于 GitHub Primer 的中性色阶：纯白画布 + 灰蓝面板 + 品牌蓝强调。适合理性、克制、工具感强的 IP 研究场景。</div>
+          <div class="small">字体：Noto Sans SC 正文 · Noto Serif SC 标题 · Inter 西文</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="theme theme-b">
+      <div class="theme-head">
+        <div>
+          <h2>B · 清泉青</h2>
+          <div class="ref" style="color:var(--muted)">Radix UI · 冷调浅色 · 清爽安静</div>
+        </div>
+        <div class="mock-brand-mark">定</div>
+      </div>
+      <div class="theme-body">
+        <div class="swatches">
+          <div class="swatch" style="background:#fbfcfc;border:1px solid #d5dfdc;color:#18211e">canvas<span>#fbfcfc</span></div>
+          <div class="swatch" style="background:#f2f5f4;color:#18211e">surface<span>#f2f5f4</span></div>
+          <div class="swatch" style="background:#18211e;color:#ffffff">ink<span>#18211e</span></div>
+          <div class="swatch" style="background:#0d9488;color:#ffffff">accent<span>#0d9488</span></div>
+          <div class="swatch" style="background:#d5dfdc;color:#18211e">line<span>#d5dfdc</span></div>
+        </div>
+        <div class="mock">
+          <div class="mock-top">
+            <div class="brand"><span class="mock-brand-mark">定</span>定位派</div>
+            <nav><b>工作台</b><span>热点研究</span><span>选题助手</span></nav>
+          </div>
+          <div class="mock-grid">
+            <div class="mock-card"><span class="mock-tag" style="color:#0d9488;background:#dff5f1">小红书</span><h4>工作日清晨 5 分钟，如何开始今天的内容</h4><p>效率 · 清单型 · 收藏 856</p></div>
+            <div class="mock-card"><span class="mock-tag" style="color:#2d7d5a;background:#e1efe6">创作灵感</span><h4>把灵感做成系统：选题、成稿、发布一条线</h4><p>工作流 · 方法论</p></div>
+          </div>
+          <div class="mock-input">写下你的真实经历，不需要组织得很完美...</div>
+          <div class="mock-btn-row"><div class="mock-btn btn-ghost">暂时想不到</div><div class="mock-btn btn-primary">生成我的定位</div></div>
+          <div class="mock-row"><span class="dot"></span>内容策略已同步<span class="meta">TODAY / 14:20</span></div>
+        </div>
+        <div class="type-sample">
+          <div class="mono">FRESH STUDIO / COOL NEUTRAL</div>
+          <div class="big">清泉青，清爽安静</div>
+          <div class="mid">基于 Radix UI 的 Sage 中性冷灰 + Teal 青色强调。微冷白画布 + 薄荷面板，干净克制，适合长时间选题与创作不被干扰。</div>
+          <div class="small">字体：Noto Sans SC 正文 · Noto Serif SC 标题 · Inter 西文</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="theme theme-c">
+      <div class="theme-head">
+        <div>
+          <h2>C · 午夜数据</h2>
+          <div class="ref" style="color:var(--muted)">Linear · 深色 · 沉浸分析</div>
+        </div>
+        <div class="mock-brand-mark">定</div>
+      </div>
+      <div class="theme-body">
+        <div class="swatches">
+          <div class="swatch" style="background:#08090a;color:#f7f8f8">canvas<span>#08090a</span></div>
+          <div class="swatch" style="background:#0f1011;color:#f7f8f8">surface<span>#0f1011</span></div>
+          <div class="swatch" style="background:#191a1b;color:#f7f8f8">surface<span>#191a1b</span></div>
+          <div class="swatch" style="background:#5e6ad2;color:#ffffff">accent<span>#5e6ad2</span></div>
+          <div class="swatch" style="background:#23252a;color:#f7f8f8">line<span>#23252a</span></div>
+        </div>
+        <div class="mock">
+          <div class="mock-top">
+            <div class="brand"><span class="mock-brand-mark">定</span>定位派</div>
+            <nav><b>工作台</b><span>热点研究</span><span>选题助手</span></nav>
+          </div>
+          <div class="mock-grid">
+            <div class="mock-card"><span class="mock-tag" style="color:#8cc8ad;background:rgba(140,200,173,.12)">小红书</span><h4>数据趋势：个人 IP 赛道本周增长</h4><p>讨论 2840 · 增长 41% · RedFox</p></div>
+            <div class="mock-card"><span class="mock-tag" style="color:#828fff;background:rgba(130,143,255,.14)">爆款结构</span><h4>反常识开场 → 真实案例 → 方法拆解</h4><p>保留来源引用和事实核验</p></div>
+          </div>
+          <div class="mock-input">写下你的真实经历，不需要组织得很完美...</div>
+          <div class="mock-btn-row"><div class="mock-btn btn-ghost">暂时想不到</div><div class="mock-btn btn-primary">生成我的定位</div></div>
+          <div class="mock-row"><span class="dot"></span>内容策略已同步<span class="meta">TODAY / 14:20</span></div>
+        </div>
+        <div class="type-sample">
+          <div class="mono">MIDNIGHT / IMMERSIVE ANALYSIS</div>
+          <div class="big">午夜数据，沉浸分析</div>
+          <div class="mid">基于 Linear 的深空画布 + 靛紫强调。近黑底 + 极薄白边框 + 亮度层级，适合深夜选题、数据研究不刺眼。</div>
+          <div class="small">字体：Noto Sans SC 正文 · Noto Serif SC 标题 · Inter 西文</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+</body>
+</html>

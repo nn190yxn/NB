@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+server/data.json
+server/.env
+.monkeycode-tmp-files/
+backups/
+backup-failed/
