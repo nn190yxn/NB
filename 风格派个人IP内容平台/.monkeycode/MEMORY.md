@@ -106,7 +106,7 @@ This file records user instructions, preferences, and teachings for reference in
 - Category: Operations & Deployment
 - Instructions:
   - Frontend deploy flow (no rsync on server): `tar -C /workspace/dist -czf /tmp/opencode/deploy/dist.tar.gz .`, then `scp` to `ubuntu@124.223.3.175:/tmp/dist.tar.gz`, then SSH and atomically swap: `rm -rf dist.new && mkdir dist.new && tar -xzf /tmp/dist.tar.gz -C dist.new && rm -rf dist.old && mv dist dist.old && mv dist.new dist && rm -rf dist.old` under `/home/ubuntu/content-ip-workbench`.
-  - SSH key for the server: `/workspace/.monkeycode-tmp-files/d229786a-WOYING.pem`; add `-o StrictHostKeyChecking=no` on first contact.
+  - SSH key for the server is stored locally at `D:\ChromeDownload\私钥\WOYING.pem`; add `-o StrictHostKeyChecking=no` on first contact. Record only the location, never the private-key content.
   - Font variables `--font-body/--font-heading/--font-mono` are defined on `.app` (defaults) with overrides in `.font-sans/.font-hand` classes; a `.font-{key}` class is set on the `<main className="app">` element and persists via `localStorage['dingweipai:font']`.
   - LXGW WenKai is loaded from `https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css` (not available on Google Fonts).
   - Build command is `npm run typecheck && npm run build` (outputs legacy + modern bundles under `dist/`); verify the new `index-*.js` appears on the live site after deploy.
