@@ -3,10 +3,10 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
-import { appWindowOptions, IPC_CHANNELS, nextWindowState, normalizeAppOrigin } from './electron-core.mjs'
+import { appWindowOptions, IPC_CHANNELS, nextWindowState, resolveAppOrigin } from './electron-core.mjs'
 import { drainSyncQueue, enqueueSyncEvent, scanSyncDirectory, validateSyncDirectory, watchDirectory } from './sync-client.mjs'
 
-const origin = normalizeAppOrigin(process.env.APP_ORIGIN || 'http://127.0.0.1:5173')
+const origin = resolveAppOrigin(process.env.APP_ORIGIN)
 const userDataPath = app.getPath('userData')
 const stateFile = join(userDataPath, 'session.bin')
 const queueFile = join(userDataPath, 'sync-queue.json')

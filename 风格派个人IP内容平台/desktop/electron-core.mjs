@@ -25,6 +25,10 @@ export function normalizeAppOrigin(origin) {
   return url.origin
 }
 
+export function resolveAppOrigin(origin) {
+  return normalizeAppOrigin(origin || 'https://content.woyai.cn')
+}
+
 export function shouldHideOnClose({ quitting, platform }) { return platform === 'win32' && !quitting }
 
 export function nextWindowState(current, event) {

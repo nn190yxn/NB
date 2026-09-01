@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { appWindowOptions, allowedIpcChannels, isAllowedIpcChannel, nextWindowState, normalizeAppOrigin, shouldHideOnClose } from './electron-core.mjs'
+import { appWindowOptions, allowedIpcChannels, isAllowedIpcChannel, nextWindowState, normalizeAppOrigin, resolveAppOrigin, shouldHideOnClose } from './electron-core.mjs'
 
 test('desktop IPC exposes only an explicit allowlist and sandboxed window options', () => {
   assert.ok(allowedIpcChannels().includes('session:login'))
@@ -14,9 +14,11 @@ test('desktop IPC exposes only an explicit allowlist and sandboxed window option
   assert.equal(options.webPreferences.preload, 'C:/preload.mjs')
 })
 
-test('desktop origin accepts HTTP(S) only', () => {
+test('desktop origin defaults to production and accepts explicit HTTP(S) overrides', () => {
+  assert.equal(resolveAppOrigin(), 'https://content.woyai.cn')
+  assert.equal(resolveAppOrigin('http://127.0.0.1:5173/path'), 'http://127.0.0.1:5173')
   assert.equal(normalizeAppOrigin('https://content.example.test/path'), 'https://content.example.test')
-  assert.throws(() => normalizeAppOrigin('file:///unsafe.html'), /HTTP\(S\)/)
+  assert.throws(() => resolveAppOrigin('file:///unsafe.html'), /HTTP\(S\)/)
   assert.throws(() => normalizeAppOrigin('javascript:alert(1)'), /HTTP\(S\)/)
 })
 
