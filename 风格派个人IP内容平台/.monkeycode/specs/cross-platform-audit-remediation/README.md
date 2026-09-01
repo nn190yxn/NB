@@ -38,4 +38,4 @@ Electron、React、Node.js 测试运行器、Vite、AES-256-GCM。
 
 ## 下次接着做什么
 
-已创建提交 `dd20046` 并推送 `origin/main`。服务器部署尚未执行：项目约定的 `.monkeycode-tmp-files` 部署凭据当前不存在，需要补充部署凭据或明确其他部署方式。
+已创建并推送审计版本，随后部署至 `https://content.woyai.cn/`。生产 PM2 `content-ip-workbench` 保持 online，`/api/health` 返回 MySQL 正常，API 配置槽与同步目录接口均通过公网验证；部署备份位于 `/home/ubuntu/content-ip-workbench/deploy-backup-20260901-191538-cross-platform-audit`。
