@@ -1,9 +1,10 @@
 import mysql from 'mysql2/promise'
+import { crossPlatformCollectionNames } from './content-assets.mjs'
 
 const required = ['PROJECT_DB_HOST', 'PROJECT_DB_NAME', 'PROJECT_DB_USER', 'PROJECT_DB_PASSWORD']
 
-export const collectionNames = ['materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'profile_reviews', 'conflicts', 'memories']
-export const userDocNames = ['positioning', 'strategy', 'profile', 'positioning_candidates']
+export const collectionNames = ['materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'profile_reviews', 'conflicts', 'memories', ...crossPlatformCollectionNames]
+export const userDocNames = ['positioning', 'strategy', 'profile', 'positioning_candidates', 'api_settings']
 
 export function mysqlConfig(env = process.env) {
   const missing = required.filter(name => !env[name])
@@ -40,10 +41,15 @@ export async function migrateMysql(pool) {
       owner_id VARCHAR(100) NOT NULL,
       data JSON NOT NULL,
       updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-      PRIMARY KEY (collection, item_id),
+      PRIMARY KEY (collection, owner_id, item_id),
       KEY idx_collection_owner (collection, owner_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `)
+  const [primaryKeyRows] = await pool.execute("SHOW INDEX FROM ip_collections WHERE Key_name = 'PRIMARY'")
+  const primaryKeyColumns = primaryKeyRows.sort((a, b) => Number(a.Seq_in_index) - Number(b.Seq_in_index)).map(row => row.Column_name)
+  if (!primaryKeyColumns.includes('owner_id')) {
+    await pool.execute('ALTER TABLE ip_collections DROP PRIMARY KEY, ADD PRIMARY KEY (collection, owner_id, item_id)')
+  }
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS ip_user_docs (
       user_id VARCHAR(100) NOT NULL,
@@ -99,27 +105,33 @@ function normalizeItemId(item) {
 
 export async function saveCollections(pool, state, collections = collectionNames) {
   for (const name of collections) {
-    const items = state[name] || []
-    const liveIds = new Set()
+    const items = (state[name] || []).filter(item => normalizeItemId(item))
+    const [ownerRows] = await pool.execute('SELECT DISTINCT owner_id FROM ip_collections WHERE collection = ?', [name])
+    const liveIdsByOwner = new Map()
     for (const item of items) {
       const itemId = normalizeItemId(item)
-      if (!itemId) continue
-      liveIds.add(itemId)
+      const ownerId = item.owner_id || 'demo-user'
+      if (!liveIdsByOwner.has(ownerId)) liveIdsByOwner.set(ownerId, new Set())
+      liveIdsByOwner.get(ownerId).add(itemId)
       await pool.execute(
         `INSERT INTO ip_collections (collection, item_id, owner_id, data)
          VALUES (?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE owner_id = VALUES(owner_id), data = VALUES(data)`,
-        [name, itemId, item.owner_id || 'demo-user', JSON.stringify(item)],
+         ON DUPLICATE KEY UPDATE data = VALUES(data)`,
+        [name, itemId, ownerId, JSON.stringify({ ...item, owner_id: ownerId })],
       )
     }
-    if (liveIds.size) {
-      const placeholders = items.filter(item => normalizeItemId(item)).map(() => '?').join(', ')
-      await pool.execute(
-        `DELETE FROM ip_collections WHERE collection = ? AND item_id NOT IN (${placeholders})`,
-        [name, ...liveIds],
-      )
-    } else {
-      await pool.execute('DELETE FROM ip_collections WHERE collection = ?', [name])
+    const owners = new Set([...ownerRows.map(row => row.owner_id), ...liveIdsByOwner.keys()])
+    for (const ownerId of owners) {
+      const liveIds = liveIdsByOwner.get(ownerId) || new Set()
+      if (liveIds.size) {
+        const placeholders = [...liveIds].map(() => '?').join(', ')
+        await pool.execute(
+          `DELETE FROM ip_collections WHERE collection = ? AND owner_id = ? AND item_id NOT IN (${placeholders})`,
+          [name, ownerId, ...liveIds],
+        )
+      } else {
+        await pool.execute('DELETE FROM ip_collections WHERE collection = ? AND owner_id = ?', [name, ownerId])
+      }
     }
   }
 }

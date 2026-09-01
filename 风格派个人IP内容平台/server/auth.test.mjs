@@ -183,6 +183,16 @@ test('session 支持创建、复用和注销', async t => {
   })
   assert.equal(profileResponse.status, 200)
 
+  const updatedProfile = await profileResponse.json()
+  assert.ok(updatedProfile.history.some(item => item.field === 'role' && item.next === '创业顾问'))
+  assert.equal(updatedProfile.version, 2)
+  const emptyProfileField = await fetch(`${baseUrl}/api/profile`, {
+    method: 'PUT',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ role: '   ' }),
+  })
+  assert.equal(emptyProfileField.status, 422)
+
   const profileImport = await fetch(`${baseUrl}/api/profile/import`, {
     method: 'POST',
     headers: { cookie, 'content-type': 'application/json' },

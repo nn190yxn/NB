@@ -5,6 +5,9 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { normalizeMaterialFormat, parseMaterialContent, profileGaps, validateDraftUpdate, validRatios, validateMaterialInput, validateSourceRefs } from './validation.mjs'
 import { createRedFoxAdapter, demoHotSearch, demoProhibitedCheck, demoSearchWork, demoSimilarAccounts, demoTrending } from './redfox.mjs'
 import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCollections, saveMysqlState, saveUserDocs, collectionNames, userDocNames } from './mysql.mjs'
+import { emptyPublicApiConfigs, parseApiConfigKey, publicApiConfig, runtimeApiConfig, updateApiConfig } from './api-settings.mjs'
+import { publicPrivateFile, readPrivateFile, storePrivateFile, validatePrivateFile } from './private-files.mjs'
+import { callVision } from './llm.mjs'
 
 const port = Number(process.env.PORT || 3001)
 const sessions = new Map()
@@ -12,6 +15,9 @@ const developmentMode = process.env.NODE_ENV !== 'production'
 const authEnabled = Boolean(process.env.PRODUCT_ACCESS_PASSWORD)
 const allowedOrigin = process.env.APP_ORIGIN || 'http://localhost:5173'
 const dataFile = process.env.DATA_FILE || fileURLToPath(new URL('./data.json', import.meta.url))
+const privateFileRoot = process.env.PRIVATE_FILE_ROOT || fileURLToPath(new URL('./private-files/', import.meta.url))
+const privateFileMaxBytes = Number(process.env.PRIVATE_FILE_MAX_BYTES || 25 * 1024 * 1024)
+const apiConfigMasterKey = parseApiConfigKey(process.env.API_CONFIG_ENCRYPTION_KEY || '00'.repeat(32))
 const mysqlEnabled = Boolean(process.env.PROJECT_DB_HOST && process.env.PROJECT_DB_NAME && process.env.PROJECT_DB_USER && process.env.PROJECT_DB_PASSWORD)
 const mysqlPool = mysqlEnabled ? createMysqlPool() : null
 const rateLimitWindowMs = Number(process.env.API_RATE_LIMIT_WINDOW_MS || 60_000)
@@ -46,9 +52,10 @@ const defaultState = {
   drafts: [],
   shooting: [],
   sync_jobs: [],
+  sync_directories: [], devices: [], private_files: [], api_configs: [], vision_tasks: [], performance_snapshots: [],
   conflicts: [],
 }
-const shootingStatuses = new Set(['ready_to_shoot', 'in_progress', 'completed', 'needs_revision'])
+const shootingStatuses = new Set(['ready_to_shoot', 'in_progress', 'completed', 'needs_revision', 'published'])
 const draftStatuses = new Set(['draft', 'ready_to_shoot', 'published'])
 const fileState = existsSync(dataFile) ? JSON.parse(readFileSync(dataFile, 'utf8')) : {}
 let persistedState = fileState
@@ -83,8 +90,9 @@ const state = {
   profile_reviews: persistedState.profile_reviews || [],
   conflicts: persistedState.conflicts || [],
   memories: persistedState.memories || [],
+  sync_directories: persistedState.sync_directories || [], devices: persistedState.devices || [], private_files: persistedState.private_files || [], api_configs: persistedState.api_configs || [], vision_tasks: persistedState.vision_tasks || [], performance_snapshots: persistedState.performance_snapshots || [],
 }
-for (const collection of ['materials', 'research', 'structures', 'topics', 'drafts', 'shooting']) {
+for (const collection of ['materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'sync_directories', 'devices', 'private_files', 'api_configs', 'vision_tasks', 'performance_snapshots']) {
   state[collection] = state[collection].map(item => ({ ...item, owner_id: item.owner_id || 'demo-user', ...(collection === 'shooting' && item.status === 'todo' ? { status: 'ready_to_shoot' } : {}) }))
 }
 for (const collection of ['positioning', 'strategy', 'profile']) {
@@ -141,6 +149,17 @@ async function readJson(request) {
   if (!chunks.length) return {}
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
+
+async function readBody(request, maxBytes = 2_500_000) {
+  const chunks = []; let size = 0
+  for await (const chunk of request) { size += chunk.length; if (size > maxBytes) throw new Error(`请求体超过 ${maxBytes} 字节限制`); chunks.push(chunk) }
+  return Buffer.concat(chunks)
+}
+function sendPrivateFile(response, content, record, download) {
+  response.writeHead(200, { 'content-type': record.mime_type, 'content-length': String(content.length), 'content-disposition': `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(record.original_name)}`, 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' }); response.end(content)
+}
+function apiConfigsFor(request) { return owned('api_configs', request) }
+function runtimeConfig(request, slot) { const item = apiConfigsFor(request).find(value => value.slot === slot); return item ? runtimeApiConfig(item, apiConfigMasterKey) : null }
 
 function nextId(collection) {
   return collection.length ? Math.max(...collection.map(item => item.id || 0)) + 1 : 1
@@ -259,6 +278,13 @@ const server = createServer(async (request, response) => {
       return send(response, 200, { user_id: id, role: 'creator', expires_in: sessionTtlMs / 1000 }, { 'set-cookie': `content_ip_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${sessionTtlMs / 1000}${!developmentMode ? '; Secure' : ''}` })
     }
     if (authEnabled && !developmentMode && !sessionFor(request)) return send(response, 401, { error: '需要有效会话' })
+    if (url.pathname === '/api/api-settings' && request.method === 'GET') { const values = owned('api_configs', request); return send(response, 200, emptyPublicApiConfigs().map(item => publicApiConfig(values.find(value => value.slot === item.slot) || item))) }
+    const apiSettingsMatch = url.pathname.match(/^\/api\/api-settings\/([^/]+)$/)
+    if (apiSettingsMatch && request.method === 'PUT') { const slot = ['text_primary', 'text_fallback', 'vision'].includes(apiSettingsMatch[1]) ? apiSettingsMatch[1] : null; if (!slot) return send(response, 404, { error: 'API 配置槽不存在' }); try { const existing = owned('api_configs', request).find(item => item.slot === slot); const next = { ...updateApiConfig(existing, slot, await readJson(request), apiConfigMasterKey), owner_id: userId(request) }; if (existing) Object.assign(existing, next); else state.api_configs.push(next); await saveState('api_configs'); return send(response, 200, publicApiConfig(next)) } catch (error) { return send(response, 422, { error: error.message }) } }
+    if (url.pathname === '/api/api-settings/migrate' && request.method === 'POST') { const body = await readJson(request); try { for (const slot of ['text_primary', 'text_fallback', 'vision']) if (body[slot]) { const existing = owned('api_configs', request).find(item => item.slot === slot); const next = { ...updateApiConfig(existing, slot, body[slot], apiConfigMasterKey), owner_id: userId(request) }; if (existing) Object.assign(existing, next); else state.api_configs.push(next) }; await saveState('api_configs'); const values = owned('api_configs', request); return send(response, 200, emptyPublicApiConfigs().map(item => publicApiConfig(values.find(value => value.slot === item.slot) || item))) } catch (error) { return send(response, 422, { error: error.message }) } }
+    if (url.pathname === '/api/private-files' && request.method === 'POST') { try { const content = await readBody(request, privateFileMaxBytes + 1); const validated = validatePrivateFile({ fileName: request.headers['x-file-name'], mimeType: request.headers['content-type'], content, maxBytes: privateFileMaxBytes }); const duplicate = owned('private_files', request).find(item => item.checksum === validated.checksum); if (duplicate) return send(response, 200, { ...publicPrivateFile(duplicate), duplicate: true }); const storagePath = storePrivateFile(privateFileRoot, userId(request), validated, content); const record = { id: randomUUID(), owner_id: userId(request), original_name: validated.safeName, mime_type: validated.mimeType, size: content.length, checksum: validated.checksum, storage_path: storagePath, created_at: new Date().toISOString() }; state.private_files.push(record); await saveState('private_files'); return send(response, 201, publicPrivateFile(record)) } catch (error) { return send(response, 422, { error: error.message }) } }
+    const privateFileMatch = url.pathname.match(/^\/api\/private-files\/([^/]+)\/(preview|download)$/)
+    if (privateFileMatch && request.method === 'GET') { const record = owned('private_files', request).find(item => item.id === privateFileMatch[1]); if (!record) return send(response, 404, { error: '文件不存在' }); try { return sendPrivateFile(response, readPrivateFile(privateFileRoot, record.storage_path), record, privateFileMatch[2] === 'download') } catch { return send(response, 410, { error: '文件内容不可用' }) } }
     if (url.pathname === '/api/positioning' && request.method === 'GET') return send(response, 200, userDocument('positioning', request))
     if (url.pathname === '/api/positioning' && request.method === 'PUT') {
       const body = await readJson(request)
@@ -349,7 +375,10 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/profile' && request.method === 'PUT') {
       const body = await readJson(request)
       const profile = userDocument('profile', request)
-      state.profile_by_user[userId(request)] = { ...profile, ...body, version: profile.version + 1, updated_at: new Date().toISOString() }
+      if (body.role !== undefined && !String(body.role).trim()) return send(response, 422, { error: '角色不能为空' })
+      const history = [...(profile.history || [])]
+      for (const [field, next] of Object.entries(body)) if (JSON.stringify(profile[field]) !== JSON.stringify(next)) history.push({ field, previous: profile[field] ?? null, next, changed_at: new Date().toISOString() })
+      state.profile_by_user[userId(request)] = { ...profile, ...body, history, version: profile.version + 1, updated_at: new Date().toISOString() }
        await saveState('profile')
       return send(response, 200, state.profile_by_user[userId(request)])
     }
@@ -491,6 +520,13 @@ const server = createServer(async (request, response) => {
        await saveState('materials')
       return send(response, 200, material)
     }
+    if (url.pathname === '/api/devices' && request.method === 'GET') return send(response, 200, owned('devices', request))
+    if (url.pathname === '/api/devices/heartbeat' && request.method === 'POST') { const body = await readJson(request); const id = String(body.id || '').trim(); if (!id) return send(response, 422, { error: '设备标识无效' }); let device = owned('devices', request).find(item => item.id === id); if (!device) { device = { id, owner_id: userId(request), name: String(body.name || id), last_seen_at: new Date().toISOString() }; state.devices.push(device) } else { device.last_seen_at = new Date().toISOString() }; await saveState('devices'); return send(response, 200, device) }
+    if (url.pathname === '/api/sync-directories' && request.method === 'GET') return send(response, 200, owned('sync_directories', request))
+    if (url.pathname === '/api/sync-directories' && request.method === 'POST') { const body = await readJson(request); const path = String(body.local_path || '').trim(); if (!path) return send(response, 422, { error: '本地路径无效' }); const directory = { id: randomUUID(), owner_id: userId(request), device_id: String(body.device_id || 'local-device'), local_path: path, enabled: body.enabled !== false, sync_status: 'pending_verification', sync_error: null, last_scanned_at: null, created_at: new Date().toISOString() }; state.sync_directories.push(directory); await saveState('sync_directories'); return send(response, 201, directory) }
+    const syncDirectoryMatch = url.pathname.match(/^\/api\/sync-directories\/([^/]+)$/)
+    if (syncDirectoryMatch && request.method === 'PUT') { const directory = owned('sync_directories', request).find(item => item.id === syncDirectoryMatch[1]); if (!directory) return send(response, 404, { error: '同步目录不存在' }); const body = await readJson(request); if (body.enabled !== undefined) { directory.enabled = Boolean(body.enabled); if (!directory.enabled) directory.sync_status = 'paused' }; if (body.sync_status) directory.sync_status = body.sync_status; if (body.sync_error !== undefined) directory.sync_error = body.sync_error; if (body.last_scanned_at) directory.last_scanned_at = body.last_scanned_at; await saveState('sync_directories'); return send(response, 200, directory) }
+    if (syncDirectoryMatch && request.method === 'DELETE') { state.sync_directories = state.sync_directories.filter(item => !(item.id === syncDirectoryMatch[1] && item.owner_id === userId(request))); await saveState('sync_directories'); return send(response, 200, { ok: true }) }
     if (url.pathname === '/api/materials/sync' && request.method === 'POST') {
       const body = await readJson(request)
       const files = Array.isArray(body.files) ? body.files : []
@@ -549,6 +585,7 @@ const server = createServer(async (request, response) => {
       const query = (params.get('q') || '').trim().toLowerCase()
       const platform = params.get('platform') || ''
       const contentType = params.get('content_type') || ''
+      const methodCategory = params.get('method_category') || ''
       const favorite = params.get('favorite') === '1'
       const sort = ['latest', 'usage', 'favorite'].includes(params.get('sort')) ? params.get('sort') : 'latest'
       const page = Math.max(1, Number(params.get('page')) || 1)
@@ -557,6 +594,7 @@ const server = createServer(async (request, response) => {
       if (query) items = items.filter(item => item.title.toLowerCase().includes(query) || item.steps.some(step => step.toLowerCase().includes(query)))
       if (platform) items = items.filter(item => item.platform === platform)
       if (contentType) items = items.filter(item => item.content_type === contentType)
+      if (methodCategory) items = items.filter(item => item.method_category === methodCategory || (methodCategory === '开头方法' && item.steps[0]?.includes('开场')) || (methodCategory === '内容结构' && !item.steps[0]?.includes('开场')))
       if (favorite) items = items.filter(item => item.favorite)
       items = [...items].sort((a, b) => sort === 'usage' ? b.usage_count - a.usage_count : sort === 'favorite' ? Number(b.favorite) - Number(a.favorite) || b.usage_count - a.usage_count : String(b.updated_at).localeCompare(String(a.updated_at)))
       const total = items.length
@@ -568,7 +606,7 @@ const server = createServer(async (request, response) => {
       const title = typeof body.title === 'string' ? body.title.trim() : ''
       const steps = Array.isArray(body.steps) ? body.steps.map(step => (typeof step === 'string' ? step.trim() : '')).filter(Boolean) : []
       if (!title || !steps.length) return send(response, 400, { error: '标题与步骤为必填项' })
-      const structure = { id: nextId(state.structures), owner_id: userId(request), title, steps, platform: typeof body.platform === 'string' && body.platform ? body.platform : '通用', content_type: typeof body.content_type === 'string' && body.content_type ? body.content_type : '观点', source_kind: 'manual', source_id: null, source_refs: [], favorite: false, usage_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+      const structure = { id: nextId(state.structures), owner_id: userId(request), title, steps, platform: typeof body.platform === 'string' && body.platform ? body.platform : '通用', content_type: typeof body.content_type === 'string' && body.content_type ? body.content_type : '观点', source_kind: 'manual', source_id: null, source_refs: [], method_category: steps[0]?.includes('开场') ? '开头方法' : '内容结构', favorite: false, usage_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
       state.structures.push(structure)
       await saveState('structures')
       return send(response, 201, structure)
@@ -655,6 +693,18 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/memories/extract' && request.method === 'POST') {
       return send(response, 422, { error: '自动提炼需要先配置大模型', reason: 'llm_not_configured' })
     }
+    if (url.pathname === '/api/vision-tasks' && request.method === 'GET') { const shootingId = url.searchParams.get('shooting_id'); return send(response, 200, owned('vision_tasks', request).filter(item => !shootingId || item.shooting_id === Number(shootingId))) }
+    if (url.pathname === '/api/vision-tasks' && request.method === 'POST') { const body = await readJson(request); const ids = [...new Set((body.screenshot_file_ids || []).map(String))]; if (!ids.length) return send(response, 422, { error: '至少需要一张截图' }); const files = ids.map(id => owned('private_files', request).find(item => item.id === id)); if (files.some(file => !file)) return send(response, 422, { error: '截图不存在或无权访问' }); const task = { id: randomUUID(), owner_id: userId(request), shooting_id: body.shooting_id == null ? null : Number(body.shooting_id), screenshot_file_ids: ids, status: 'processing', result: null, error: null, match_status: 'pending', created_at: new Date().toISOString() }; state.vision_tasks.push(task); await saveState('vision_tasks'); void (async () => { try { const config = runtimeConfig(request, 'vision'); const images = files.map(file => `data:${file.mime_type};base64,${readPrivateFile(privateFileRoot, file.storage_path).toString('base64')}`); const result = await callVision(config, images, '提取截图中的播放、点赞、评论、收藏、转发、涨粉指标，返回 JSON'); task.status = 'ready'; task.result = result.content } catch (error) { task.status = 'failed'; task.error = error.message }; await saveState('vision_tasks') })(); return send(response, 202, task) }
+    const visionTaskMatch = url.pathname.match(/^\/api\/vision-tasks\/([^/]+)$/)
+    if (visionTaskMatch && request.method === 'GET') { const task = owned('vision_tasks', request).find(item => item.id === visionTaskMatch[1]); return task ? send(response, 200, task) : send(response, 404, { error: '视觉任务不存在' }) }
+    const visionMatches = url.pathname.match(/^\/api\/vision-tasks\/([^/]+)\/matches$/)
+    if (visionMatches && request.method === 'POST') { const task = owned('vision_tasks', request).find(item => item.id === visionMatches[1]); if (!task) return send(response, 404, { error: '视觉任务不存在' }); const body = await readJson(request); const candidates = owned('shooting', request).map(item => ({ resource_id: item.id, title: item.title, platform: item.platform, published_at: item.published_at || null, match_reason: item.title === body.title && item.platform === body.platform ? '平台与标题完全匹配' : '候选匹配', confidence: item.title === body.title && item.platform === body.platform ? 0.98 : 0.55 })).sort((a, b) => b.confidence - a.confidence); task.candidates = candidates; await saveState('vision_tasks'); return send(response, 200, candidates) }
+    const visionConfirm = url.pathname.match(/^\/api\/vision-tasks\/([^/]+)\/confirm$/)
+    if (visionConfirm && request.method === 'POST') { const task = owned('vision_tasks', request).find(item => item.id === visionConfirm[1]); if (!task) return send(response, 404, { error: '视觉任务不存在' }); if (task.match_status === 'confirmed') return send(response, 409, { error: '视觉任务已经确认' }); if (!['ready', 'failed'].includes(task.status)) return send(response, 409, { error: '视觉任务尚未完成' }); const body = await readJson(request); const shooting = owned('shooting', request).find(item => item.id === Number(body.shooting_id || task.shooting_id)); if (!shooting) return send(response, 422, { error: '拍摄条目不存在或无权访问' }); const snapshot = { id: nextId(state.performance_snapshots), owner_id: userId(request), shooting_id: shooting.id, draft_id: shooting.draft_id || null, platform: body.platform || shooting.platform, published_at: body.published_at || shooting.published_at || null, captured_at: new Date().toISOString(), metrics: body.metrics || {}, raw_model_result: task.result, status: 'confirmed' }; state.performance_snapshots.push(snapshot); task.match_status = 'confirmed'; task.status = 'confirmed'; await saveState('vision_tasks', 'performance_snapshots'); return send(response, 201, { ...task, snapshot }) }
+    const visionRetry = url.pathname.match(/^\/api\/vision-tasks\/([^/]+)\/retry$/)
+    if (visionRetry && request.method === 'POST') { const task = owned('vision_tasks', request).find(item => item.id === visionRetry[1]); if (!task) return send(response, 404, { error: '视觉任务不存在' }); task.status = 'processing'; task.error = null; await saveState('vision_tasks'); return send(response, 202, task) }
+    if (url.pathname === '/api/performance-snapshots' && request.method === 'GET') { const draftId = url.searchParams.get('draft_id'); const shootingId = url.searchParams.get('shooting_id'); return send(response, 200, owned('performance_snapshots', request).filter(item => (!draftId || item.draft_id === Number(draftId)) && (!shootingId || item.shooting_id === Number(shootingId))).sort((a, b) => String(b.captured_at).localeCompare(String(a.captured_at)))) }
+    if (url.pathname === '/api/performance-snapshots' && request.method === 'POST') { const body = await readJson(request); const draftId = body.draft_id == null ? null : Number(body.draft_id); const shootingId = body.shooting_id == null ? null : Number(body.shooting_id); if (draftId === null && shootingId === null) return send(response, 422, { error: '必须关联文案或拍摄条目' }); if (draftId !== null && !owned('drafts', request).some(item => item.id === draftId)) return send(response, 422, { error: '关联文案不存在或无权访问' }); if (shootingId !== null && !owned('shooting', request).some(item => item.id === shootingId)) return send(response, 422, { error: '关联拍摄条目不存在或无权访问' }); const snapshot = { id: nextId(state.performance_snapshots), owner_id: userId(request), draft_id: draftId, shooting_id: shootingId, platform: body.platform || '', published_at: body.published_at || null, captured_at: new Date().toISOString(), metrics: body.metrics || {}, raw_model_result: body.raw_model_result || null, confidence: body.confidence ?? null, status: body.status || 'pending_confirmation' }; state.performance_snapshots.push(snapshot); await saveState('performance_snapshots'); return send(response, 201, snapshot) }
     if (url.pathname === '/api/research' && request.method === 'GET') {
       const params = url.searchParams
       const hasQuery = ['q', 'platform', 'sort', 'page'].some(key => params.get(key))
@@ -718,6 +768,8 @@ const server = createServer(async (request, response) => {
       await saveState('research')
       return send(response, 200, { added: items.length, items: owned('research', request) })
     }
+    const researchCollectMatch = url.pathname.match(/^\/api\/research\/(\d+)\/collect$/)
+    if (researchCollectMatch && request.method === 'POST') { const item = owned('research', request).find(existing => existing.id === Number(researchCollectMatch[1])); if (!item) return send(response, 404, { error: '研究条目不存在' }); const existing = owned('materials', request).find(material => material.source_type === 'research' && material.source_id === item.id && !material.deleted_at); if (existing) return send(response, 200, { ...existing, duplicate: true }); const material = { id: nextId(state.materials), owner_id: userId(request), name: item.title, material_kind: 'hotspot', source_type: 'research', source_id: item.id, source_refs: [sourceRef('research', item.id)], url: item.url || null, content: item.title, status: 'ready', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }; state.materials.push(material); item.collected = true; await saveState('materials', 'research'); return send(response, 201, material) }
     if (url.pathname === '/api/research/similar' && request.method === 'POST') {
       const body = await readJson(request)
       const account = String(body.account || '').trim()
@@ -798,7 +850,7 @@ const server = createServer(async (request, response) => {
         extracted.title = item.title
         extracted.updated_at = new Date().toISOString()
       } else {
-        state.structures.push({ id: nextId(state.structures), owner_id: userId(request), title: item.title, steps: [...item.analysis.structure], platform: item.platform || '通用', content_type: '观点', source_kind: 'research', source_id: item.id, source_refs: item.source_refs || [], favorite: false, usage_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        state.structures.push({ id: nextId(state.structures), owner_id: userId(request), title: item.title, steps: [...item.analysis.structure], platform: item.platform || '通用', content_type: '观点', source_kind: 'research', source_id: item.id, source_refs: item.source_refs || [], method_category: '内容结构', favorite: false, usage_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       }
          await saveState('drafts', 'structures')
       return send(response, 200, item)

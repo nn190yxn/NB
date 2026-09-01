@@ -77,6 +77,13 @@ test('结构库支持检索、筛选、增删改、收藏与使用计数', async
   assert.equal(byType.total, 1)
   assert.equal(byType.items[0].title, '清单型干货框架')
 
+  const byOpeningMethod = await (await fetch(`${baseUrl}/api/structures?method_category=${encodeURIComponent('开头方法')}`, { headers })).json()
+  assert.equal(byOpeningMethod.total, 1)
+  assert.equal(byOpeningMethod.items[0].title, '反常识开场结构')
+
+  const byContentStructure = await (await fetch(`${baseUrl}/api/structures?method_category=${encodeURIComponent('内容结构')}`, { headers })).json()
+  assert.equal(byContentStructure.total, 2)
+
   const toggled = await (await fetch(`${baseUrl}/api/structures/${structure.id}`, { method: 'PUT', headers, body: JSON.stringify({ favorite: true }) })).json()
   assert.equal(toggled.favorite, true)
 

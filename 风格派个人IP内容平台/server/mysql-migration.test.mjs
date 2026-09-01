@@ -19,18 +19,22 @@ function createMockPool({ appStateRows = [] } = {}) {
       if (sql.startsWith('SELECT user_id')) return [db.user_docs.map(({ user_id, doc_key, data }) => ({ user_id, doc_key, data })), []]
       if (sql.startsWith('INSERT INTO ip_collections')) {
         const [collection, itemId, ownerId, data] = params
-        const existing = db.collections.find(row => row.collection === collection && row.item_id === itemId)
+        const existing = db.collections.find(row => row.collection === collection && row.item_id === itemId && row.owner_id === ownerId)
         if (existing) { existing.owner_id = ownerId; existing.data = JSON.parse(data) }
         else db.collections.push({ collection, item_id: itemId, owner_id: ownerId, data: JSON.parse(data) })
         return [[], []]
       }
-      if (sql.startsWith('DELETE FROM ip_collections WHERE collection = ? AND item_id NOT IN')) {
-        const [collection, ...keep] = params
-        db.collections = db.collections.filter(row => row.collection !== collection || keep.includes(row.item_id))
+      if (sql.startsWith('SELECT DISTINCT owner_id')) {
+        const owners = [...new Set(db.collections.filter(row => row.collection === params[0]).map(row => row.owner_id))]
+        return [owners.map(owner_id => ({ owner_id })), []]
+      }
+      if (sql.startsWith('DELETE FROM ip_collections WHERE collection = ? AND owner_id = ? AND item_id NOT IN')) {
+        const [collection, ownerId, ...keep] = params
+        db.collections = db.collections.filter(row => row.collection !== collection || row.owner_id !== ownerId || keep.includes(row.item_id))
         return [[], []]
       }
-      if (sql === 'DELETE FROM ip_collections WHERE collection = ?') {
-        db.collections = db.collections.filter(row => row.collection !== params[0])
+      if (sql === 'DELETE FROM ip_collections WHERE collection = ? AND owner_id = ?') {
+        db.collections = db.collections.filter(row => row.collection !== params[0] || row.owner_id !== params[1])
         return [[], []]
       }
       if (sql.startsWith('INSERT INTO ip_user_docs')) {
@@ -100,4 +104,21 @@ test('deleting an item from a collection prunes its row on save', async () => {
   const loaded = await loadCollections(pool)
   assert.equal(loaded.structures.length, 1)
   assert.equal(loaded.structures[0].title, 'A')
+})
+
+test('collection rows with the same item id stay isolated by owner', async () => {
+  const pool = createMockPool()
+  const state = {
+    devices: [
+      { id: 'device-1', owner_id: 'user-a', name: 'A电脑' },
+      { id: 'device-1', owner_id: 'user-b', name: 'B电脑' },
+    ],
+  }
+  await saveCollections(pool, state, ['devices'])
+  let loaded = await loadCollections(pool)
+  assert.deepEqual(loaded.devices.map(item => `${item.owner_id}:${item.name}`).sort(), ['user-a:A电脑', 'user-b:B电脑'])
+
+  await saveCollections(pool, { devices: state.devices.filter(item => item.owner_id === 'user-b') }, ['devices'])
+  loaded = await loadCollections(pool)
+  assert.deepEqual(loaded.devices, [{ id: 'device-1', name: 'B电脑', owner_id: 'user-b' }])
 })

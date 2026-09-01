@@ -1,32 +1,50 @@
 {
-  "name": "content-ip-workbench",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "server": "node server/index.mjs",
-    "db:migrate": "node server/migrate.mjs",
-    "db:backup": "bash scripts/backup-mysql.sh",
-    "typecheck": "tsc -b --pretty false",
-    "test": "node --test server/*.test.mjs desktop/*.test.mjs",
-    "e2e": "node --test server/auth.test.mjs",
-    "verify": "npm test && npm run typecheck && npm run build",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview --host 0.0.0.0"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "lucide-react": "latest",
-    "mysql2": "^3.14.3"
-  },
-  "devDependencies": {
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "@vitejs/plugin-legacy": "latest"
-  }
+    "name": "content-ip-workbench",
+    "private": true,
+    "version": "0.1.0",
+    "main": "desktop/main.mjs",
+    "type": "module",
+    "scripts": {
+        "dev": "vite --host 0.0.0.0",
+        "server": "node server/index.mjs",
+        "db:migrate": "node server/migrate.mjs",
+        "db:backup": "bash scripts/backup-mysql.sh",
+        "typecheck": "tsc -b --pretty false",
+        "test": "node --test server/*.test.mjs desktop/*.test.mjs",
+        "e2e": "node --test server/auth.test.mjs",
+        "verify": "npm test && npm run typecheck && npm run build",
+        "build": "tsc -b && vite build",
+        "preview": "vite preview --host 0.0.0.0",
+        "desktop": "electron desktop/main.mjs",
+        "build:desktop": "electron-packager . dingweipai --platform=win32 --arch=x64 --out=release-packager --overwrite --ignore=node_modules --ignore=src --ignore=server --ignore=dist --ignore=release --ignore=release-packager --ignore=.git --ignore=.monkeycode --ignore=.ohmyagent"
+    },
+    "dependencies": {
+        "@vitejs/plugin-react": "latest",
+        "lucide-react": "latest",
+        "mysql2": "^3.14.3",
+        "react": "latest",
+        "react-dom": "latest",
+        "typescript": "latest",
+        "vite": "latest"
+    },
+    "devDependencies": {
+        "@electron/packager": "^20.3.0",
+        "@types/react": "latest",
+        "@types/react-dom": "latest",
+        "@vitejs/plugin-legacy": "latest",
+        "electron": "latest",
+        "electron-builder": "^26.15.3"
+    },
+    "build": {
+        "appId": "cn.woyai.contentip",
+        "productName": "定位派",
+        "directories": {
+            "output": "release"
+        },
+        "files": [
+            "desktop/**/*",
+            "package.json"
+        ],
+        "npmRebuild": false
+    }
 }

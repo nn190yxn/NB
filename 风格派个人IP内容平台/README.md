@@ -1,8 +1,16 @@
 # 风格派个人IP内容平台（定位派内容工作台）
 
-面向个人 IP 创作者的一站式内容工作台：定位发现、热点研究、素材管理、选题生成、多平台草稿、爆款结构、拍摄执行与 AI 记忆。Web 工作台 + 手机 PWA 双形态，支持七个内容平台（全平台/小红书/抖音/视频号/公众号/B站/微博/X）。
+**作者：Monkeycode**
+
+面向个人 IP 创作者的一站式内容工作台：定位发现、热点研究、素材管理、选题生成、多平台草稿、爆款方法、拍摄执行与 AI 记忆。Web 工作台 + 手机 PWA 双形态，支持七个内容平台（全平台/小红书/抖音/视频号/公众号/B站/微博/X）。
 
 本文档面向所有后续接手本项目的开发者与 AI Agent，读完即可独立开展开发、验证与部署。
+
+## 当前 IP 初始化档案
+
+当前演示工作区已按 `E:\Work\Alex\个人IP\01_定位与战略.md` 映射为：**小姚哥｜创业过来人**。核心定位是“帮本地生意老板诊断：钱漏在哪，人卡在哪。”，目标用户为本地生意老板、实体门店老板、本地服务商和小团队老板。数据只写入与产品字段对应的核心定位、受众、问题、内容支柱和表达边界，不复制完整私密档案；暂定假设仍保持为待验证状态。
+
+当前首页“研究脉搏”读取 `/api/research?sort=latest` 的最新三条真实研究；点击卡片会进入“热点研究”并自动定位、展开对应详情。热点研究列表采用桌面双列、移动单列的响应式卡片网格，小红书标签使用暖橙文字与浅杏底色。首页与各子页面采用 React 条件渲染隔离。产品界面统一使用“爆款方法库”，按“选题方法、标题方法、开头方法、内容结构”四类组织；底层继续兼容既有 `/api/structures`、`content_type` 和历史数据。方法库筛选区采用“方法分类为一级导航、适用平台为二级筛选”的层级。
 
 ## 技术栈与架构
 
@@ -21,8 +29,10 @@ public/sw.js          # Service Worker（缓存版本 dingweipai-shell-v3）
 server/index.mjs      # 全部 API 路由 + 业务逻辑 + 静态托管
 server/mysql.mjs      # MySQL 适配层（collection 读写）
 server/redfox.mjs     # 红狐 API 适配（x-redfox-api-key 头透传 + demo 双轨）
-server/*.test.mjs     # Node 原生测试（55 个）
+server/*.test.mjs     # Node 原生测试（57 个）
 desktop/              # 桌面壳（Electron）
+scripts/import-benchmark.mjs # 对标账号资料包导入器（方法库/素材原子/AI 记忆）
+scripts/benchmarks/   # 对标账号资料包（如 dontbesilent.json）
 .monkeycode/docs/     # 架构/接口/开发指南/上线清单文档
 .monkeycode/specs/    # 各特性需求与设计文档（EARS 格式）
 ```
@@ -47,13 +57,13 @@ npm run dev
 npm run verify
 ```
 
-完整链 = `node --test`（55 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
+完整链 = `node --test`（57 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
 
 新增后端功能必须在 `server/*.test.mjs` 补测试；新增前端能力在 `server/web-assets.test.mjs` 加特征断言（该测试读取 src 源码验证关键类名/组件存在）。
 
 ## 核心领域模型
 
-数据以 `collection` 为单位存储（JSON 模式为一个大对象，MySQL 模式按表分）：`research`（研究）、`materials`（素材）、`drafts`（草稿）、`structures`（爆款结构）、`topics`（选题）、`memories`（AI 记忆）、`shooting`（拍摄清单）、`profile_reviews`（IP 档案审核）等。
+数据以 `collection` 为单位存储（JSON 模式为一个大对象，MySQL 模式按表分）：`research`（研究）、`materials`（素材）、`drafts`（草稿）、`structures`（爆款方法库的兼容存储）、`topics`（选题）、`memories`（AI 记忆）、`shooting`（拍摄清单）、`profile_reviews`（IP 档案审核）等。
 
 **新增 collection 有两处必改**：`server/mysql.mjs` 的 `collectionNames` + `server/index.mjs` 的 state 初始化。漏掉后者会报 `owned() TypeError`。
 
@@ -63,7 +73,7 @@ npm run verify
 
 ### 组合创作
 
-`POST /api/drafts/generate` 除 `topic_id` / `structure_id` 外支持 `quote_ids`、`experience_ids`，正文按 结构骨架 → 金句参考 → 经历素材 → 行动指引 组装，`source_refs` 保留全部来源链路。
+`POST /api/drafts/generate` 除 `topic_id` / `structure_id` 外支持 `quote_ids`、`experience_ids`，正文按 方法骨架 → 金句参考 → 经历素材 → 行动指引 组装，`source_refs` 保留全部来源链路。
 
 ### AI 记忆层
 
@@ -72,7 +82,7 @@ npm run verify
 ## 认证与密钥模型
 
 - **认证可选**：设置环境变量 `PRODUCT_ACCESS_PASSWORD` 即启用密码门槛；不设置则开放访问（userId 固定 `owner`）。当前生产为开放模式。
-- **API Key 只存浏览器**：红狐 Key 与大模型 Key 存 localStorage（`dingweipai:api-settings`），红狐调用通过 `x-redfox-base-url` / `x-redfox-api-key` 请求头透传，服务端不持久化任何 Key。
+- **API Key 只存浏览器**：红狐 Key 与大模型 API 1/API 2 Key 存 localStorage（`dingweipai:api-settings`），大模型采用 API 1 主用、API 2 备用的 OpenAI Chat Completions 串行兜底；请求通过专用请求头透传，服务端不持久化或记录任何 Key。旧版单组 `llm` 配置会自动迁移为 API 1。
 - 生产拒绝演示会话；项目级红狐 Key 可用环境变量 `PROJECT_REDFOX_API_KEY`（仅服务端读取）。
 
 ## 生产部署
@@ -99,7 +109,7 @@ scp 密钥 /tmp/dist.tar.gz 服务器:/tmp/
 curl -s https://content.woyai.cn/ | grep -oP "index-[A-Za-z0-9_-]+\.js"
 
 # 3. 服务端有改动时，额外执行（否则线上仍是旧逻辑！）
-scp 密钥 server/index.mjs server/mysql.mjs server/redfox.mjs 服务器:/home/ubuntu/content-ip-workbench/server/
+scp 密钥 server/index.mjs server/llm.mjs server/mysql.mjs server/redfox.mjs 服务器:/home/ubuntu/content-ip-workbench/server/
 ssh 服务器 "pm2 restart content-ip-workbench --update-env"
 
 # 4. 验证服务端新路由特征（curl 打新端点确认 200/预期响应）
@@ -132,6 +142,18 @@ pm2 start server/index.mjs --name content-ip-workbench \
 - 大模型 Key 由用户自行提供并存浏览器，Agent 不得从执行环境读取或写入任何 Key 到代码。
 - 需求与设计文档放 `.monkeycode/specs/{特性名}/`（requirements.md + design.md）。
 - 远端仓库：`github.com/nn190yxn/NB` 的 `风格派个人IP内容平台/` 子文件夹（推送时用临时克隆组装，排除 node_modules/dist/数据/密钥）。
+
+## 对标账号资料包导入
+
+把对标账号的研究成果批量导入工作台（方法库 / 素材原子 / AI 记忆），幂等可重跑：
+
+```bash
+npm run server  # 先启动 API（本地 dev 免认证）
+node scripts/import-benchmark.mjs scripts/benchmarks/dontbesilent.json
+# 可选：--base http://localhost:3002 换端口；--password <访问密码> 用于生产；--user <id> 指定 dev 用户
+```
+
+资料包 JSON 结构：`structures[]`（title/steps/platform/content_type）、`atoms[]`（kind: quote|insight|hotspot|experience / name / text）、`memories[]`（memory_type: style|topic|feedback / content）。制作新对标资料包时只导入**可复制机制**（结构/范式/清单），对标账号的人设观点类素材一律加「对标」前缀作参考素材。
 
 ## 项目文档索引
 
