@@ -1,5 +1,65 @@
 export type StrategyLayer = 'reach' | 'trust' | 'conversion'
 
+export type CapabilityId = 'topic_matrix' | 'topic_evaluate' | 'hook_generate' | 'draft_generate' | 'platform_adapt' | 'persona_check' | 'quality_gate' | 'publish_checklist' | 'content_postmortem' | 'memory_candidate'
+export type WorkflowStatus = 'candidate' | 'evaluated' | 'approved' | 'in_production' | 'completed' | 'needs_revision' | 'draft' | 'hooks_ready' | 'content_ready' | 'persona_checked' | 'quality_checked' | 'publish_ready' | 'ready_to_shoot' | 'published'
+export type CheckStatus = 'passed' | 'warning' | 'blocked'
+
+export interface ContentCapability {
+  id: CapabilityId
+  label: string
+  stage: 'planning' | 'production' | 'review'
+  requires: string[]
+  writes: string[]
+  human_confirmation: boolean
+}
+
+export interface CheckEvidence {
+  code: string
+  message: string
+  severity: 'warning' | 'blocked'
+}
+
+export interface CheckResult {
+  status: CheckStatus
+  score?: number | null
+  dimensions?: Record<string, number | boolean>
+  evidence: CheckEvidence[]
+  suggestions: string[]
+  draft_version?: number
+  checked_at: string
+}
+
+export interface ApprovalRecord {
+  status: 'pending' | 'approved' | 'revoked'
+  user_id?: string | null
+  approved_at?: string | null
+  revoked_at?: string | null
+  revoked_by?: string | null
+  revoke_reason?: string | null
+  draft_version?: number | null
+  revoked_draft_version?: number | null
+  checks_snapshot?: Record<string, CheckResult | null> | null
+}
+
+export interface ContentTaskContext {
+  owner_id: string
+  profile: Pick<IPProfile, 'role' | 'audiences' | 'problems' | 'pillars' | 'viewpoints' | 'tone_preferences' | 'prohibited_patterns' | 'source_refs'>
+  strategy: Record<string, unknown>
+  task: {
+    topic_id?: number | null
+    draft_id?: number | null
+    platform?: string | null
+    content_type?: string | null
+  }
+  topic: Record<string, unknown> | null
+  draft: Record<string, unknown> | null
+  research: Record<string, unknown>[]
+  materials: Record<string, unknown>[]
+  structures: Record<string, unknown>[]
+  memories: Record<string, unknown>[]
+  performance_snapshots: Record<string, unknown>[]
+}
+
 export interface IPProfile {
   role: string
   audiences: string[]
@@ -119,6 +179,24 @@ export interface ResearchItem {
   source_refs: SourceRef[]
 }
 
+export type TopicDecision = 'do' | 'revise' | 'defer'
+export type TopicDimensionKey = 'traffic_potential' | 'account_fit' | 'competitive_differentiation' | 'timeliness' | 'monetization' | 'production_cost' | 'compliance_risk'
+
+export interface TopicDimensionResult {
+  score: number
+  evidence: string[]
+  suggestions: string[]
+}
+
+export interface TopicEvaluation {
+  score: number
+  decision: TopicDecision
+  dimensions: Record<TopicDimensionKey, TopicDimensionResult>
+  evidence: Array<{ dimension: TopicDimensionKey; message: string }>
+  suggestions: string[]
+  evaluated_at: string
+}
+
 export interface TopicDraft {
   id: number
   title: string
@@ -127,4 +205,10 @@ export interface TopicDraft {
   content_job: string
   goal_refs: string[]
   source_refs: SourceRef[]
+  workflow_status?: WorkflowStatus
+  evaluation?: TopicEvaluation | null
+  decision?: TopicDecision | null
+  decision_reason?: string
+  evidence?: Array<{ dimension: TopicDimensionKey; message: string }>
+  suggestions?: string[]
 }

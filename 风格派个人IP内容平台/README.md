@@ -6,6 +6,10 @@
 
 本文档面向所有后续接手本项目的开发者与 AI Agent，读完即可独立开展开发、验证与部署。
 
+## 当前状态
+
+内容决策与创作质量链 Task 1–6 已全部完成：能力契约、选题七维评估、Hook/平台草稿、三道草稿检查、人工确认/撤回与第一阶段质量门均已验证。2026-09-03 代码级验收复核通过：全量质量门 119/119、真实临时 API 关键链 7/7、类型检查和生产构建通过；未部署、未提交、未推送。下一步等待生产验收或另行定义第二阶段。
+
 ## 当前 IP 初始化档案
 
 当前演示工作区已按 `E:\Work\Alex\个人IP\01_定位与战略.md` 映射为：**小姚哥｜创业过来人**。核心定位是“帮本地生意老板诊断：钱漏在哪，人卡在哪。”，目标用户为本地生意老板、实体门店老板、本地服务商和小团队老板。数据只写入与产品字段对应的核心定位、受众、问题、内容支柱和表达边界，不复制完整私密档案；暂定假设仍保持为待验证状态。
@@ -18,7 +22,7 @@
 - **后端**：Node.js 原生 `http` 模块单文件路由（`server/index.mjs`），零框架依赖。
 - **存储双轨**：本地/开发用 JSON 文件（`DATA_FILE`）；生产用 MySQL（`server/mysql.mjs`，按 `PROJECT_DB_*` 环境变量自动切换，数据按 `collection` 分表）。
 - **外部服务**：红狐内容 API（热搜榜、违禁词检测、相似账号对标），三技能均带演示数据双轨（无 Key 时自动降级 demo）。
-- **AI 能力**：选题/草稿生成当前为确定性规则引擎；大模型 API 预留（用户 Key 存浏览器 localStorage，服务端永不落库）。
+- **AI 能力**：选题评估、Hook 和草稿质量检查采用确定性规则；API 1/2 为主备文本调用，API 3 为独立视觉调用，账号级配置由服务端加密保存且前端只读取掩码。
 
 ### 目录结构
 
@@ -29,7 +33,7 @@ public/sw.js          # Service Worker（缓存版本 dingweipai-shell-v3）
 server/index.mjs      # 全部 API 路由 + 业务逻辑 + 静态托管
 server/mysql.mjs      # MySQL 适配层（collection 读写）
 server/redfox.mjs     # 红狐 API 适配（x-redfox-api-key 头透传 + demo 双轨）
-server/*.test.mjs     # Node 原生测试（57 个）
+server/*.test.mjs     # Node 原生测试（当前全量 119 个）
 desktop/              # 桌面壳（Electron）
 scripts/import-benchmark.mjs # 对标账号资料包导入器（方法库/素材原子/AI 记忆）
 scripts/benchmarks/   # 对标账号资料包（如 dontbesilent.json）
@@ -57,7 +61,7 @@ npm run dev
 npm run verify
 ```
 
-完整链 = `node --test`（57 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
+完整链 = `node --test`（当前 119 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
 
 新增后端功能必须在 `server/*.test.mjs` 补测试；新增前端能力在 `server/web-assets.test.mjs` 加特征断言（该测试读取 src 源码验证关键类名/组件存在）。
 
@@ -82,7 +86,7 @@ npm run verify
 ## 认证与密钥模型
 
 - **认证可选**：设置环境变量 `PRODUCT_ACCESS_PASSWORD` 即启用密码门槛；不设置则开放访问（userId 固定 `owner`）。当前生产为开放模式。
-- **API Key 只存浏览器**：红狐 Key 与大模型 API 1/API 2 Key 存 localStorage（`dingweipai:api-settings`），大模型采用 API 1 主用、API 2 备用的 OpenAI Chat Completions 串行兜底；请求通过专用请求头透传，服务端不持久化或记录任何 Key。旧版单组 `llm` 配置会自动迁移为 API 1。
+- **API 配置服务端加密**：大模型 API 1/API 2/API 3 按账号使用 `API_CONFIG_ENCRYPTION_KEY` 进行 AES-256-GCM 加密，前端只读取掩码；API 1/2 串行兜底，视觉任务只使用 API 3。旧浏览器配置只通过显式迁移接口导入。
 - 生产拒绝演示会话；项目级红狐 Key 可用环境变量 `PROJECT_REDFOX_API_KEY`（仅服务端读取）。
 
 ## 生产部署

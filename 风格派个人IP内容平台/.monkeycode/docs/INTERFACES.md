@@ -114,12 +114,24 @@
 ## 选题与草稿
 
 - `POST /api/topics/generate`：基于研究和素材生成选题；IP 档案缺少角色、受众或内容支柱时返回 `422`、`missing_fields` 和可重试标记。成功结果保留生成上下文、来源与事实风险状态。
-- `POST /api/drafts/generate`：为一个选题生成小红书、抖音、视频号和公众号草稿。
+- `POST /api/drafts/generate`：为一个选题生成小红书、抖音、视频号和公众号草稿；可传 `hook_text`，服务端会执行 Hook 校验并将生成上下文写入草稿。现有直接组合生成入口保持兼容，选题助手仅对已人工确认的 `approved` 选题开放生成。
+- `POST /api/drafts/:id/hooks`：为当前账号草稿生成四个独立 Hook 候选；重复调用默认幂等，传 `{"force":true}` 可重新生成。
 - `GET /api/drafts`：读取草稿列表。
 - `POST /api/drafts/:id/copy`：复制当前用户的草稿为新的草稿版本。
 - `GET /api/drafts/:id/history`：读取草稿版本历史；MVP 至少返回当前版本快照。
 - `POST /api/drafts/:id/restore`：使用 `{"version":2}` 恢复历史快照，并生成新的当前版本。
-- `PUT /api/drafts/:id`：保存草稿新版本，校验版本号和来源集合；标记为 `ready_to_shoot` 时加入拍摄清单，标记为 `published` 前必须将 `fact_check_status` 更新为 `verified`。
+- `PUT /api/drafts/:id`：保存草稿新版本，校验版本号和来源集合；可传 `selected_hook_id` 选择已通过校验的 Hook，选择后进入 `content_ready` 并将 Hook 写入正文开头；修改正文、来源、Hook 或事实状态会清空下游检查并使已有确认失效。通用更新拒绝客户端写入 `approval`、`checks`、`workflow_status`，也不能直接进入 `ready_to_shoot` 或 `published`。
+- `POST /api/drafts/:id/checks/persona`：按当前账号 IP 档案检查角色、受众、内容支柱和表达边界；只返回 `passed/warning`，不阻断后续操作。
+- `POST /api/drafts/:id/checks/quality`：要求当前版本已做人设检查，返回 Hook、受众、观点、来源、结构/风险五维结果；低分或严重问题返回 `blocked` 并进入 `needs_revision`。
+- `POST /api/drafts/:id/checks/publish`：要求质量门通过，检查标题、正文、平台、来源、事实核验、Hook、风险词和版本组；通过后进入 `publish_ready`。
+- 三类检查结果均包含 `status`、`score`、`dimensions`、`evidence`、`suggestions`、`draft_version` 和 `checked_at`；同版本重复请求幂等，传 `{"force":true}` 可重跑。已确认草稿需先撤回确认才能重新运行检查或生成 Hook。
+- `POST /api/drafts/:id/approve`：请求体为 `{"version":4}`。仅允许当前账号、当前版本、事实已核验且人设/质量/发布检查满足要求的草稿确认；成功保存确认人、时间、版本和检查深拷贝，并按 `owner_id + draft_id` 幂等创建或复用今日拍摄项。原版本重复请求返回同一确认和拍摄项。
+- `POST /api/drafts/:id/revoke-approval`：请求体为 `{"version":5,"reason":"需要修改正文"}`。只允许未发布的 `ready_to_shoot` 草稿撤回；保留原确认与检查快照，记录撤回信息并将拍摄项置为 `needs_revision`。原版本重复撤回幂等返回，已发布内容返回 `409`。
+
+## 人工确认与今日拍摄补充
+
+- 确认成功的拍摄项携带 `approval_required` 和 `approval_draft_version`；进入拍摄中、完成或发布状态时服务端会再次校验关联草稿仍为已确认。
+- 撤回只改变当前流程状态，不删除来源引用、历史快照或拍摄记录。
 
 ## 拍摄与 PWA
 
@@ -131,3 +143,24 @@
 前端提供 `/manifest.webmanifest` 和 `/sw.js`，支持安装入口和基础 shell 缓存。
 
 草稿默认标记为 `needs_review`，发布前需要完成事实核验。
+
+## 内容能力上下文
+
+- `server/content-capabilities.mjs` 提供 `listCapabilities()`、`getCapability(id)` 和 `isCapabilityId(id)`，登记第一阶段的 10 项可控能力。
+- `server/content-context.mjs` 提供 `buildContentContext(state, options)`，按 `ownerId`、选题/草稿 ID 和显式资源 ID 组装账号、策略、研究、素材、方法、记忆和表现上下文。
+- 上下文只读取当前账号资源；未选择的集合不自动加载全部数据；`api_configs` 不进入上下文，敏感键名会被过滤。
+- 缺少 `ownerId` 返回 `error.code=missing_context`；指定的选题或草稿不存在或无权访问时返回 `error.code=resource_not_found`。
+
+## 选题七维评估
+
+- `POST /api/topics/:id/evaluate`：仅评估当前账号选题；读取账号 IP 档案及选题 `source_refs` 指向的研究/素材，返回 `evaluation.score`、七个 `dimensions`、逐条 `evidence` 和 `suggestions`，并将 `workflow_status` 置为 `evaluated`。
+- `PUT /api/topics/:id/decision`：接受 `decision=do|revise|defer` 及可选 `reason`。只有已评估选题可决策；`do` 进入 `approved`，`revise/defer` 进入 `needs_revision`，原始选题不会删除。
+- 评估综合分按七维平均值计算：70 分及以上为 `do`，50–69 分为 `revise`，50 分以下为 `defer`。每维分数限制在 0–100。
+- 没有研究热度数据时只输出“无可用数据”的证据和建议，不推断热度；重复评估默认返回已有结果，调整方向后可重新评估。
+
+## 第一阶段质量门兼容约定
+
+- 旧选题和草稿缺少新流程字段时由启动归一化补安全默认值；已有评估、Hook、检查、确认及来源字段不得被覆盖。
+- 旧拍摄记录没有 `approval_required` 时继续按历史规则可用；Task 5 新建拍摄项必须校验关联草稿仍处于当前版本已确认状态。
+- 任务 1–5 的选题、草稿、检查、确认、撤回及拍摄接口均按 `owner_id` 隔离，越权资源统一返回 `404 resource_not_found`。
+- 内容上下文不得包含 `api_configs` 或嵌套的 Key、密码、Token、私钥字段；公开 API 配置只返回掩码和固定能力角色。

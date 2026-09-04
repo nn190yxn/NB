@@ -52,3 +52,9 @@ flowchart LR
 - `desktop/sync-client.mjs` 负责多目录配置、文件稳定监听、相对路径事件合并和持久化队列；文件通过 Base64 保持二进制完整性后提交同步 API。
 - `server/document-parser.mjs` 为 TXT、Markdown、Word、PDF、Excel 提供独立适配器；同步任务按等待、处理中、成功/失败状态推进，失败仅隔离当前文件，可单独重试。
 - 热点研究通过显式收录接口创建 `hotspot` 素材，素材的 `source_type/source_id/source_refs` 指向研究记录，重复收录按账号和研究来源幂等处理。
+- 内容能力目录位于 `server/content-capabilities.mjs`，当前登记选题、创作、检查和复盘能力；任务上下文由 `server/content-context.mjs` 按 `owner_id` 和显式资源 ID 组装，不读取 `api_configs`，并递归移除敏感字段。
+- 选题评估由 `server/topic-evaluation.mjs` 使用确定性七维规则完成；接口只写回当前账号选题的评估、决策、证据和建议，不调用模型、不虚构缺失热度。
+- 草稿流程字段由 `server/draft-workflow.mjs` 提供兼容性默认值；Hook 候选生成和校验是确定性的，四个平台草稿通过 `variant_group_id` 关联但各自独立保存，Hook 和所有输入来源继续保留在 `source_refs`。
+- 草稿三道质量检查由 `server/draft-checks.mjs` 提供纯函数：人设检查只提醒，质量门和发布清单可阻断；检查结果绑定草稿版本，修改后清空下游结果并允许重试。
+- 人工确认规则集中在 `server/draft-approval.mjs`；专用确认接口在一次持久化中保存当前版本检查快照、确认人和时间，并按 `owner_id + draft_id` 幂等创建或复用拍摄项。撤回保留确认历史，将拍摄项同步为 `needs_revision`；Task 5 新拍摄项在进入拍摄或发布状态时继续校验关联草稿确认。
+- 第一阶段质量门由 `server/stage-quality-gate.test.mjs`、MySQL 往返测试和跨平台 E2E 共同覆盖：旧 JSON 安全归一化、嵌套字段持久化、账号隔离、完整 `source_refs`、敏感配置过滤、状态保护与旧拍摄记录兼容。审计不增加运行时模块或依赖。

@@ -39,6 +39,9 @@ npm run build
 # 核心 API 端到端链路
 npm run e2e
 
+# 第一阶段内容质量链专项审计
+node --test server/stage-quality-gate.test.mjs server/mysql-migration.test.mjs server/content-context.test.mjs server/topic-evaluation-api.test.mjs server/draft-workflow-api.test.mjs server/draft-checks-api.test.mjs server/draft-approval-api.test.mjs server/cross-platform-e2e.test.mjs
+
 # 完整验证链
 npm run verify
 ```
@@ -62,3 +65,9 @@ API 启动时读取 `server/data.json`。该文件属于本地运行数据，已
 - 服务端文档解析使用 `server/document-parser.mjs`；同步任务入队后调用 `POST /api/materials/sync/:job_id/process`，不要让单个损坏文件阻断同批次任务。
 - 桌面同步管理面板从“桌面同步”入口打开，目录配置使用 `/api/sync-directories`，队列使用 `/api/materials/sync`；素材详情可查看设备、相对路径和同步状态。
 - 视觉修改沿用 `src/styles.css` 的主题令牌和响应式规则。
+- 内容能力新增或修改时，先在 `server/content-capabilities.mjs` 登记能力契约，再通过 `server/content-context.mjs` 读取当前账号和任务所需资源；不得直接读取全量状态或把 API Key 放入模型上下文。
+- 能力上下文相关测试位于 `server/content-context.test.mjs`，修改能力目录或上下文过滤规则后至少运行 `node --test server/content-context.test.mjs` 和 `npm run typecheck`。
+- 选题七维评分位于 `server/topic-evaluation.mjs`，API 边界测试位于 `server/topic-evaluation-api.test.mjs`；修改评分规则或状态流转后运行 `node --test server/topic-evaluation.test.mjs server/topic-evaluation-api.test.mjs`，再运行 `npm run verify`。
+- Hook 与草稿流程位于 `server/draft-workflow.mjs`；修改候选生成、校验、版本组或人工选择逻辑后运行 `node --test server/draft-workflow.test.mjs server/draft-workflow-api.test.mjs`，再运行 `npm run verify`。
+- 三道草稿检查位于 `server/draft-checks.mjs`，接口专项测试为 `server/draft-checks.test.mjs` 和 `server/draft-checks-api.test.mjs`；修改检查规则、状态前置或重试逻辑后先运行 `node --test server/draft-checks.test.mjs server/draft-checks-api.test.mjs`，再运行 `npm run verify`。
+- 人工确认规则位于 `server/draft-approval.mjs`，只能通过 `POST /api/drafts/:id/approve` 和 `POST /api/drafts/:id/revoke-approval` 改变确认状态；不要通过通用草稿更新写入 `approval`、`checks` 或 `workflow_status`。修改确认、撤回或拍摄衔接后先运行 `node --test server/draft-approval.test.mjs server/draft-approval-api.test.mjs`，再运行 `npm run verify`。

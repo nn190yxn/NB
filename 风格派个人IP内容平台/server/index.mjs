@@ -8,6 +8,11 @@ import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCol
 import { emptyPublicApiConfigs, parseApiConfigKey, publicApiConfig, runtimeApiConfig, updateApiConfig } from './api-settings.mjs'
 import { publicPrivateFile, readPrivateFile, storePrivateFile, validatePrivateFile } from './private-files.mjs'
 import { callVision } from './llm.mjs'
+import { buildContentContext } from './content-context.mjs'
+import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
+import { defaultDraftWorkflowFields, generateHookCandidates, selectHook, validateHookText } from './draft-workflow.mjs'
+import { checkPersona, checkQuality, checkPublishChecklist } from './draft-checks.mjs'
+import { approveDraftRecord, defaultApproval, revokeDraftRecord, validateApprovalReadiness } from './draft-approval.mjs'
 
 const port = Number(process.env.PORT || 3001)
 const sessions = new Map()
@@ -93,7 +98,7 @@ const state = {
   sync_directories: persistedState.sync_directories || [], devices: persistedState.devices || [], private_files: persistedState.private_files || [], api_configs: persistedState.api_configs || [], vision_tasks: persistedState.vision_tasks || [], performance_snapshots: persistedState.performance_snapshots || [],
 }
 for (const collection of ['materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'sync_directories', 'devices', 'private_files', 'api_configs', 'vision_tasks', 'performance_snapshots']) {
-  state[collection] = state[collection].map(item => ({ ...item, owner_id: item.owner_id || 'demo-user', ...(collection === 'shooting' && item.status === 'todo' ? { status: 'ready_to_shoot' } : {}) }))
+  state[collection] = state[collection].map(item => ({ ...item, owner_id: item.owner_id || 'demo-user', ...(collection === 'topics' ? defaultTopicFields(item) : {}), ...(collection === 'drafts' ? defaultDraftWorkflowFields(item) : {}), ...(collection === 'shooting' && item.status === 'todo' ? { status: 'ready_to_shoot' } : {}) }))
 }
 for (const collection of ['positioning', 'strategy', 'profile']) {
   const storeKey = `${collection}_by_user`
@@ -863,24 +868,90 @@ const server = createServer(async (request, response) => {
       const gaps = profileGaps(profile)
       if (gaps.length) return send(response, 422, { error: 'IP 档案资料不足', missing_fields: gaps, retryable: true })
       const topics = ['把一次失败复盘，变成客户愿意收藏的内容', '个人 IP 最值钱的证据，藏在你的交付过程里', '从泛流量进入信任区：创业者内容的三步承接'] .map((title, index) => ({ id: nextId(state.topics) + index, owner_id: userId(request), title, rationale: '结合定位档案、研究素材和 IP 核心目标生成', strategy_layer: ['reach', 'trust', 'conversion'][index], content_job: ['获得陌生用户注意', '展示真实经验与方法', '推动咨询或合作线索'][index], goal_refs: userDocument('positioning', request).monetization_goals.length ? ['monetization'] : ['positioning'], source_refs: sourceRefs, fact_risk: 'needs_review', generation_context: { profile_version: profile.version, source_count: sourceRefs.length, memory_count: activeMemories(userId(request)).length } }))
-      state.topics.push(...topics)
+      state.topics.push(...topics.map(defaultTopicFields))
+       await saveState('topics')
        await saveState('drafts')
-      return send(response, 201, topics)
+      return send(response, 201, topics.map(defaultTopicFields))
+    }
+    const topicEvaluateMatch = url.pathname.match(/^\/api\/topics\/(\d+)\/evaluate$/)
+    if (topicEvaluateMatch && request.method === 'POST') {
+      const topic = owned('topics', request).find(item => item.id === Number(topicEvaluateMatch[1]))
+      if (!topic) return send(response, 404, { error: '选题不存在', code: 'resource_not_found' })
+      if (['approved', 'in_production', 'completed'].includes(topic.workflow_status)) return send(response, 409, { error: '当前选题状态不允许重新评估', code: 'invalid_transition' })
+      const body = await readJson(request)
+      if (topic.evaluation && topic.workflow_status !== 'needs_revision' && !body.force) return send(response, 200, topic)
+      const refs = Array.isArray(topic.source_refs) ? topic.source_refs : []
+      const context = buildContentContext(state, { ownerId: userId(request), topicId: topic.id, task: { researchIds: refs.filter(ref => ref.type === 'research').map(ref => Number(ref.id)), materialIds: refs.filter(ref => ref.type === 'material').map(ref => Number(ref.id)) } })
+      const missing = profileGaps(context.profile)
+      if (missing.length) return send(response, 422, { status: 'failed', code: 'missing_context', error: '选题评估缺少 IP 档案资料', message: '选题评估缺少 IP 档案资料', missing_fields: missing, retryable: true })
+      topic.evaluation = evaluateTopic(topic, context)
+      topic.workflow_status = 'evaluated'
+      topic.decision = topic.evaluation.decision
+      topic.evidence = topic.evaluation.evidence
+      topic.suggestions = topic.evaluation.suggestions
+      topic.evaluated_at = topic.evaluation.evaluated_at
+      await saveState('topics')
+      return send(response, 200, topic)
+    }
+    const topicDecisionMatch = url.pathname.match(/^\/api\/topics\/(\d+)\/decision$/)
+    if (topicDecisionMatch && request.method === 'PUT') {
+      const topic = owned('topics', request).find(item => item.id === Number(topicDecisionMatch[1]))
+      if (!topic) return send(response, 404, { error: '选题不存在', code: 'resource_not_found' })
+      const body = await readJson(request)
+      if (!['do', 'revise', 'defer'].includes(body.decision)) return send(response, 422, { error: 'decision 必须是 do、revise 或 defer', code: 'validation_failed' })
+      if (!topic.evaluation) return send(response, 409, { error: '请先完成选题评估', code: 'invalid_transition' })
+      const nextStatus = body.decision === 'do' ? 'approved' : 'needs_revision'
+      if (topic.workflow_status === nextStatus && topic.decision === body.decision) return send(response, 200, topic)
+      if (topic.workflow_status !== 'evaluated') return send(response, 409, { error: '当前选题状态不允许此决策', code: 'invalid_transition' })
+      topic.decision = body.decision
+      topic.decision_reason = String(body.reason || '').trim()
+      topic.workflow_status = nextStatus
+      topic.decided_at = new Date().toISOString()
+      topic.decided_by = userId(request)
+      await saveState('topics')
+      return send(response, 200, topic)
+    }
+    const draftCheckMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/checks\/(persona|quality|publish)$/)
+    if (draftCheckMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftCheckMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      const body = await readJson(request)
+      const checkName = draftCheckMatch[2]
+      const currentVersion = Number(draft.version || 1)
+      if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撤回人工确认，再重新运行检查', code: 'invalid_transition' })
+      const checkKey = checkName === 'publish' ? 'publish_checklist' : checkName
+      const existing = draft.checks?.[checkKey]
+      if (existing?.draft_version === currentVersion && !body.force) return send(response, 200, draft)
+      const profile = userDocument('profile', request)
+      if (checkName === 'quality' && (!draft.checks?.persona || draft.checks.persona.draft_version !== currentVersion)) return send(response, 409, { error: '请先完成当前版本的人设检查', code: 'invalid_transition' })
+      if (checkName === 'publish' && (!draft.checks?.quality || draft.checks.quality.draft_version !== currentVersion || draft.checks.quality.status !== 'passed')) return send(response, 409, { error: '请先通过当前版本的质量门', code: 'invalid_transition' })
+      const check = checkName === 'persona' ? checkPersona(draft, profile) : checkName === 'quality' ? checkQuality(draft, profile) : checkPublishChecklist(draft)
+      draft.checks = { ...(draft.checks || {}), [checkKey]: check }
+      draft.workflow_status = checkName === 'persona' ? 'persona_checked' : check.status === 'blocked' ? 'needs_revision' : checkName === 'quality' ? 'quality_checked' : 'publish_ready'
+      draft.updated_at = new Date().toISOString()
+      await saveState('drafts')
+      return send(response, 200, draft)
     }
     if (url.pathname === '/api/drafts/generate' && request.method === 'POST') {
       const body = await readJson(request)
       const structure = body.structure_id ? owned('structures', request).find(item => item.id === body.structure_id) : null
       const hasAnchor = Boolean(body.topic_id || (body.topic && String(body.topic.title || '').trim()) || structure)
       if (!hasAnchor) return send(response, 422, { error: '至少需要一个创作锚点' })
-      const topic = owned('topics', request).find(item => item.id === body.topic_id) || body.topic || { title: '未命名选题', strategy_layer: 'trust', goal_refs: [] }
+      const persistedTopic = owned('topics', request).find(item => item.id === body.topic_id)
+      const topic = persistedTopic || body.topic || { title: '未命名选题', strategy_layer: 'trust', goal_refs: [] }
       const quoteMaterials = (body.quote_ids || []).map(id => owned('materials', request).find(item => item.id === id && !item.deleted_at)).filter(item => item && item.material_kind === 'quote')
       const experienceMaterials = (body.experience_ids || []).map(id => owned('materials', request).find(item => item.id === id && !item.deleted_at)).filter(item => item && item.material_kind === 'experience')
       if (structure) {
         structure.usage_count += 1
         structure.updated_at = new Date().toISOString()
       }
+      const requestedHook = String(body.hook_text || '').trim()
+      const hookValidation = requestedHook ? validateHookText(requestedHook) : null
+      if (hookValidation?.status === 'blocked') return send(response, 422, { error: 'Hook 校验未通过', code: 'validation_failed', evidence: hookValidation.evidence })
+      const variantGroupId = randomUUID()
       const composeBody = (platform) => {
         const parts = [topic.title, `平台：${platform}`]
+        if (requestedHook) parts.push(`Hook：${requestedHook}`)
         if (structure) parts.push(`结构：${structure.steps.join(' → ')}`)
         if (quoteMaterials.length) parts.push(`金句参考：\n${quoteMaterials.map((item, index) => `${index + 1}. ${item.content}`).join('\n')}`)
         if (experienceMaterials.length) parts.push(`我的经历素材：\n${experienceMaterials.map(item => `- ${item.content}`).join('\n')}`)
@@ -890,17 +961,81 @@ const server = createServer(async (request, response) => {
         return parts.filter(Boolean).join('\n\n')
       }
       const atomRefs = [...quoteMaterials, ...experienceMaterials].map(item => sourceRef('material', item.id))
-      const drafts = ['小红书', '抖音', '视频号', '公众号'].map((platform, index) => ({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, title: topic.title, body: composeBody(platform), version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: [...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs], fact_check_status: 'needs_review', status: 'draft', created_at: new Date().toISOString() }))
+      const sourceRefs = [...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs]
+      const drafts = ['小红书', '抖音', '视频号', '公众号'].map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, title: topic.title, body: composeBody(platform), version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null }, created_at: new Date().toISOString() }))
       state.drafts.push(...drafts)
        await saveState('drafts')
       return send(response, 201, drafts)
     }
     if (url.pathname === '/api/drafts' && request.method === 'GET') return send(response, 200, owned('drafts', request))
+    const draftHooksMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/hooks$/)
+    if (draftHooksMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftHooksMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      const body = await readJson(request)
+      if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撤回人工确认，再重新生成 Hook', code: 'invalid_transition' })
+      if (draft.hooks?.length && !body.force) return send(response, 200, draft)
+      draft.hooks = generateHookCandidates(draft, { sourceRefs: draft.source_refs || [] })
+      draft.workflow_status = 'hooks_ready'
+      draft.updated_at = new Date().toISOString()
+      await saveState('drafts')
+      return send(response, 200, draft)
+    }
+    const draftApprovalMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/(approve|revoke-approval)$/)
+    if (draftApprovalMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftApprovalMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      const body = await readJson(request)
+      if (!Number.isInteger(body.version) || body.version < 1) return send(response, 422, { error: '必须提供有效的草稿版本', code: 'validation_failed' })
+      const action = draftApprovalMatch[2]
+      const existingShooting = owned('shooting', request).find(item => item.draft_id === draft.id)
+      if (action === 'approve') {
+        if (draft.approval?.status === 'approved' && draft.approval.draft_version === body.version) return send(response, 200, { status: 'approved', draft, shooting: existingShooting || null })
+        if (body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', code: 'version_conflict', current: draft })
+        if (existingShooting?.status === 'published') return send(response, 409, { error: '已发布内容不能重复确认', code: 'invalid_transition' })
+        const errors = validateApprovalReadiness(draft)
+        if (errors.length) return send(response, 409, { error: errors[0], code: 'invalid_transition', reasons: errors })
+        const now = new Date().toISOString()
+        draft.history ||= []
+        draft.history.push({ ...structuredClone(draft), history: undefined, version: draft.version, snapshot_at: now })
+        draft.approval = approveDraftRecord(draft, userId(request), now)
+        draft.workflow_status = 'ready_to_shoot'
+        draft.status = 'ready_to_shoot'
+        draft.version += 1
+        draft.updated_at = now
+        let shooting = existingShooting
+        if (!shooting) {
+          shooting = { id: nextId(state.shooting), owner_id: userId(request), draft_id: draft.id, title: draft.title, platform: draft.platform, script: draft.body, status: 'ready_to_shoot', approval_required: true, approval_draft_version: draft.approval.draft_version, version: 1, date: now.slice(0, 10), strategy_layer: draft.strategy_layer, goal_refs: structuredClone(draft.goal_refs || []), source_refs: structuredClone(draft.source_refs || []), created_at: now, updated_at: now }
+          state.shooting.push(shooting)
+        } else {
+          Object.assign(shooting, { title: draft.title, platform: draft.platform, script: draft.body, status: 'ready_to_shoot', approval_required: true, approval_draft_version: draft.approval.draft_version, strategy_layer: draft.strategy_layer, goal_refs: structuredClone(draft.goal_refs || []), source_refs: structuredClone(draft.source_refs || []), version: (shooting.version || 1) + 1, updated_at: now })
+        }
+        await saveState('drafts', 'shooting')
+        return send(response, 200, { status: 'approved', draft, shooting })
+      }
+      if (draft.approval?.status === 'revoked' && draft.approval.revoked_draft_version === body.version) return send(response, 200, { status: 'revoked', draft, shooting: existingShooting || null })
+      if (body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', code: 'version_conflict', current: draft })
+      const reason = String(body.reason || '').trim()
+      if (!reason) return send(response, 422, { error: '撤回原因不能为空', code: 'validation_failed' })
+      if (draft.approval?.status !== 'approved' || draft.workflow_status !== 'ready_to_shoot') return send(response, 409, { error: '只有已确认且未发布的草稿可以撤回', code: 'invalid_transition' })
+      if (draft.status === 'published' || existingShooting?.status === 'published') return send(response, 409, { error: '已发布内容不能撤回确认', code: 'invalid_transition' })
+      const now = new Date().toISOString()
+      draft.history ||= []
+      draft.history.push({ ...structuredClone(draft), history: undefined, version: draft.version, snapshot_at: now })
+      draft.approval = revokeDraftRecord(draft, userId(request), reason, now)
+      draft.workflow_status = 'needs_revision'
+      draft.status = 'draft'
+      draft.version += 1
+      draft.updated_at = now
+      if (existingShooting) Object.assign(existingShooting, { status: 'needs_revision', version: (existingShooting.version || 1) + 1, updated_at: now })
+      await saveState('drafts', 'shooting')
+      return send(response, 200, { status: 'revoked', draft, shooting: existingShooting || null })
+    }
     const draftCopyMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/copy$/)
     if (draftCopyMatch && request.method === 'POST') {
       const original = owned('drafts', request).find(item => item.id === Number(draftCopyMatch[1]))
       if (!original) return send(response, 404, { error: '草稿不存在' })
-       const copy = { ...structuredClone(original), id: nextId(state.drafts), title: `${original.title}（副本）`, status: 'draft', version: 1, history: [], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+       const copy = { ...structuredClone(original), id: nextId(state.drafts), title: `${original.title}（副本）`, status: 'draft', workflow_status: original.selected_hook_id ? 'content_ready' : 'draft', checks: { persona: null, quality: null, publish_checklist: null }, approval: defaultApproval(), version: 1, history: [], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
       state.drafts.push(copy)
        await saveState('drafts')
       return send(response, 201, copy)
@@ -916,11 +1051,12 @@ const server = createServer(async (request, response) => {
       const draft = owned('drafts', request).find(item => item.id === Number(draftRestoreMatch[1]))
       if (!draft) return send(response, 404, { error: '草稿不存在' })
       const body = await readJson(request)
+      if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撤回人工确认，再恢复历史版本', code: 'invalid_transition' })
       const snapshot = (draft.history || []).find(item => item.version === body.version)
       if (!snapshot) return send(response, 404, { error: '历史版本不存在' })
       draft.history ||= []
       draft.history.push({ ...structuredClone(draft), history: undefined, version: draft.version, snapshot_at: new Date().toISOString() })
-      for (const key of ['topic_id', 'platform', 'title', 'body', 'strategy_layer', 'goal_refs', 'source_refs', 'fact_check_status', 'status']) {
+      for (const key of ['topic_id', 'platform', 'title', 'body', 'strategy_layer', 'goal_refs', 'source_refs', 'fact_check_status']) {
         if (snapshot[key] !== undefined) draft[key] = structuredClone(snapshot[key])
       }
       draft.version += 1
@@ -935,6 +1071,10 @@ const server = createServer(async (request, response) => {
       const item = owned('shooting', request).find(existing => existing.id === Number(shootingMatch[1]))
       if (!item) return send(response, 404, { error: '拍摄条目不存在' })
       if (body.status !== undefined && !shootingStatuses.has(body.status)) return send(response, 422, { error: '不支持的拍摄状态' })
+      if (item.approval_required && ['in_progress', 'completed', 'published'].includes(body.status)) {
+        const draft = owned('drafts', request).find(existing => existing.id === item.draft_id)
+        if (!draft || draft.approval?.status !== 'approved') return send(response, 409, { error: '关联草稿未经有效人工确认', code: 'invalid_transition' })
+      }
        if (body.version !== undefined && body.version !== item.version) return send(response, 409, { error: '拍摄清单版本冲突', current: item, conflict: createConflict(request, 'shooting', item.id, body.version, body, item) })
       const updates = { ...body }
       delete updates.owner_id
@@ -949,15 +1089,42 @@ const server = createServer(async (request, response) => {
       const draft = owned('drafts', request).find(existing => existing.id === Number(draftMatch[1]))
       if (!draft) return send(response, 404, { error: '草稿不存在' })
       if (body.status !== undefined && !draftStatuses.has(body.status)) return send(response, 422, { error: '不支持的草稿状态' })
+      if (body.approval !== undefined || body.checks !== undefined || body.workflow_status !== undefined) return send(response, 422, { error: '确认状态和检查结果只能通过专用接口更新', code: 'validation_failed' })
+      if (body.status === 'ready_to_shoot') return send(response, 409, { error: '请通过人工确认接口进入拍摄', code: 'invalid_transition' })
+      if (body.status === 'published') return send(response, 409, { error: '请通过拍摄清单完成发布', code: 'invalid_transition' })
+      if (draft.approval?.status === 'approved' && body.status !== undefined && body.status !== draft.status) return send(response, 409, { error: '请先撤回人工确认，再修改草稿状态', code: 'invalid_transition' })
        if (body.version !== undefined && body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', current: draft, conflict: createConflict(request, 'draft', draft.id, body.version, body, draft) })
       const draftValidationError = validateDraftUpdate(body, draft)
+      let selectedHook = null
+      if (body.selected_hook_id !== undefined) {
+        try { selectedHook = selectHook(draft, body.selected_hook_id) } catch (error) { return send(response, 422, { error: error.message, code: error.code || 'validation_failed' }) }
+      }
       if (draftValidationError) return send(response, 422, { error: draftValidationError })
       const updates = { ...body }
       delete updates.owner_id
       delete updates.version
+      delete updates.workflow_status
+      const contentChanged = ['title', 'body', 'platform', 'source_refs', 'selected_hook_id', 'fact_check_status'].some(key => body[key] !== undefined)
+      if (contentChanged) {
+        updates.workflow_status = 'content_ready'
+        updates.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
+        updates.approval = { ...defaultApproval(draft.approval), status: 'pending', user_id: null, draft_version: null }
+      } else {
+        delete updates.checks
+      }
+      if (selectedHook) {
+        updates.selected_hook = structuredClone(selectedHook)
+        updates.selected_hook_id = selectedHook.id
+        updates.workflow_status = 'content_ready'
+        if (!String(updates.body || '').includes(selectedHook.text)) updates.body = `${selectedHook.text}\n\n${updates.body || draft.body}`
+      }
        draft.history ||= []
        draft.history.push({ ...structuredClone(draft), history: undefined, version: draft.version, snapshot_at: new Date().toISOString() })
        Object.assign(draft, updates, { version: draft.version + 1, updated_at: new Date().toISOString() })
+      if (contentChanged) {
+        const linkedShooting = owned('shooting', request).find(item => item.draft_id === draft.id && item.status !== 'published')
+        if (linkedShooting) Object.assign(linkedShooting, { status: 'needs_revision', version: (linkedShooting.version || 1) + 1, updated_at: draft.updated_at })
+      }
       if (body.status === 'shooting' || body.status === 'ready_to_shoot') {
         const existing = state.shooting.find(item => item.draft_id === draft.id)
         if (!existing) state.shooting.push({ id: nextId(state.shooting), owner_id: userId(request), draft_id: draft.id, title: draft.title, platform: draft.platform, script: draft.body, status: 'todo', version: 1, date: new Date().toISOString().slice(0, 10), strategy_layer: draft.strategy_layer, goal_refs: draft.goal_refs, source_refs: draft.source_refs })

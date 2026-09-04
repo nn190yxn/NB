@@ -72,6 +72,46 @@ test('legacy app_state migrates into split tables with matching counts', async (
   assert.deepEqual(docs.profile, legacy.profile_by_user)
 })
 
+test('workflow evaluation, checks, approval snapshots and source refs round-trip through MySQL collections', async () => {
+  const pool = createMockPool()
+  const topic = {
+    id: 7,
+    owner_id: 'workflow-owner',
+    title: '真实复盘',
+    workflow_status: 'approved',
+    evaluation: { score: 82, decision: 'do', dimensions: { traffic_potential: { score: 80, evidence: ['有来源'], suggestions: [] } }, evidence: [], suggestions: [], evaluated_at: '2026-09-03T08:00:00.000Z' },
+    decision: 'do',
+    source_refs: [{ type: 'material', id: 3 }],
+  }
+  const checks = {
+    persona: { status: 'warning', draft_version: 4, evidence: [], suggestions: [], checked_at: '2026-09-03T08:10:00.000Z' },
+    quality: { status: 'passed', draft_version: 4, evidence: [], suggestions: [], checked_at: '2026-09-03T08:11:00.000Z' },
+    publish_checklist: { status: 'passed', draft_version: 4, evidence: [], suggestions: [], checked_at: '2026-09-03T08:12:00.000Z' },
+  }
+  const draft = {
+    id: 8,
+    owner_id: 'workflow-owner',
+    topic_id: topic.id,
+    version: 5,
+    variant_group_id: 'variant-7',
+    variant_type: 'platform',
+    hooks: [{ id: 'hook-8-1', text: '从一次真实失败说起。', source_refs: topic.source_refs }],
+    selected_hook_id: 'hook-8-1',
+    generation_context: { topic_id: topic.id, source_count: 1 },
+    checks,
+    approval: { status: 'approved', user_id: 'workflow-owner', draft_version: 4, checks_snapshot: structuredClone(checks) },
+    source_refs: topic.source_refs,
+  }
+  const shooting = { id: 9, owner_id: 'workflow-owner', draft_id: draft.id, status: 'ready_to_shoot', approval_required: true, approval_draft_version: 4, source_refs: topic.source_refs }
+
+  await saveCollections(pool, { topics: [topic], drafts: [draft], shooting: [shooting] }, ['topics', 'drafts', 'shooting'])
+  const loaded = await loadCollections(pool)
+  assert.deepEqual(loaded.topics[0], topic)
+  assert.deepEqual(loaded.drafts[0], draft)
+  assert.deepEqual(loaded.shooting[0], shooting)
+  assert.notStrictEqual(loaded.drafts[0].approval.checks_snapshot, checks)
+})
+
 test('migration is idempotent: rerunning over an already-migrated database keeps row counts stable', async () => {
   const legacy = {
     materials: [{ id: 1, owner_id: 'demo-user', name: '素材一' }],

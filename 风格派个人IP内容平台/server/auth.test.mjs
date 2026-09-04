@@ -302,15 +302,15 @@ test('session 支持创建、复用和注销', async t => {
     headers: { cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ status: 'published' }),
   })
-  assert.equal(unverifiedPublish.status, 422)
+  assert.equal(unverifiedPublish.status, 409)
 
   const verifiedPublish = await fetch(`${baseUrl}/api/drafts/${drafts[0].id}`, {
     method: 'PUT',
     headers: { cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ status: 'published', fact_check_status: 'verified', version: drafts[0].version }),
   })
-  assert.equal(verifiedPublish.status, 200)
-  assert.equal((await verifiedPublish.json()).fact_check_status, 'verified')
+  assert.equal(verifiedPublish.status, 409)
+  assert.equal((await verifiedPublish.json()).code, 'invalid_transition')
 
   const otherDrafts = await fetch(`${baseUrl}/api/drafts`, { headers: { cookie: otherCookie } })
   assert.equal(otherDrafts.status, 200)
@@ -356,17 +356,26 @@ test('session 支持创建、复用和注销', async t => {
   })
   assert.equal(invalidDraftStatus.status, 422)
 
-  const shootingDraft = await fetch(`${baseUrl}/api/drafts/${drafts[0].id}`, {
-    method: 'PUT',
+  let shootingDraft = await fetch(`${baseUrl}/api/drafts/${drafts[1].id}/hooks`, {
     headers: { cookie, 'content-type': 'application/json' },
-    body: JSON.stringify({ status: 'ready_to_shoot' }),
+    method: 'POST',
+    body: '{}',
   })
   assert.equal(shootingDraft.status, 200)
+  const jsonHeaders = { cookie, 'content-type': 'application/json' }
+  shootingDraft = await shootingDraft.json()
+  shootingDraft = await (await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ selected_hook_id: shootingDraft.hooks[0].id, version: shootingDraft.version }) })).json()
+  shootingDraft = await (await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ fact_check_status: 'verified', version: shootingDraft.version }) })).json()
+  shootingDraft = await (await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}/checks/persona`, { method: 'POST', headers: jsonHeaders, body: '{}' })).json()
+  shootingDraft = await (await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}/checks/quality`, { method: 'POST', headers: jsonHeaders, body: '{}' })).json()
+  shootingDraft = await (await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}/checks/publish`, { method: 'POST', headers: jsonHeaders, body: '{}' })).json()
+  const approvedDraft = await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}/approve`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ version: shootingDraft.version }) })
+  assert.equal(approvedDraft.status, 200)
 
   const shooting = await fetch(`${baseUrl}/api/shooting/today`, { headers: { cookie } })
   assert.equal(shooting.status, 200)
   const shootingItems = await shooting.json()
-  const shootingItem = shootingItems.find(item => item.draft_id === drafts[0].id)
+  const shootingItem = shootingItems.find(item => item.draft_id === shootingDraft.id)
   assert.equal(shootingItem.owner_id, 'integration-user')
   assert.equal(shootingItem.version, 1)
 
