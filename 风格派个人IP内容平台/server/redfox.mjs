@@ -35,6 +35,18 @@ const pad = value => String(value).padStart(2, '0')
 const ymd = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 const ymdHms = date => `${ymd(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 
+// 官网部分平台返回"920.8w/11.9万/2.3亿"格式的热度值
+export function parseHeatValue(value) {
+  const text = String(value ?? '').trim().replace(/,/g, '')
+  if (!text) return 0
+  const wan = text.match(/^([\d.]+)\s*(?:万|w|W)$/)
+  if (wan) return Math.round(Number(wan[1]) * 10000)
+  const yi = text.match(/^([\d.]+)\s*(?:亿)$/)
+  if (yi) return Math.round(Number(yi[1]) * 100000000)
+  const num = Number(text)
+  return Number.isFinite(num) ? num : 0
+}
+
 export function normalizeResearchItem(payload, { platform = '未知平台', query = '' } = {}) {
   const item = payload?.item || payload || {}
   const discussions = Number(item.discussions ?? item.comments ?? item.commentCount ?? item.readCount ?? 0)
@@ -185,7 +197,7 @@ export function createRedFoxAdapter({ baseUrl, apiKey, fetchImpl = fetch } = {})
       url.searchParams.set('endDate', ymd(end))
       const payload = await redfoxFetch(fetchImpl, url, apiKey)
       const rows = Array.isArray(payload?.data) ? payload.data : []
-      return { source: 'redfox', items: rows.map((item, index) => ({ rank: Number(item.index || index + 1), title: item.title || '', heat: Number(item.hotCount || 0), platform, url: item.url || null })) }
+      return { source: 'redfox', items: rows.map((item, index) => ({ rank: Number(item.index || index + 1), title: item.title || '', heat: parseHeatValue(item.hotCount), platform, url: item.url || null })) }
     },
     async keywordHotSearch({ keywords = [], platforms = [], days = 7 } = {}) {
       assertConfigured()
@@ -202,7 +214,7 @@ export function createRedFoxAdapter({ baseUrl, apiKey, fetchImpl = fetch } = {})
       if (data && typeof data === 'object' && !Array.isArray(data)) {
         for (const [key, rows] of Object.entries(data)) {
           if (!Array.isArray(rows)) continue
-          for (const row of rows) items.push({ platform: keywordHotPlatformLabels[key] || key, rank: Number(row.index || 0), title: row.title || '', heat: Number(row.hotCount || 0), url: row.url || null })
+          for (const row of rows) items.push({ platform: keywordHotPlatformLabels[key] || key, rank: Number(row.index || 0), title: row.title || '', heat: parseHeatValue(row.hotCount), url: row.url || null })
         }
       } else if (Array.isArray(data)) {
         for (const row of data) items.push({ rank: Number(row.index || 0), title: row.title || '', heat: Number(row.hotCount || 0), url: row.url || null })

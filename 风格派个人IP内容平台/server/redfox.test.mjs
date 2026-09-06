@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRedFoxAdapter, normalizeResearchItem, demoProhibitedCheck } from './redfox.mjs'
+import { createRedFoxAdapter, normalizeResearchItem, demoProhibitedCheck, parseHeatValue } from './redfox.mjs'
 
 function captureAdapter(response, { status = 200 } = {}) {
   const calls = []
@@ -51,6 +51,15 @@ test('平台热搜榜走官网 getListByPlatform 且平台编号正确', async (
     assert.equal(result.source, 'redfox')
     assert.deepEqual(result.items[0], { rank: 1, title: '热搜第一名', heat: 11966636, platform, url: 'https://example.com/1' })
   }
+})
+
+test('热度值支持官网的中文万/亿格式', () => {
+  assert.equal(parseHeatValue('920.8w'), 9208000)
+  assert.equal(parseHeatValue('11.9万'), 119000)
+  assert.equal(parseHeatValue('2.3亿'), 230000000)
+  assert.equal(parseHeatValue('11966636'), 11966636)
+  assert.equal(parseHeatValue(''), 0)
+  assert.equal(parseHeatValue(null), 0)
 })
 
 test('不支持的热搜平台返回明确错误', async () => {

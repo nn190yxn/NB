@@ -387,6 +387,7 @@ function SettingsPanel({ theme, setTheme, font, setFont, onClose }: { theme: The
   const [testing, setTesting] = useState<ApiSlot | 'redfox' | ''>('')
   const [testResult, setTestResult] = useState<Record<string, string>>({})
   const [hasLegacyLlm, setHasLegacyLlm] = useState(Boolean(legacySettings.llm.primary.api_key || legacySettings.llm.fallback.api_key))
+  const [usage, setUsage] = useState<{ date: string; redfox: { used: number; limit: number; shared: boolean }; llm: { used: number; limit: number; shared: boolean } } | null>(null)
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
@@ -394,9 +395,11 @@ function SettingsPanel({ theme, setTheme, font, setFont, onClose }: { theme: The
     void Promise.all([
       apiJson<Omit<EditableApiConfig, 'api_key'>[]>('/api/api-settings'),
       apiJson<Omit<EditableRedfoxConfig, 'api_key'>>('/api/redfox-settings'),
-    ]).then(([items, redfoxConfig]) => {
+      apiJson<{ date: string; redfox: { used: number; limit: number; shared: boolean }; llm: { used: number; limit: number; shared: boolean } }>('/api/usage/today'),
+    ]).then(([items, redfoxConfig, usageToday]) => {
       setServerApis(current => Object.fromEntries(items.map(item => [item.slot, { ...current[item.slot], ...item, api_key: '' }])) as Record<ApiSlot, EditableApiConfig>)
       setRedfox(current => redfoxConfig.configured ? { ...current, ...redfoxConfig, api_key: '' } : current)
+      setUsage(usageToday)
     }).catch(() => setSaved('服务端 API 配置暂不可用'))
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
@@ -451,6 +454,7 @@ function SettingsPanel({ theme, setTheme, font, setFont, onClose }: { theme: The
         <div className="settings-font-row">{(Object.keys(fonts) as FontKey[]).map(key => <button className={font === key ? 'settings-font active' : 'settings-font'} key={key} onClick={() => setFont(key)} style={{ fontFamily: fonts[key].sample }}><b>{fonts[key].name}</b><small>{fonts[key].subtitle}</small></button>)}</div>
       </section>
       <section className="settings-section"><h3>API 中心</h3>
+      {usage && <p className="settings-usage">今日共享额度：红狐搜索 {usage.redfox.used}/{usage.redfox.limit || '不限'} 次 · 大模型 {usage.llm.used}/{usage.llm.limit || '不限'} 次{usage.redfox.shared || usage.llm.shared ? '（配置自己的 Key 后不受共享额度限制）' : ''}</p>}
         <p className="settings-privacy">四套 API Key 使用 AES-256-GCM 按账号加密保存。页面仅显示掩码，修改 Key 时必须重新输入完整值。</p>
         {hasLegacyLlm && <div className="offline-banner" role="status">检测到此浏览器保存的旧版 API 1/API 2 配置，不会自动上传。<button onClick={migrateLegacy}>确认迁移到账号</button></div>}
         {(Object.keys(apiSlotLabels) as ApiSlot[]).map(slot => <article className="settings-api-card" key={slot}>

@@ -63,6 +63,7 @@ const defaultState = {
   },
   profile_reviews: [],
   users: [],
+  usage_daily: [],
   materials: [],
   research: [],
   structures: [],
@@ -109,6 +110,7 @@ const state = {
   conflicts: persistedState.conflicts || [],
   memories: persistedState.memories || [],
   users: persistedState.users || [],
+  usage_daily: persistedState.usage_daily || [],
   sync_directories: persistedState.sync_directories || [], devices: persistedState.devices || [], private_files: persistedState.private_files || [], api_configs: persistedState.api_configs || [], vision_tasks: persistedState.vision_tasks || [], performance_snapshots: persistedState.performance_snapshots || [],
 }
 for (const collection of ['users', 'materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'sync_directories', 'devices', 'private_files', 'api_configs', 'vision_tasks', 'performance_snapshots']) {
@@ -178,7 +180,37 @@ function sendPrivateFile(response, content, record, download) {
   response.writeHead(200, { 'content-type': record.mime_type, 'content-length': String(content.length), 'content-disposition': `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(record.original_name)}`, 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' }); response.end(content)
 }
 function apiConfigsFor(request) { return owned('api_configs', request) }
-function runtimeConfig(request, slot) { const item = apiConfigsFor(request).find(value => value.slot === slot); return item ? runtimeApiConfig(item, apiConfigMasterKey) : null }
+function runtimeConfig(request, slot) {
+  const item = apiConfigsFor(request).find(value => value.slot === slot)
+  if (item) { const config = runtimeApiConfig(item, apiConfigMasterKey); if (config) return config }
+  if (slot === 'text_primary' && sharedLlm.api_key && sharedLlm.base_url && sharedLlm.model) return { ...sharedLlm }
+  return null
+}
+
+const redfoxDailyLimit = Number(process.env.REDFOX_DAILY_LIMIT || 10)
+const llmDailyLimit = Number(process.env.LLM_DAILY_LIMIT || 20)
+const sharedLlm = { base_url: process.env.PROJECT_LLM_BASE_URL || '', api_key: process.env.PROJECT_LLM_API_KEY || '', model: process.env.PROJECT_LLM_MODEL || '' }
+
+function cstDayKey() { return new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10) }
+function quotaUsed(request, kind) {
+  const id = `${cstDayKey()}:${userId(request)}:${kind}`
+  return state.usage_daily.find(item => item.id === id)?.count || 0
+}
+async function consumeQuota(request, kind, limit) {
+  if (!Number.isFinite(limit) || limit <= 0) return { allowed: true, used: quotaUsed(request, kind), limit }
+  const cutoff = new Date(Date.now() + 8 * 3_600_000 - 3 * 86400000).toISOString().slice(0, 10)
+  state.usage_daily = state.usage_daily.filter(item => item.date >= cutoff)
+  const id = `${cstDayKey()}:${userId(request)}:${kind}`
+  let record = state.usage_daily.find(item => item.id === id)
+  if (!record) { record = { id, owner_id: userId(request), date: cstDayKey(), kind, count: 0 }; state.usage_daily.push(record) }
+  if (record.count >= limit) return { allowed: false, used: record.count, limit }
+  record.count += 1
+  await saveState('usage_daily')
+  return { allowed: true, used: record.count, limit }
+}
+function hasAccountRedfox(request) { return owned('api_configs', request).some(item => item.slot === 'redfox' && item.encrypted_api_key) }
+function hasAccountLlm(request) { return apiConfigsFor(request).some(item => (item.slot === 'text_primary' || item.slot === 'text_fallback') && item.encrypted_api_key && item.enabled !== false) }
+function sharedQuotaError(message) { const error = new Error(message); error.code = 'QUOTA_EXCEEDED'; error.retryable = false; return error }
 
 function nextId(collection) {
   return collection.length ? Math.max(...collection.map(item => item.id || 0)) + 1 : 1
@@ -259,6 +291,10 @@ async function runRedFox(request, { demo, apply }) {
   const { baseUrl, apiKey } = redfoxConfigFor(request)
   const adapter = createRedFoxAdapter({ baseUrl, apiKey })
   if (!adapter.configured) return { ok: true, demo: true, result: demo() }
+  if (!hasAccountRedfox(request)) {
+    const quota = await consumeQuota(request, 'redfox', redfoxDailyLimit)
+    if (!quota.allowed) return { ok: false, error: sharedQuotaError(`今日共享搜索额度已用完（每人每天 ${redfoxDailyLimit} 次）。可在 API 中心配置自己的红狐 Key 解除限制`) }
+  }
   try {
     return { ok: true, result: await apply(adapter) }
   } catch (error) {
@@ -772,6 +808,10 @@ const server = createServer(async (request, response) => {
       if (!text) return send(response, 422, { error: '请粘贴要提炼的对话、访谈或复盘文本' })
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       if (!configs.primary && !configs.fallback) return send(response, 422, { error: '自动提炼需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      if (!hasAccountLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) return send(response, 429, { error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false })
+      }
       try {
         const result = await callLlmWithFallback(configs, [
           { role: 'system', content: '你是个人 IP 内容助理。从用户提供的文本中提炼值得长期记忆的创作偏好、选题方向和反馈事实。只输出一个 JSON 数组，每项形如 {"memory_type":"style|topic|feedback","content":"一句话记忆"}，最多 8 条；没有值得记忆的内容时输出 []。不要输出数组以外的任何文字。' },
@@ -815,7 +855,12 @@ const server = createServer(async (request, response) => {
       const peers = owned('performance_snapshots', request).filter(item => item.id !== snapshot.id && item.platform === snapshot.platform && Number.isFinite(Number(item.retrospect?.rate)))
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       let retrospect = null
-      if (configs.primary || configs.fallback) {
+      const useRetrospectLlm = Boolean(configs.primary || configs.fallback)
+      if (useRetrospectLlm && !hasAccountLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) useRetrospectLlm = false
+      }
+      if (useRetrospectLlm) {
         try {
           const result = await callLlmWithFallback(configs, [
             { role: 'system', content: '你是个人 IP 内容复盘助理。根据内容标题、平台、正文摘要和表现指标，输出 JSON 对象：{"verdict":"winner|ok|underperformed","summary":"一句话总结（不超过 60 字）","lessons":["可复用的经验，最多 3 条，每条不超过 40 字"],"drivers":["有效驱动因素，最多 3 个，每个不超过 8 字"]}。只输出 JSON。' },
@@ -838,6 +883,13 @@ const server = createServer(async (request, response) => {
       if (addedMemories.length) await saveState('performance_snapshots', 'memories')
       else await saveState('performance_snapshots')
       return send(response, 200, { snapshot, memories_added: addedMemories.length })
+    }
+    if (url.pathname === '/api/usage/today' && request.method === 'GET') {
+      return send(response, 200, {
+        date: cstDayKey(),
+        redfox: { used: quotaUsed(request, 'redfox'), limit: redfoxDailyLimit, shared: !hasAccountRedfox(request) },
+        llm: { used: quotaUsed(request, 'llm'), limit: llmDailyLimit, shared: !hasAccountLlm(request) },
+      })
     }
     if (url.pathname === '/api/calendar' && request.method === 'GET') {
       const monthParam = url.searchParams.get('month') || ''
@@ -1143,7 +1195,12 @@ const server = createServer(async (request, response) => {
       const hits = prohibitedWordlist.filter(entry => String(draft.body || '').includes(entry.word)).map(entry => ({ ...entry }))
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       let adaptation = null
-      if (configs.primary || configs.fallback) {
+      const useAdaptLlm = Boolean(configs.primary || configs.fallback)
+      if (useAdaptLlm && !hasAccountLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) useAdaptLlm = false
+      }
+      if (useAdaptLlm) {
         try {
           const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
           const result = await callLlmWithFallback(configs, [
@@ -1168,6 +1225,10 @@ const server = createServer(async (request, response) => {
       if (!draft) return send(response, 404, { error: '草稿不存在' })
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       if (!configs.primary && !configs.fallback) return send(response, 422, { error: '去 AI 感改写需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      if (!hasAccountLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) return send(response, 429, { error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false })
+      }
       try {
         const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
         const result = await callLlmWithFallback(configs, [

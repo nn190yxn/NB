@@ -3,7 +3,7 @@ import { crossPlatformCollectionNames } from './content-assets.mjs'
 
 const required = ['PROJECT_DB_HOST', 'PROJECT_DB_NAME', 'PROJECT_DB_USER', 'PROJECT_DB_PASSWORD']
 
-export const collectionNames = ['users', 'materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'profile_reviews', 'conflicts', 'memories', ...crossPlatformCollectionNames]
+export const collectionNames = ['users', 'usage_daily', 'materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'profile_reviews', 'conflicts', 'memories', ...crossPlatformCollectionNames]
 export const userDocNames = ['positioning', 'strategy', 'profile', 'positioning_candidates', 'api_settings']
 
 export function mysqlConfig(env = process.env) {
