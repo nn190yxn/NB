@@ -1,13 +1,14 @@
 import { createServer } from 'node:http'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { normalizeMaterialFormat, parseMaterialContent, profileGaps, validateDraftUpdate, validRatios, validateMaterialInput, validateSourceRefs } from './validation.mjs'
-import { createRedFoxAdapter, demoHotSearch, demoProhibitedCheck, demoSearchWork, demoSimilarAccounts, demoTrending } from './redfox.mjs'
+import { createRedFoxAdapter, demoHotSearch, demoProhibitedCheck, demoSearchWork, demoSimilarAccounts, demoTrending, prohibitedWordlist } from './redfox.mjs'
+import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterministic } from './growth.mjs'
 import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCollections, saveMysqlState, saveUserDocs, collectionNames, userDocNames } from './mysql.mjs'
-import { emptyPublicApiConfigs, parseApiConfigKey, publicApiConfig, runtimeApiConfig, updateApiConfig } from './api-settings.mjs'
+import { emptyPublicApiConfigs, emptyPublicRedfoxConfig, parseApiConfigKey, publicApiConfig, publicRedfoxConfig, runtimeApiConfig, runtimeRedfoxConfig, updateApiConfig, updateRedfoxConfig } from './api-settings.mjs'
 import { publicPrivateFile, readPrivateFile, storePrivateFile, validatePrivateFile } from './private-files.mjs'
-import { callVision } from './llm.mjs'
+import { callLlmWithFallback, callVision, testApiCapability } from './llm.mjs'
 import { buildContentContext } from './content-context.mjs'
 import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
 import { defaultDraftWorkflowFields, generateHookCandidates, selectHook, validateHookText } from './draft-workflow.mjs'
@@ -17,8 +18,19 @@ import { approveDraftRecord, defaultApproval, revokeDraftRecord, validateApprova
 const port = Number(process.env.PORT || 3001)
 const sessions = new Map()
 const developmentMode = process.env.NODE_ENV !== 'production'
-const authEnabled = Boolean(process.env.PRODUCT_ACCESS_PASSWORD)
 const allowedOrigin = process.env.APP_ORIGIN || 'http://localhost:5173'
+const allowedOrigins = new Set([allowedOrigin])
+if (developmentMode) {
+  try {
+    const localOrigin = new URL(allowedOrigin)
+    if (localOrigin.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(localOrigin.hostname)) {
+      for (const hostname of ['localhost', '127.0.0.1']) allowedOrigins.add(`http://${hostname}:${localOrigin.port}`)
+    }
+  } catch {
+    /* APP_ORIGIN is validated by the origin comparison below. */
+  }
+}
+const responseCorsOrigin = Symbol('responseCorsOrigin')
 const dataFile = process.env.DATA_FILE || fileURLToPath(new URL('./data.json', import.meta.url))
 const privateFileRoot = process.env.PRIVATE_FILE_ROOT || fileURLToPath(new URL('./private-files/', import.meta.url))
 const privateFileMaxBytes = Number(process.env.PRIVATE_FILE_MAX_BYTES || 25 * 1024 * 1024)
@@ -50,6 +62,7 @@ const defaultState = {
     role: '', audiences: [], problems: [], pillars: [], viewpoints: [], tone_preferences: [], prohibited_patterns: [], source_refs: [], version: 1,
   },
   profile_reviews: [],
+  users: [],
   materials: [],
   research: [],
   structures: [],
@@ -95,10 +108,11 @@ const state = {
   profile_reviews: persistedState.profile_reviews || [],
   conflicts: persistedState.conflicts || [],
   memories: persistedState.memories || [],
+  users: persistedState.users || [],
   sync_directories: persistedState.sync_directories || [], devices: persistedState.devices || [], private_files: persistedState.private_files || [], api_configs: persistedState.api_configs || [], vision_tasks: persistedState.vision_tasks || [], performance_snapshots: persistedState.performance_snapshots || [],
 }
-for (const collection of ['materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'sync_directories', 'devices', 'private_files', 'api_configs', 'vision_tasks', 'performance_snapshots']) {
-  state[collection] = state[collection].map(item => ({ ...item, owner_id: item.owner_id || 'demo-user', ...(collection === 'topics' ? defaultTopicFields(item) : {}), ...(collection === 'drafts' ? defaultDraftWorkflowFields(item) : {}), ...(collection === 'shooting' && item.status === 'todo' ? { status: 'ready_to_shoot' } : {}) }))
+for (const collection of ['users', 'materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'sync_directories', 'devices', 'private_files', 'api_configs', 'vision_tasks', 'performance_snapshots']) {
+  state[collection] = state[collection].map(item => ({ ...item, owner_id: collection === 'users' ? (item.id || item.owner_id || 'system') : (item.owner_id || 'demo-user'), ...(collection === 'topics' ? defaultTopicFields(item) : {}), ...(collection === 'drafts' ? defaultDraftWorkflowFields(item) : {}), ...(collection === 'shooting' && item.status === 'todo' ? { status: 'ready_to_shoot' } : {}) }))
 }
 for (const collection of ['positioning', 'strategy', 'profile']) {
   const storeKey = `${collection}_by_user`
@@ -125,7 +139,7 @@ function send(response, status, payload, extraHeaders = {}) {
   response.setHeader('cache-control', 'no-store')
   response.setHeader('cross-origin-resource-policy', 'same-origin')
   response.setHeader('cross-origin-opener-policy', 'same-origin')
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': allowedOrigin, 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-user-id', 'access-control-allow-credentials': 'true', 'vary': 'Origin', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'", 'referrer-policy': 'no-referrer', 'permissions-policy': 'camera=(), microphone=(), geolocation=()', ...extraHeaders })
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': response[responseCorsOrigin] || allowedOrigin, 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-user-id', 'access-control-allow-credentials': 'true', 'vary': 'Origin', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'", 'referrer-policy': 'no-referrer', 'permissions-policy': 'camera=(), microphone=(), geolocation=()', ...extraHeaders })
   response.end(status === 204 ? undefined : JSON.stringify(payload))
 }
 
@@ -178,11 +192,30 @@ function activeMemories(userId) {
   return (state.memories || []).filter(item => item.owner_id === userId && item.status === 'active')
 }
 
+const SESSION_TTL_MS = 30 * 24 * 3_600_000
+
 function userId(request) {
   const session = sessionFor(request)
   if (session && session.expiresAt > Date.now()) return session.userId
   if (developmentMode) return request.headers['x-user-id'] || 'demo-user'
-  return authEnabled ? null : 'owner'
+  return null
+}
+
+function findUserByUsername(username) {
+  const key = String(username || '').trim().toLowerCase()
+  return state.users.find(user => user.username === key && user.status !== 'disabled') || null
+}
+
+function verifyUserPassword(user, password) {
+  const candidate = scryptSync(String(password || ''), user.password_salt || '', 64)
+  const expected = Buffer.from(user.password_hash || '', 'hex')
+  return candidate.length === expected.length && timingSafeEqual(candidate, expected)
+}
+
+function issueSession(response, id) {
+  const token = randomUUID()
+  sessions.set(token, { userId: id, expiresAt: Date.now() + SESSION_TTL_MS })
+  return send(response, 200, { user_id: id, role: 'creator', expires_in: SESSION_TTL_MS / 1000 }, { 'set-cookie': `content_ip_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_MS / 1000}${!developmentMode ? '; Secure' : ''}` })
 }
 
 function sessionFor(request) {
@@ -212,13 +245,15 @@ function createConflict(request, resourceType, resourceId, baseVersion, localPat
 function redfoxConfigFor(request) {
   const headerBaseUrl = String(request.headers['x-redfox-base-url'] || '').trim()
   const headerApiKey = String(request.headers['x-redfox-api-key'] || '').trim()
+  const stored = apiConfigsFor(request).find(value => value.slot === 'redfox')
+  const runtime = runtimeRedfoxConfig(stored, apiConfigMasterKey)
   return {
-    baseUrl: headerBaseUrl || process.env.REDFOX_API_URL || '',
-    apiKey: headerApiKey || process.env.PROJECT_REDFOX_API_KEY || '',
+    baseUrl: headerBaseUrl || runtime?.base_url || process.env.REDFOX_API_URL || '',
+    apiKey: headerApiKey || runtime?.api_key || process.env.PROJECT_REDFOX_API_KEY || '',
   }
 }
 
-const researchPlatforms = ['全平台', '小红书', '抖音', '视频号', '公众号', 'B站', '微博', 'X']
+const researchPlatforms = ['全平台', '小红书', '抖音', '视频号', '公众号', 'B站', '微博', '快手', '今日头条', 'X']
 
 async function runRedFox(request, { demo, apply }) {
   const { baseUrl, apiKey } = redfoxConfigFor(request)
@@ -246,7 +281,8 @@ const server = createServer(async (request, response) => {
   const startedAt = Date.now()
   response.setHeader('x-request-id', requestId)
   response.once('finish', () => console.log(JSON.stringify({ event: 'http_request', request_id: requestId, method: request.method, path: url.pathname, status: response.statusCode, duration_ms: Date.now() - startedAt })))
-  if (request.headers.origin && request.headers.origin !== allowedOrigin) return send(response, 403, { error: '请求来源不被允许' })
+  if (request.headers.origin && !allowedOrigins.has(request.headers.origin)) return send(response, 403, { error: '请求来源不被允许' })
+  response[responseCorsOrigin] = request.headers.origin || allowedOrigin
   if (request.method === 'OPTIONS') return send(response, 204, {})
   if (['/healthz', '/api/health'].includes(url.pathname) && ['GET', 'HEAD'].includes(request.method)) return send(response, 200, { status: 'ok', storage: mysqlPool ? 'mysql' : 'json-mvp' })
   if (url.pathname.startsWith('/api/') && isRateLimited(request)) return send(response, 429, { error: '请求过于频繁', retryable: true }, { 'retry-after': String(Math.ceil(rateLimitWindowMs / 1000)) })
@@ -255,36 +291,71 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/auth/session' && request.method === 'GET') {
       const session = sessionFor(request)
       if (!session) {
-        if (!authEnabled) return send(response, 200, { auth_required: false })
-        return send(response, 401, { error: '会话不存在或已过期' })
+        if (developmentMode) return send(response, 200, { auth_required: false })
+        return send(response, 401, { error: '需要登录', auth_required: true, registration_open: true })
       }
-      return send(response, 200, { user_id: session.userId, role: 'creator', expires_in: Math.max(0, Math.ceil((session.expiresAt - Date.now()) / 1000)) })
+      const user = findUserByUsername(session.userId)
+      return send(response, 200, { user_id: session.userId, role: 'creator', display_name: user?.display_name || session.userId, expires_in: Math.max(0, Math.ceil((session.expiresAt - Date.now()) / 1000)) })
     }
     if (url.pathname === '/api/auth/session' && request.method === 'DELETE') {
       const cookies = Object.fromEntries((request.headers.cookie || '').split(';').filter(Boolean).map(value => value.trim().split('=')))
       if (cookies.content_ip_session) sessions.delete(cookies.content_ip_session)
       return send(response, 204, {}, { 'set-cookie': `content_ip_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${!developmentMode ? '; Secure' : ''}` })
     }
+    if (url.pathname === '/api/auth/register' && request.method === 'POST') {
+      const body = await readJson(request).catch(() => ({}))
+      const username = String(body.username || '').trim().toLowerCase()
+      const password = String(body.password || '')
+      if (!/^[a-z0-9_-]{2,32}$/.test(username)) return send(response, 422, { error: '用户名需为 2-32 位字母、数字、下划线或中划线' })
+      if (['owner', 'demo-user'].includes(username)) return send(response, 422, { error: '该用户名不可用' })
+      if (password.length < 8 || password.length > 128) return send(response, 422, { error: '密码长度需为 8-128 位' })
+      if (findUserByUsername(username)) return send(response, 409, { error: '用户名已被注册' })
+      const passwordSalt = randomBytes(16).toString('hex')
+      const user = { id: username, owner_id: username, username, display_name: String(body.display_name || '').trim().slice(0, 40) || username, password_salt: passwordSalt, password_hash: scryptSync(password, passwordSalt, 64).toString('hex'), status: 'active', created_at: new Date().toISOString() }
+      state.users.push(user)
+      await saveState('users')
+      return issueSession(response, user.id)
+    }
     if (url.pathname === '/api/auth/session' && request.method === 'POST') {
+      const body = await readJson(request).catch(() => ({}))
+      const username = String(body.username || '').trim().toLowerCase()
+      const password = String(body.password || '')
+      if (username) {
+        const user = findUserByUsername(username)
+        if (!user || !verifyUserPassword(user, password)) return send(response, 401, { error: '用户名或密码不正确', retryable: true })
+        return issueSession(response, user.id)
+      }
       const accessPassword = process.env.PRODUCT_ACCESS_PASSWORD
-      const sessionTtlMs = 30 * 24 * 3_600_000
-      let id = request.headers['x-user-id'] || (developmentMode ? 'demo-user' : 'owner')
       if (accessPassword) {
-        const body = await readJson(request).catch(() => ({}))
         const expected = Buffer.from(accessPassword)
-        const provided = Buffer.from(String(body.password || ''))
+        const provided = Buffer.from(String(body.password || request.headers['x-access-password'] || ''))
         if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
           return send(response, 401, { error: '访问密码不正确', retryable: true })
         }
-        id = 'owner'
+        return issueSession(response, 'owner')
       }
-      const token = randomUUID()
-      sessions.set(token, { userId: id, expiresAt: Date.now() + sessionTtlMs })
-      return send(response, 200, { user_id: id, role: 'creator', expires_in: sessionTtlMs / 1000 }, { 'set-cookie': `content_ip_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${sessionTtlMs / 1000}${!developmentMode ? '; Secure' : ''}` })
+      if (developmentMode) return issueSession(response, request.headers['x-user-id'] || 'demo-user')
+      return send(response, 401, { error: '请输入用户名和密码登录，或注册新账号', auth_required: true, registration_open: true })
     }
-    if (authEnabled && !developmentMode && !sessionFor(request)) return send(response, 401, { error: '需要有效会话' })
+    if (!developmentMode && !sessionFor(request)) return send(response, 401, { error: '需要登录', auth_required: true })
+    if (url.pathname === '/api/redfox-settings' && request.method === 'GET') { const stored = owned('api_configs', request).find(item => item.slot === 'redfox'); return send(response, 200, stored ? publicRedfoxConfig(stored) : emptyPublicRedfoxConfig()) }
+    if (url.pathname === '/api/redfox-settings' && request.method === 'PUT') { try { const existing = owned('api_configs', request).find(item => item.slot === 'redfox'); const next = { ...updateRedfoxConfig(existing, await readJson(request), apiConfigMasterKey), owner_id: userId(request) }; if (existing) Object.assign(existing, next); else state.api_configs.push(next); await saveState('api_configs'); return send(response, 200, publicRedfoxConfig(next)) } catch (error) { return send(response, 422, { error: error.message }) } }
+    if (url.pathname === '/api/redfox-settings' && request.method === 'POST' && url.searchParams.get('action') === 'test') { const stored = owned('api_configs', request).find(item => item.slot === 'redfox'); const runtime = runtimeRedfoxConfig(stored, apiConfigMasterKey); if (!runtime) return send(response, 422, { error: '红狐 API 配置不完整' }); try { await createRedFoxAdapter({ baseUrl: runtime.base_url, apiKey: runtime.api_key }).trending(); return send(response, 200, { ok: true, capability: 'redfox' }) } catch (error) { return send(response, 200, { ok: false, error: error instanceof Error ? error.message : '红狐 API 测试失败' }) } }
     if (url.pathname === '/api/api-settings' && request.method === 'GET') { const values = owned('api_configs', request); return send(response, 200, emptyPublicApiConfigs().map(item => publicApiConfig(values.find(value => value.slot === item.slot) || item))) }
     const apiSettingsMatch = url.pathname.match(/^\/api\/api-settings\/([^/]+)$/)
+    if (apiSettingsMatch && request.method === 'POST' && url.searchParams.get('action') === 'test') {
+      const slot = ['text_primary', 'text_fallback', 'vision'].includes(apiSettingsMatch[1]) ? apiSettingsMatch[1] : null
+      if (!slot) return send(response, 404, { error: 'API 配置槽不存在' })
+      const stored = owned('api_configs', request).find(item => item.slot === slot)
+      const runtime = runtimeApiConfig(stored, apiConfigMasterKey, { requireEnabled: false })
+      if (!runtime) return send(response, 422, { error: 'API 配置不完整' })
+      try {
+        const result = await testApiCapability(slot, runtime)
+        return send(response, 200, { ok: true, ...result })
+      } catch (error) {
+        return send(response, 200, { ok: false, error: error instanceof Error ? error.message : '上游 API 测试失败' })
+      }
+    }
     if (apiSettingsMatch && request.method === 'PUT') { const slot = ['text_primary', 'text_fallback', 'vision'].includes(apiSettingsMatch[1]) ? apiSettingsMatch[1] : null; if (!slot) return send(response, 404, { error: 'API 配置槽不存在' }); try { const existing = owned('api_configs', request).find(item => item.slot === slot); const next = { ...updateApiConfig(existing, slot, await readJson(request), apiConfigMasterKey), owner_id: userId(request) }; if (existing) Object.assign(existing, next); else state.api_configs.push(next); await saveState('api_configs'); return send(response, 200, publicApiConfig(next)) } catch (error) { return send(response, 422, { error: error.message }) } }
     if (url.pathname === '/api/api-settings/migrate' && request.method === 'POST') { const body = await readJson(request); try { for (const slot of ['text_primary', 'text_fallback', 'vision']) if (body[slot]) { const existing = owned('api_configs', request).find(item => item.slot === slot); const next = { ...updateApiConfig(existing, slot, body[slot], apiConfigMasterKey), owner_id: userId(request) }; if (existing) Object.assign(existing, next); else state.api_configs.push(next) }; await saveState('api_configs'); const values = owned('api_configs', request); return send(response, 200, emptyPublicApiConfigs().map(item => publicApiConfig(values.find(value => value.slot === item.slot) || item))) } catch (error) { return send(response, 422, { error: error.message }) } }
     if (url.pathname === '/api/private-files' && request.method === 'POST') { try { const content = await readBody(request, privateFileMaxBytes + 1); const validated = validatePrivateFile({ fileName: request.headers['x-file-name'], mimeType: request.headers['content-type'], content, maxBytes: privateFileMaxBytes }); const duplicate = owned('private_files', request).find(item => item.checksum === validated.checksum); if (duplicate) return send(response, 200, { ...publicPrivateFile(duplicate), duplicate: true }); const storagePath = storePrivateFile(privateFileRoot, userId(request), validated, content); const record = { id: randomUUID(), owner_id: userId(request), original_name: validated.safeName, mime_type: validated.mimeType, size: content.length, checksum: validated.checksum, storage_path: storagePath, created_at: new Date().toISOString() }; state.private_files.push(record); await saveState('private_files'); return send(response, 201, publicPrivateFile(record)) } catch (error) { return send(response, 422, { error: error.message }) } }
@@ -696,7 +767,32 @@ const server = createServer(async (request, response) => {
       return send(response, 204, {})
     }
     if (url.pathname === '/api/memories/extract' && request.method === 'POST') {
-      return send(response, 422, { error: '自动提炼需要先配置大模型', reason: 'llm_not_configured' })
+      const body = await readJson(request)
+      const text = String(body.text || '').trim()
+      if (!text) return send(response, 422, { error: '请粘贴要提炼的对话、访谈或复盘文本' })
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      if (!configs.primary && !configs.fallback) return send(response, 422, { error: '自动提炼需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      try {
+        const result = await callLlmWithFallback(configs, [
+          { role: 'system', content: '你是个人 IP 内容助理。从用户提供的文本中提炼值得长期记忆的创作偏好、选题方向和反馈事实。只输出一个 JSON 数组，每项形如 {"memory_type":"style|topic|feedback","content":"一句话记忆"}，最多 8 条；没有值得记忆的内容时输出 []。不要输出数组以外的任何文字。' },
+          { role: 'user', content: text.slice(0, 8000) },
+        ])
+        const match = result.content.match(/\[[\s\S]*\]/)
+        const parsed = JSON.parse(match ? match[0] : result.content)
+        const rows = (Array.isArray(parsed) ? parsed : []).filter(item => item && ['style', 'topic', 'feedback'].includes(item.memory_type) && String(item.content || '').trim()).slice(0, 8)
+        const added = []
+        for (const row of rows) {
+          const content = String(row.content).trim().slice(0, 200)
+          if (owned('memories', request).some(item => item.memory_type === row.memory_type && item.content === content && item.status === 'active')) continue
+          const memory = { id: nextId(state.memories), owner_id: userId(request), memory_type: row.memory_type, content, source: 'auto', provider: result.provider, status: 'active', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+          state.memories.push(memory)
+          added.push(memory)
+        }
+        if (added.length) await saveState('memories')
+        return send(response, 200, { items: added, extracted: rows.length, provider: result.provider })
+      } catch (error) {
+        return send(response, 502, { error: error?.message || '自动提炼失败，请稍后重试', retryable: error?.retryable !== false })
+      }
     }
     if (url.pathname === '/api/vision-tasks' && request.method === 'GET') { const shootingId = url.searchParams.get('shooting_id'); return send(response, 200, owned('vision_tasks', request).filter(item => !shootingId || item.shooting_id === Number(shootingId))) }
     if (url.pathname === '/api/vision-tasks' && request.method === 'POST') { const body = await readJson(request); const ids = [...new Set((body.screenshot_file_ids || []).map(String))]; if (!ids.length) return send(response, 422, { error: '至少需要一张截图' }); const files = ids.map(id => owned('private_files', request).find(item => item.id === id)); if (files.some(file => !file)) return send(response, 422, { error: '截图不存在或无权访问' }); const task = { id: randomUUID(), owner_id: userId(request), shooting_id: body.shooting_id == null ? null : Number(body.shooting_id), screenshot_file_ids: ids, status: 'processing', result: null, error: null, match_status: 'pending', created_at: new Date().toISOString() }; state.vision_tasks.push(task); await saveState('vision_tasks'); void (async () => { try { const config = runtimeConfig(request, 'vision'); const images = files.map(file => `data:${file.mime_type};base64,${readPrivateFile(privateFileRoot, file.storage_path).toString('base64')}`); const result = await callVision(config, images, '提取截图中的播放、点赞、评论、收藏、转发、涨粉指标，返回 JSON'); task.status = 'ready'; task.result = result.content } catch (error) { task.status = 'failed'; task.error = error.message }; await saveState('vision_tasks') })(); return send(response, 202, task) }
@@ -710,19 +806,67 @@ const server = createServer(async (request, response) => {
     if (visionRetry && request.method === 'POST') { const task = owned('vision_tasks', request).find(item => item.id === visionRetry[1]); if (!task) return send(response, 404, { error: '视觉任务不存在' }); task.status = 'processing'; task.error = null; await saveState('vision_tasks'); return send(response, 202, task) }
     if (url.pathname === '/api/performance-snapshots' && request.method === 'GET') { const draftId = url.searchParams.get('draft_id'); const shootingId = url.searchParams.get('shooting_id'); return send(response, 200, owned('performance_snapshots', request).filter(item => (!draftId || item.draft_id === Number(draftId)) && (!shootingId || item.shooting_id === Number(shootingId))).sort((a, b) => String(b.captured_at).localeCompare(String(a.captured_at)))) }
     if (url.pathname === '/api/performance-snapshots' && request.method === 'POST') { const body = await readJson(request); const draftId = body.draft_id == null ? null : Number(body.draft_id); const shootingId = body.shooting_id == null ? null : Number(body.shooting_id); if (draftId === null && shootingId === null) return send(response, 422, { error: '必须关联文案或拍摄条目' }); if (draftId !== null && !owned('drafts', request).some(item => item.id === draftId)) return send(response, 422, { error: '关联文案不存在或无权访问' }); if (shootingId !== null && !owned('shooting', request).some(item => item.id === shootingId)) return send(response, 422, { error: '关联拍摄条目不存在或无权访问' }); const snapshot = { id: nextId(state.performance_snapshots), owner_id: userId(request), draft_id: draftId, shooting_id: shootingId, platform: body.platform || '', published_at: body.published_at || null, captured_at: new Date().toISOString(), metrics: body.metrics || {}, raw_model_result: body.raw_model_result || null, confidence: body.confidence ?? null, status: body.status || 'pending_confirmation' }; state.performance_snapshots.push(snapshot); await saveState('performance_snapshots'); return send(response, 201, snapshot) }
+    const snapshotRetrospectMatch = url.pathname.match(/^\/api\/performance-snapshots\/(\d+)\/retrospect$/)
+    if (snapshotRetrospectMatch && request.method === 'POST') {
+      const snapshot = owned('performance_snapshots', request).find(item => item.id === Number(snapshotRetrospectMatch[1]))
+      if (!snapshot) return send(response, 404, { error: '表现快照不存在' })
+      if (!snapshot.metrics || !Object.keys(snapshot.metrics).length) return send(response, 422, { error: '快照还没有指标数据，先上传表现截图或手动填写' })
+      const draft = snapshot.draft_id != null ? owned('drafts', request).find(item => item.id === snapshot.draft_id) : null
+      const peers = owned('performance_snapshots', request).filter(item => item.id !== snapshot.id && item.platform === snapshot.platform && Number.isFinite(Number(item.retrospect?.rate)))
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      let retrospect = null
+      if (configs.primary || configs.fallback) {
+        try {
+          const result = await callLlmWithFallback(configs, [
+            { role: 'system', content: '你是个人 IP 内容复盘助理。根据内容标题、平台、正文摘要和表现指标，输出 JSON 对象：{"verdict":"winner|ok|underperformed","summary":"一句话总结（不超过 60 字）","lessons":["可复用的经验，最多 3 条，每条不超过 40 字"],"drivers":["有效驱动因素，最多 3 个，每个不超过 8 字"]}。只输出 JSON。' },
+            { role: 'user', content: JSON.stringify({ title: draft?.title || '', platform: snapshot.platform, metrics: snapshot.metrics, body: String(draft?.body || '').slice(0, 800) }) },
+          ])
+          const parsed = JSON.parse((result.content.match(/\{[\s\S]*\}/) || [result.content])[0])
+          retrospect = { verdict: ['winner', 'ok', 'underperformed'].includes(parsed.verdict) ? parsed.verdict : 'ok', summary: String(parsed.summary || '').slice(0, 120), lessons: (Array.isArray(parsed.lessons) ? parsed.lessons : []).slice(0, 3).map(item => String(item).slice(0, 60)), drivers: (Array.isArray(parsed.drivers) ? parsed.drivers : []).slice(0, 3).map(item => String(item).slice(0, 10)), provider: result.provider, created_at: new Date().toISOString() }
+        } catch { retrospect = null }
+      }
+      if (!retrospect) retrospect = retrospectDeterministic(snapshot, draft, peers)
+      snapshot.retrospect = retrospect
+      const addedMemories = []
+      for (const lesson of retrospect.lessons.slice(0, 2)) {
+        const content = `「${draft?.title || snapshot.platform}」复盘：${lesson}`.slice(0, 200)
+        if (owned('memories', request).some(item => item.memory_type === 'feedback' && item.content === content && item.status === 'active')) continue
+        const memory = { id: nextId(state.memories), owner_id: userId(request), memory_type: 'feedback', content, source: 'auto', provider: retrospect.provider, status: 'active', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+        state.memories.push(memory)
+        addedMemories.push(memory)
+      }
+      if (addedMemories.length) await saveState('performance_snapshots', 'memories')
+      else await saveState('performance_snapshots')
+      return send(response, 200, { snapshot, memories_added: addedMemories.length })
+    }
+    if (url.pathname === '/api/calendar' && request.method === 'GET') {
+      const monthParam = url.searchParams.get('month') || ''
+      const month = /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : new Date().toISOString().slice(0, 7)
+      const dateOf = item => String(item.planned_date || item.published_at || item.captured_at || item.created_at || '').slice(0, 10)
+      const entries = []
+      for (const draft of owned('drafts', request)) entries.push({ type: 'draft', id: draft.id, title: draft.title, platform: draft.platform, status: draft.status === 'published' ? 'published' : draft.workflow_status === 'ready_to_shoot' ? 'ready' : 'draft', date: dateOf(draft) })
+      for (const item of owned('shooting', request)) entries.push({ type: 'shooting', id: item.id, title: item.title, platform: item.platform, status: item.status, date: dateOf(item) })
+      for (const topic of owned('topics', request)) if (topic.workflow_status === 'approved') entries.push({ type: 'topic', id: topic.id, title: topic.title, platform: '', status: 'approved', date: dateOf(topic) })
+      return send(response, 200, { month, entries: entries.filter(entry => entry.date.startsWith(month)).sort((a, b) => a.date.localeCompare(b.date)) })
+    }
     if (url.pathname === '/api/research' && request.method === 'GET') {
       const params = url.searchParams
       const hasQuery = ['q', 'platform', 'sort', 'page'].some(key => params.get(key))
       if (!hasQuery) return send(response, 200, owned('research', request))
       const query = (params.get('q') || '').trim().toLowerCase()
       const platform = params.get('platform') || ''
-      const sort = ['latest', 'discussions', 'growth'].includes(params.get('sort')) ? params.get('sort') : 'latest'
+      const sort = ['latest', 'discussions', 'growth', 'fit'].includes(params.get('sort')) ? params.get('sort') : 'latest'
       const page = Math.max(1, Number(params.get('page')) || 1)
       const pageSize = 50
       let items = owned('research', request)
       if (query) items = items.filter(item => String(item.title).toLowerCase().includes(query) || String(item.author || '').toLowerCase().includes(query))
       if (platform) items = items.filter(item => item.platform === platform)
-      items = [...items].sort((a, b) => sort === 'discussions' ? (b.metrics?.discussions || 0) - (a.metrics?.discussions || 0) : sort === 'growth' ? (b.metrics?.growth || 0) - (a.metrics?.growth || 0) : String(b.captured_at || '').localeCompare(String(a.captured_at || '')))
+      items = [...items].sort((a, b) => sort === 'discussions' ? (b.metrics?.discussions || 0) - (a.metrics?.discussions || 0) : sort === 'growth' ? (b.metrics?.growth || 0) - (a.metrics?.growth || 0) : sort === 'fit' ? 0 : String(b.captured_at || '').localeCompare(String(a.captured_at || '')))
+      if (sort === 'fit') {
+        const profile = userDocument('profile', request)
+        const strategy = userDocument('strategy', request)
+        items = items.map(item => ({ ...item, fit: fitScore(item, profile, strategy) })).sort((a, b) => b.fit.score - a.fit.score)
+      }
       const total = items.length
       const start = (page - 1) * pageSize
       return send(response, 200, { items: items.slice(start, start + pageSize), total, page, page_size: pageSize })
@@ -762,6 +906,18 @@ const server = createServer(async (request, response) => {
       })
       if (!outcome.ok) return send(response, outcome.error.code === 'QUOTA_EXCEEDED' ? 429 : 502, { error: outcome.error.message, source: 'redfox-adapter', retryable: outcome.error.retryable === true })
       return send(response, 200, { platform, source: outcome.demo ? 'demo' : outcome.result.source, items: outcome.result.items })
+    }
+    if (url.pathname === '/api/research/keyword-hot-search' && request.method === 'POST') {
+      const body = await readJson(request)
+      const keyword = String(body.keyword || '').trim()
+      if (!keyword) return send(response, 422, { error: '关键词为必填项' })
+      const days = Math.min(Math.max(Number(body.days) || 7, 1), 30)
+      const outcome = await runRedFox(request, {
+        demo: () => demoHotSearch('小红书'),
+        apply: adapter => adapter.keywordHotSearch({ keywords: [keyword], platforms: Array.isArray(body.platforms) ? body.platforms : [], days }),
+      })
+      if (!outcome.ok) return send(response, outcome.error.code === 'QUOTA_EXCEEDED' ? 429 : 502, { error: outcome.error.message, source: 'redfox-adapter', retryable: outcome.error.retryable === true })
+      return send(response, 200, { keyword, days, source: outcome.demo ? 'demo' : outcome.result.source, items: outcome.result.items })
     }
     if (url.pathname === '/api/research/hot-search/collect' && request.method === 'POST') {
       const body = await readJson(request)
@@ -827,12 +983,20 @@ const server = createServer(async (request, response) => {
       const timeout = setTimeout(() => controller.abort(), 8000)
       const testUrl = type === 'llm'
         ? new URL('/models', target)
-        : new URL('/v1/trending?platform=%E5%B0%8F%E7%BA%A2%E4%B9%A6&query=%E8%BF%9E%E9%80%9A%E6%B5%8B%E8%AF%95&days=1', target)
+        : new URL('/story/api/hotKeyword/list', target)
+      const pad = value => String(value).padStart(2, '0')
+      const day = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+      const now = new Date()
+      const windowStart = new Date(now.getTime() - 24 * 3_600_000)
       try {
         const testHeaders = type === 'llm'
           ? { accept: 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) }
-          : { accept: 'application/json', ...(apiKey ? { 'x-api-key': apiKey } : {}) }
-        const testResponse = await fetch(testUrl, { headers: testHeaders, signal: controller.signal })
+          : { accept: 'application/json', 'content-type': 'application/json', ...(apiKey ? { REDFOX_API_KEY: apiKey } : {}) }
+        const testResponse = await fetch(testUrl, {
+          headers: testHeaders,
+          ...(type === 'redfox' ? { method: 'POST', body: JSON.stringify({ startDate: `${day(windowStart)} 00:00:00`, endDate: `${day(now)} 00:00:00` }) } : {}),
+          signal: controller.signal,
+        })
         if (!testResponse.ok) {
           return send(response, 200, { ok: false, status: testResponse.status, error: testResponse.status === 401 || testResponse.status === 403 ? '认证失败，请检查 API Key' : `服务返回 ${testResponse.status}` })
         }
@@ -968,6 +1132,55 @@ const server = createServer(async (request, response) => {
       return send(response, 201, drafts)
     }
     if (url.pathname === '/api/drafts' && request.method === 'GET') return send(response, 200, owned('drafts', request))
+    const draftAdaptMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/adapt$/)
+    if (draftAdaptMatch && request.method === 'POST') {
+      const body = await readJson(request)
+      const draft = owned('drafts', request).find(item => item.id === Number(draftAdaptMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在' })
+      const platform = researchPlatforms.includes(body.platform) && body.platform !== '全平台' ? body.platform : draft.platform
+      if (!platform || platform === '全平台') return send(response, 422, { error: '请选择一个发布平台' })
+      const profile = userDocument('profile', request)
+      const hits = prohibitedWordlist.filter(entry => String(draft.body || '').includes(entry.word)).map(entry => ({ ...entry }))
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      let adaptation = null
+      if (configs.primary || configs.fallback) {
+        try {
+          const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
+          const result = await callLlmWithFallback(configs, [
+            { role: 'system', content: `你是多平台内容发布适配专家。把给定的母版文案改写为适合「${platform}」发布的版本：调整标题（符合平台字数习惯）、正文（符合平台格式、语气与长度）、并给出 3-6 个话题标签（公众号除外，标签可为空数组）。只输出 JSON：{"title":"...","body":"...","hashtags":["#标签"]}。` },
+            { role: 'user', content: JSON.stringify({ title: draft.title, body: String(draft.body || '').slice(0, 3000), style_memories: memories.map(item => item.content).slice(0, 5) }) },
+          ])
+          const parsed = JSON.parse((result.content.match(/\{[\s\S]*\}/) || [result.content])[0])
+          if (String(parsed.body || '').trim()) {
+            adaptation = { title: String(parsed.title || draft.title).slice(0, 64), body: String(parsed.body), hashtags: (Array.isArray(parsed.hashtags) ? parsed.hashtags : []).slice(0, 6).map(tag => `#${String(tag).replace(/^#/, '').trim()}`).filter(tag => tag.length > 1), provider: result.provider }
+          }
+        } catch { adaptation = null }
+      }
+      if (!adaptation) adaptation = deterministicAdaptation(draft, platform, profile)
+      const adapted = { ...adaptation, checklist: buildChecklist(platform, adaptation.body, hits), updated_at: new Date().toISOString() }
+      draft.adaptations = { ...(draft.adaptations || {}), [platform]: adapted }
+      await saveState('drafts')
+      return send(response, 200, draft)
+    }
+    const draftDeaiMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/deai$/)
+    if (draftDeaiMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftDeaiMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在' })
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      if (!configs.primary && !configs.fallback) return send(response, 422, { error: '去 AI 感改写需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      try {
+        const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
+        const result = await callLlmWithFallback(configs, [
+          { role: 'system', content: '你是去 AI 味的文案改写助手。把给定文案改写得更像真人创作者写的：口语化、加入具体细节和真实语气、拆掉排比与套话、不用"首先/其次/总而言之"、保留原有信息与观点结构。只输出改写后的正文，不要任何解释。' },
+          { role: 'user', content: JSON.stringify({ body: String(draft.body || '').slice(0, 3000), style_memories: memories.map(item => item.content).slice(0, 5) }) },
+        ])
+        const content = String(result.content || '').trim()
+        if (!content) throw new Error('改写结果为空')
+        return send(response, 200, { content, provider: result.provider })
+      } catch (error) {
+        return send(response, 502, { error: error?.message || '改写失败，请稍后重试', retryable: true })
+      }
+    }
     const draftHooksMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/hooks$/)
     if (draftHooksMatch && request.method === 'POST') {
       const draft = owned('drafts', request).find(item => item.id === Number(draftHooksMatch[1]))
@@ -1071,6 +1284,7 @@ const server = createServer(async (request, response) => {
       const item = owned('shooting', request).find(existing => existing.id === Number(shootingMatch[1]))
       if (!item) return send(response, 404, { error: '拍摄条目不存在' })
       if (body.status !== undefined && !shootingStatuses.has(body.status)) return send(response, 422, { error: '不支持的拍摄状态' })
+      if (body.planned_date !== undefined && body.planned_date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.planned_date))) return send(response, 422, { error: '排期日期格式应为 YYYY-MM-DD' })
       if (item.approval_required && ['in_progress', 'completed', 'published'].includes(body.status)) {
         const draft = owned('drafts', request).find(existing => existing.id === item.draft_id)
         if (!draft || draft.approval?.status !== 'approved') return send(response, 409, { error: '关联草稿未经有效人工确认', code: 'invalid_transition' })
@@ -1089,6 +1303,7 @@ const server = createServer(async (request, response) => {
       const draft = owned('drafts', request).find(existing => existing.id === Number(draftMatch[1]))
       if (!draft) return send(response, 404, { error: '草稿不存在' })
       if (body.status !== undefined && !draftStatuses.has(body.status)) return send(response, 422, { error: '不支持的草稿状态' })
+      if (body.planned_date !== undefined && body.planned_date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.planned_date))) return send(response, 422, { error: '排期日期格式应为 YYYY-MM-DD' })
       if (body.approval !== undefined || body.checks !== undefined || body.workflow_status !== undefined) return send(response, 422, { error: '确认状态和检查结果只能通过专用接口更新', code: 'validation_failed' })
       if (body.status === 'ready_to_shoot') return send(response, 409, { error: '请通过人工确认接口进入拍摄', code: 'invalid_transition' })
       if (body.status === 'published') return send(response, 409, { error: '请通过拍摄清单完成发布', code: 'invalid_transition' })

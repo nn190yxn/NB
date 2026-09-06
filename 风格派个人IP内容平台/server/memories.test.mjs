@@ -55,9 +55,11 @@ test('AI 记忆层：管理、去重与生成注入', async t => {
   const listStyle = await (await fetch(`${baseUrl}/api/memories?type=style`)).json()
   assert.equal(listStyle.length, 1)
 
-  const extract = await jsonPost('/api/memories/extract', {})
-  assert.equal(extract.status, 422)
-  assert.equal((await extract.json()).reason, 'llm_not_configured')
+  const extractEmpty = await jsonPost('/api/memories/extract', {})
+  assert.equal(extractEmpty.status, 422)
+  const extractNoLlm = await jsonPost('/api/memories/extract', { text: '一段没有配置大模型时的提炼文本' })
+  assert.equal(extractNoLlm.status, 422)
+  assert.equal((await extractNoLlm.json()).reason, 'llm_not_configured')
 
   const composed = await jsonPost('/api/drafts/generate', { topic: { title: '信任资产的三个证据', strategy_layer: 'trust', goal_refs: [] }, quote_ids: [], experience_ids: [] })
   assert.equal(composed.status, 201)

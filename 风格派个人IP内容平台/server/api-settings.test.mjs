@@ -30,6 +30,8 @@ test('API Key remains unchanged unless a complete replacement is supplied', () =
   const first = updateApiConfig(null, 'text_primary', { enabled: true, base_url: 'https://text.example/v1', model: 'm1', api_key: 'first-key' }, key)
   const metadataOnly = updateApiConfig(first, 'text_primary', { enabled: false, model: 'm2' }, key)
   assert.equal(decryptApiKey(metadataOnly.encrypted_api_key, key), 'first-key')
+  assert.equal(runtimeApiConfig(metadataOnly, key), null)
+  assert.equal(runtimeApiConfig(metadataOnly, key, { requireEnabled: false }).api_key, 'first-key')
   const replaced = updateApiConfig(metadataOnly, 'text_primary', { enabled: true, api_key: 'second-key' }, key)
   assert.equal(decryptApiKey(replaced.encrypted_api_key, key), 'second-key')
 })

@@ -1,13 +1,49 @@
-const defaultHeaders = { accept: 'application/json' }
+// 红狐官网 API（https://redfox.hk）适配层。
+// 接口路径、请求体与响应结构以官网文档系统 /story/web/api/doc/detail/no/* 为准（2026-09-06 核对）：
+//   POST /story/api/hotKeyword/list                      全网聚合热点TOP10
+//   GET  /story/api/hotSpot/getListByPlatform            各平台热点榜（platform: 1快手 2抖音 5微博 6小红书 7百度 8B站 9知乎 10今日头条）
+//   POST /story/api/hotSpot/getListByPlatformWithKeyword 全网热搜查询（关键词，时间跨度≤30天）
+//   POST /story/api/xhsUser/searchUser                   搜索关键词获取小红书账号
+//   POST /story/api/xhsUser/searchArticle                搜索关键词获取小红书作品
+//   POST /story/api/dyData/searchArticle                 搜索关键词获取抖音作品
+//   POST /story/api/gzhData/searchArticle                搜索关键词获取公众号作品
+//   POST /story/api/sphAllData/searchWork                搜索关键词获取视频号作品
+//   POST /story/api/ksAllData/searchWork                 快手按关键词搜索作品
+//   POST /story/api/bili/data/workSearch                 搜索关键词获取哔哩哔哩作品
+//   POST /story/api/toutiao/searchWork                   搜索今日头条作品
+// 官网未提供违禁词检测接口，多平台违禁词检测保持本地词库（prohibitedWordlist）。
+// 鉴权请求头为 REDFOX_API_KEY（官网文档唯一必填头），成功响应统一为 { code: 2000, msg, data }。
+
+export const redfoxDefaultBaseUrl = 'https://redfox.hk'
+
+const hotBoardPlatformCodes = { 快手: 1, 抖音: 2, 微博: 5, 小红书: 6, 百度: 7, B站: 8, 知乎: 9, 今日头条: 10 }
+
+// 官网文档示例确认的响应分组键（bdList 为百度热搜，含 baidu.com 链接）；其余分组键待真实联调后补充
+const keywordHotPlatformLabels = { bdList: '百度' }
+
+const searchEndpoints = {
+  小红书: { path: '/story/api/xhsUser/searchArticle', body: keyword => ({ keyword, offset: 0, sortType: '_0', exactMatch: false }) },
+  抖音: { path: '/story/api/dyData/searchArticle', body: keyword => ({ keyword, offset: 0, sortType: 'default' }) },
+  公众号: { path: '/story/api/gzhData/searchArticle', body: keyword => ({ keyword, offset: 0, sortType: '_0', exactMatch: false }) },
+  视频号: { path: '/story/api/sphAllData/searchWork', body: keyword => ({ keyword, page: 1, size: 20 }) },
+  快手: { path: '/story/api/ksAllData/searchWork', body: keyword => ({ keyword, page: 1, size: 20, sort: '综合' }) },
+  B站: { path: '/story/api/bili/data/workSearch', body: keyword => ({ keyword, page: '1', pageSize: 10, order: 'time' }) },
+  今日头条: { path: '/story/api/toutiao/searchWork', body: keyword => ({ keyword, offset: '0' }) },
+}
+
+const pad = value => String(value).padStart(2, '0')
+const ymd = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+const ymdHms = date => `${ymd(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 
 export function normalizeResearchItem(payload, { platform = '未知平台', query = '' } = {}) {
   const item = payload?.item || payload || {}
+  const discussions = Number(item.discussions ?? item.comments ?? item.commentCount ?? item.readCount ?? 0)
   return {
     platform: item.platform || platform,
-    title: item.title || item.name || '未命名研究条目',
-    author: item.author || item.creator || '',
-    url: item.url || item.source_url || null,
-    metrics: item.metrics || { discussions: Number(item.discussions || item.comments || 0), growth: Number(item.growth || 0) },
+    title: item.title || item.name || item.workTitle || item.caption || '未命名研究条目',
+    author: item.author || item.authorName || item.nickname || item.creator || '',
+    url: item.url || item.workUrl || item.source_url || item.opusUrl || null,
+    metrics: item.metrics || { discussions, growth: Number(item.growth || 0) },
     query,
     raw_payload: payload,
   }
@@ -33,23 +69,35 @@ function redfoxError(message, code, retryable) {
   return error
 }
 
+function extractList(data) {
+  if (Array.isArray(data)) return data
+  if (!data || typeof data !== 'object') return []
+  for (const key of ['list', 'workList', 'items', 'records']) if (Array.isArray(data[key])) return data[key]
+  return []
+}
+
 async function redfoxFetch(fetchImpl, url, apiKey, options = {}) {
   const { headers: extraHeaders, ...rest } = options
   let response
   try {
-    response = await fetchImpl(url, { headers: { accept: 'application/json', ...(apiKey ? { 'x-api-key': apiKey } : {}), ...(extraHeaders || {}) }, ...rest })
+    response = await fetchImpl(url, { headers: { accept: 'application/json', ...(apiKey ? { REDFOX_API_KEY: apiKey } : {}), ...(extraHeaders || {}) }, ...rest })
   } catch {
     throw redfoxError('RedFox 服务暂时不可用', 'UPSTREAM_UNAVAILABLE', true)
   }
   if (!response.ok) {
-    if (response.status === 429) throw redfoxError('RedFox 额度不足', 'QUOTA_EXCEEDED', true)
-    throw redfoxError(`RedFox 请求失败: ${response.status}`, 'UPSTREAM_ERROR', response.status >= 500)
+    if (response.status === 429) throw redfoxError('RedFox 额度不足或请求过于频繁', 'QUOTA_EXCEEDED', true)
+    if (response.status === 401 || response.status === 403) throw redfoxError(`RedFox 鉴权失败（HTTP ${response.status}），请检查 API Key 是否有效`, 'AUTH_FAILED', false)
+    throw redfoxError(`RedFox 请求失败: HTTP ${response.status}`, 'UPSTREAM_ERROR', response.status >= 500)
   }
-  try {
-    return await response.json()
-  } catch {
-    throw redfoxError('RedFox 返回了无效数据', 'UPSTREAM_ERROR', true)
+  let payload
+  try { payload = JSON.parse(await response.text()) } catch {
+    throw redfoxError('RedFox 返回了无法解析的内容，请确认 Base URL 与接口路径是否正确', 'UPSTREAM_ERROR', false)
   }
+  if (payload && typeof payload === 'object' && 'code' in payload && payload.code !== 2000) {
+    const message = String(payload.msg || payload.message || '').trim()
+    throw redfoxError(`RedFox 业务错误（code ${payload.code}）${message ? `：${message}` : ''}`, 'UPSTREAM_ERROR', false)
+  }
+  return payload
 }
 
 const demoHotSearchPool = {
@@ -104,57 +152,100 @@ export function demoSimilarAccounts(platform = '小红书', account = '') {
   }
 }
 
-export function createRedFoxAdapter({ baseUrl, apiKey, fetchImpl = fetch, paths = {} } = {}) {
-  const endpoint = name => paths[name] || { hotSearch: '/v1/hot-search', searchWork: '/v1/search', prohibitedCheck: '/v1/prohibited-check', similarAccounts: '/v1/similar-accounts' }[name]
-  const configured = Boolean(baseUrl && apiKey)
+export function createRedFoxAdapter({ baseUrl, apiKey, fetchImpl = fetch } = {}) {
+  const base = String(baseUrl || '').trim() || redfoxDefaultBaseUrl
+  const configured = Boolean(apiKey)
   const assertConfigured = () => {
     if (!configured) throw redfoxError('红狐 API 未配置', 'MISSING_CONFIG', false)
   }
 
   return {
     configured,
-    async trending({ platform = '小红书', query = '个人 IP 商业创业', days = 7 } = {}) {
+    async trending() {
       assertConfigured()
-      const url = new URL('/v1/trending', baseUrl)
-      url.searchParams.set('platform', platform)
-      url.searchParams.set('query', query)
-      url.searchParams.set('days', String(days))
-      const payload = await redfoxFetch(fetchImpl, url, apiKey)
-      const rows = Array.isArray(payload) ? payload : payload.items || payload.data || []
-      return rows.map(item => normalizeResearchItem(item, { platform, query }))
+      const now = new Date()
+      const start = new Date(now.getTime() - 24 * 3_600_000)
+      const payload = await redfoxFetch(fetchImpl, new URL('/story/api/hotKeyword/list', base), apiKey, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ startDate: ymdHms(start), endDate: ymdHms(now) }),
+      })
+      const groups = Array.isArray(payload?.data) ? payload.data : []
+      const rows = groups.flatMap(group => Array.isArray(group?.hotSpotList) ? group.hotSpotList : [])
+      return rows.map(item => normalizeResearchItem({ platform: item.platName || '多平台', title: item.title, url: item.url, source_url: item.url, comments: Number(item.maxHotScore || 0) }, { query: '全网聚合热点' }))
     },
     async hotSearch({ platform = '小红书' } = {}) {
       assertConfigured()
-      const url = new URL(endpoint('hotSearch'), baseUrl)
-      url.searchParams.set('platform', platform)
+      const code = hotBoardPlatformCodes[platform]
+      if (!code) throw redfoxError(`红狐热搜榜暂不支持平台：${platform}`, 'UNSUPPORTED_PLATFORM', false)
+      const start = new Date()
+      const end = new Date(start.getTime() + 24 * 3_600_000)
+      const url = new URL('/story/api/hotSpot/getListByPlatform', base)
+      url.searchParams.set('platform', String(code))
+      url.searchParams.set('startDate', ymd(start))
+      url.searchParams.set('endDate', ymd(end))
       const payload = await redfoxFetch(fetchImpl, url, apiKey)
-      const rows = Array.isArray(payload) ? payload : payload.items || payload.data || []
-      return { source: 'redfox', items: rows.map((item, index) => ({ rank: Number(item.rank || index + 1), title: item.title || item.name || '', heat: Number(item.heat || item.hot || 0), platform })) }
+      const rows = Array.isArray(payload?.data) ? payload.data : []
+      return { source: 'redfox', items: rows.map((item, index) => ({ rank: Number(item.index || index + 1), title: item.title || '', heat: Number(item.hotCount || 0), platform, url: item.url || null })) }
+    },
+    async keywordHotSearch({ keywords = [], platforms = [], days = 7 } = {}) {
+      assertConfigured()
+      const words = (Array.isArray(keywords) ? keywords : [keywords]).map(item => String(item || '').trim()).filter(Boolean)
+      if (!words.length) throw redfoxError('关键词为必填项', 'INVALID_INPUT', false)
+      const now = new Date()
+      const start = new Date(now.getTime() - Math.min(Math.max(Number(days) || 7, 1), 30) * 24 * 3_600_000)
+      const payload = await redfoxFetch(fetchImpl, new URL('/story/api/hotSpot/getListByPlatformWithKeyword', base), apiKey, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ platforms, keywords: words, startDate: ymd(start), endDate: ymd(now) }),
+      })
+      const data = payload?.data
+      const items = []
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        for (const [key, rows] of Object.entries(data)) {
+          if (!Array.isArray(rows)) continue
+          for (const row of rows) items.push({ platform: keywordHotPlatformLabels[key] || key, rank: Number(row.index || 0), title: row.title || '', heat: Number(row.hotCount || 0), url: row.url || null })
+        }
+      } else if (Array.isArray(data)) {
+        for (const row of data) items.push({ rank: Number(row.index || 0), title: row.title || '', heat: Number(row.hotCount || 0), url: row.url || null })
+      }
+      return { source: 'redfox', items }
     },
     async searchWork({ platform = '小红书', keyword = '' } = {}) {
       assertConfigured()
-      const url = new URL(endpoint('searchWork'), baseUrl)
-      url.searchParams.set('platform', platform)
-      url.searchParams.set('keyword', keyword)
-      const payload = await redfoxFetch(fetchImpl, url, apiKey)
-      const rows = Array.isArray(payload) ? payload : payload.items || payload.data || []
-      return { source: 'redfox', items: rows.map(item => normalizeResearchItem(item, { platform, query: keyword })) }
+      const endpoint = searchEndpoints[platform]
+      if (!endpoint) throw redfoxError(`红狐作品搜索暂不支持平台：${platform}`, 'UNSUPPORTED_PLATFORM', false)
+      const payload = await redfoxFetch(fetchImpl, new URL(endpoint.path, base), apiKey, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(endpoint.body(String(keyword || '').trim())),
+      })
+      const rows = extractList(payload?.data)
+      return { source: 'redfox', items: rows.map(item => {
+        const extra = platform === 'B站' && item.bvId && !item.workUrl && !item.url ? { url: `https://www.bilibili.com/video/${item.bvId}` } : {}
+        return normalizeResearchItem({ ...item, ...extra }, { platform, query: keyword })
+      }) }
     },
     async prohibitedCheck({ text = '' } = {}) {
-      assertConfigured()
-      const url = new URL(endpoint('prohibitedCheck'), baseUrl)
-      const payload = await redfoxFetch(fetchImpl, url, apiKey, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) })
-      const hits = Array.isArray(payload?.hits) ? payload.hits : []
-      return { source: 'redfox', hits, checked_length: String(text).length }
+      const content = String(text || '')
+      const hits = prohibitedWordlist.filter(entry => content.includes(entry.word)).map(entry => ({ ...entry }))
+      return { source: 'builtin', hits, checked_length: content.length }
     },
     async similarAccounts({ platform = '小红书', account = '' } = {}) {
       assertConfigured()
-      const url = new URL(endpoint('similarAccounts'), baseUrl)
-      url.searchParams.set('platform', platform)
-      url.searchParams.set('account', account)
-      const payload = await redfoxFetch(fetchImpl, url, apiKey)
-      const rows = Array.isArray(payload) ? payload : payload.items || payload.data || []
-      return { source: 'redfox', items: rows.map(item => ({ nickname: item.nickname || item.name || '', followers: String(item.followers || item.fans || ''), pillar: item.pillar || item.category || '', similarity: Number(item.similarity || item.score || 0), reason: item.reason || item.analysis || '' })) }
+      if (platform !== '小红书') throw redfoxError('红狐对标账号搜索目前仅支持小红书', 'UNSUPPORTED_PLATFORM', false)
+      const keyword = String(account || '').trim()
+      if (!keyword) throw redfoxError('对标账号关键词不能为空', 'INVALID_INPUT', false)
+      const payload = await redfoxFetch(fetchImpl, new URL('/story/api/xhsUser/searchUser', base), apiKey, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ keyword, offset: 0, sortType: '_0' }),
+      })
+      const rows = extractList(payload?.data)
+      return { source: 'redfox', items: rows.map(item => ({
+        nickname: item.accountName || '',
+        followers: String(item.accountFans ?? ''),
+        pillar: '',
+        similarity: null,
+        reason: String(item.accountDesc || '').slice(0, 120),
+        url: item.accountId ? `https://www.xiaohongshu.com/user/profile/${item.accountId}` : null,
+      })) }
     },
   }
 }

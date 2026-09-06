@@ -6,3 +6,16 @@ server/.env
 .monkeycode-tmp-files/
 backups/
 backup-failed/
+local-app.log
+.deploy/
+*.pem
+.env
+server/.env*
+server/private-files/
+release/
+release-packager/
+preview-vite*.log
+server/preview-api*.log
+.preview-pids
+.superpowers/
+.ohmyagent/

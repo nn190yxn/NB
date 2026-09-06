@@ -65,8 +65,9 @@ test('工作台设置按钮打开设置面板且面板含 API 中心', () => {
   assert.match(source, /onClick=\{\(\) => setShowSettings\(true\)\}/)
   assert.match(source, /dingweipai:api-settings/)
   assert.match(source, /API 中心/)
-  assert.match(source, /\/api\/settings\/test/)
-  assert.match(source, /x-redfox-base-url/)
+  assert.match(source, /\/api\/redfox-settings/)
+  assert.match(source, /https:\/\/redfox\.hk/)
+  assert.doesNotMatch(source, /x-redfox-base-url|x-redfox-api-key/)
 })
 
 test('apiJson 合并调用方请求头且不再传输浏览器 LLM 密钥', () => {
@@ -82,6 +83,7 @@ test('热点研究集成红狐 Skill 目录、热搜榜、对标与合规检查'
   assert.match(source, /红狐 Skill 目录/)
   assert.match(source, /dingweipai:skill-toggles/)
   assert.match(source, /\/api\/research\/search/)
+  assert.match(source, /\/api\/research\/keyword-hot-search/)
   assert.match(source, /\/api\/research\/suggest/)
   assert.match(source, /\/api\/research\/hot-search/)
   assert.match(source, /\/api\/research\/similar/)

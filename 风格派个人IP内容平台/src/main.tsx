@@ -5,6 +5,7 @@ import {
   BarChart3,
   BookOpen,
   BrainCircuit,
+  CalendarDays,
   Check,
   ChevronDown,
   CircleHelp,
@@ -23,6 +24,7 @@ import {
   Plus,
   Radio,
   Search,
+  Send,
   Settings2,
   Sparkles,
   Star,
@@ -80,6 +82,8 @@ const navItems = [
   { label: '爆款方法库', icon: Library },
   { label: '选题助手', icon: BrainCircuit },
   { label: '内容创作', icon: PenLine },
+  { label: '发布中心', icon: Send },
+  { label: '内容日历', icon: CalendarDays },
 ]
 
 function App() {
@@ -273,7 +277,7 @@ type LlmConfig = { base_url: string; api_key: string; model: string }
 type ApiSettings = { llm: { primary: LlmConfig; fallback: LlmConfig }; redfox: { base_url: string; api_key: string } }
 const apiSettingsStorageKey = 'dingweipai:api-settings'
 const emptyLlmConfig: LlmConfig = { base_url: '', api_key: '', model: '' }
-const emptyApiSettings: ApiSettings = { llm: { primary: { ...emptyLlmConfig }, fallback: { ...emptyLlmConfig } }, redfox: { base_url: '', api_key: '' } }
+const emptyApiSettings: ApiSettings = { llm: { primary: { ...emptyLlmConfig }, fallback: { ...emptyLlmConfig } }, redfox: { base_url: 'https://redfox.hk', api_key: '' } }
 
 function loadApiSettings(): ApiSettings {
   try {
@@ -294,14 +298,9 @@ function saveApiSettings(settings: ApiSettings): void {
   }
 }
 
-function redfoxHeaders(): Record<string, string> {
-  const redfox = loadApiSettings().redfox
-  return redfox.base_url || redfox.api_key ? { 'x-redfox-base-url': redfox.base_url, 'x-redfox-api-key': redfox.api_key } : {}
-}
-
-type SkillToggles = { hotSearch: boolean; compliance: boolean; similarAccounts: boolean }
+type SkillToggles = { hotSearch: boolean; keywordHotSearch: boolean; compliance: boolean; similarAccounts: boolean }
 const skillTogglesKey = 'dingweipai:skill-toggles'
-const defaultSkillToggles: SkillToggles = { hotSearch: true, compliance: true, similarAccounts: true }
+const defaultSkillToggles: SkillToggles = { hotSearch: true, keywordHotSearch: true, compliance: true, similarAccounts: true }
 
 function loadSkillToggles(): SkillToggles {
   try {
@@ -320,11 +319,12 @@ function saveSkillToggles(toggles: SkillToggles): void {
   }
 }
 
-const allResearchPlatforms = ['小红书', '抖音', '视频号', '公众号', 'B站', '微博', 'X']
+const allResearchPlatforms = ['小红书', '抖音', '视频号', '公众号', 'B站', '微博', '快手', '今日头条', 'X']
 
 type TestResult = { ok: boolean; error?: string; status?: number }
 type ApiSlot = 'text_primary' | 'text_fallback' | 'vision'
 type EditableApiConfig = { slot: ApiSlot; role: string; enabled: boolean; base_url: string; model: string; api_key: string; api_key_masked: string; configured: boolean }
+type EditableRedfoxConfig = { base_url: string; api_key: string; api_key_masked: string; configured: boolean }
 const apiSlotLabels: Record<ApiSlot, { title: string; detail: string }> = {
   text_primary: { title: '大模型 API 1（主用）', detail: '主文本模型：选题、文案和文本分析' },
   text_fallback: { title: '大模型 API 2（备用）', detail: '备用文本模型：API 1 失败时自动接管' },
@@ -381,7 +381,7 @@ const emptyServerApis = Object.fromEntries((Object.keys(apiSlotLabels) as ApiSlo
 
 function SettingsPanel({ theme, setTheme, font, setFont, onClose }: { theme: ThemeKey; setTheme: (theme: ThemeKey) => void; font: FontKey; setFont: (font: FontKey) => void; onClose: () => void }) {
   const [legacySettings] = useState<ApiSettings>(loadApiSettings)
-  const [redfox, setRedfox] = useState(legacySettings.redfox)
+  const [redfox, setRedfox] = useState<EditableRedfoxConfig>({ ...legacySettings.redfox, api_key_masked: '', configured: Boolean(legacySettings.redfox.api_key) })
   const [serverApis, setServerApis] = useState<Record<ApiSlot, EditableApiConfig>>(emptyServerApis)
   const [saved, setSaved] = useState('')
   const [testing, setTesting] = useState<ApiSlot | 'redfox' | ''>('')
@@ -391,7 +391,13 @@ function SettingsPanel({ theme, setTheme, font, setFont, onClose }: { theme: The
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
-    void apiJson<Omit<EditableApiConfig, 'api_key'>[]>('/api/api-settings').then(items => setServerApis(current => Object.fromEntries(items.map(item => [item.slot, { ...current[item.slot], ...item, api_key: '' }])) as Record<ApiSlot, EditableApiConfig>)).catch(() => setSaved('服务端 API 配置暂不可用'))
+    void Promise.all([
+      apiJson<Omit<EditableApiConfig, 'api_key'>[]>('/api/api-settings'),
+      apiJson<Omit<EditableRedfoxConfig, 'api_key'>>('/api/redfox-settings'),
+    ]).then(([items, redfoxConfig]) => {
+      setServerApis(current => Object.fromEntries(items.map(item => [item.slot, { ...current[item.slot], ...item, api_key: '' }])) as Record<ApiSlot, EditableApiConfig>)
+      setRedfox(current => redfoxConfig.configured ? { ...current, ...redfoxConfig, api_key: '' } : current)
+    }).catch(() => setSaved('服务端 API 配置暂不可用'))
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
@@ -403,19 +409,25 @@ function SettingsPanel({ theme, setTheme, font, setFont, onClose }: { theme: The
     setServerApis(current => ({ ...current, [slot]: { ...current[slot], ...result, api_key: '' } }))
     return result
   }
+  const saveRedfox = async () => {
+    const body = { base_url: redfox.base_url, ...(redfox.api_key ? { api_key: redfox.api_key } : {}) }
+    const result = await apiJson<Omit<EditableRedfoxConfig, 'api_key'>>('/api/redfox-settings', { method: 'PUT', body: JSON.stringify(body) })
+    setRedfox(current => ({ ...current, ...result, api_key: '' }))
+    return result
+  }
   const persist = () => {
     setSaved('')
-    void Promise.all((Object.keys(apiSlotLabels) as ApiSlot[]).map(saveSlot)).then(() => {
-      saveApiSettings({ ...emptyApiSettings, redfox })
-      setSaved('三套 API 配置已加密保存到账号')
-    }).catch(() => setSaved('保存失败，请检查主密钥和配置内容'))
+    void Promise.all([...(Object.keys(apiSlotLabels) as ApiSlot[]).map(saveSlot), saveRedfox()]).then(() => {
+      saveApiSettings(emptyApiSettings)
+      setSaved('四套 API 配置已加密保存到账号')
+    }).catch((error: unknown) => setSaved(`保存失败：${error instanceof Error ? error.message : '请检查主密钥和配置内容'}`))
   }
   const runTest = (type: ApiSlot | 'redfox') => {
     setTesting(type); setTestResult(current => ({ ...current, [type]: '' }))
     const request = type === 'redfox'
-      ? apiJson<TestResult>('/api/settings/test', { method: 'POST', body: JSON.stringify({ type: 'redfox', ...redfox }) })
+      ? saveRedfox().then(() => apiJson<TestResult>('/api/redfox-settings?action=test', { method: 'POST', body: '{}' }))
       : saveSlot(type).then(() => apiJson<TestResult>(`/api/api-settings/${type}?action=test`, { method: 'POST', body: '{}' }))
-    void request.then(result => setTestResult(current => ({ ...current, [type]: result.ok ? '连接成功，能力验证通过。' : `连接失败：${result.error || '未知原因'}` }))).catch(() => setTestResult(current => ({ ...current, [type]: '连接失败：测试请求未完成。' }))).finally(() => setTesting(''))
+    void request.then(result => setTestResult(current => ({ ...current, [type]: result.ok ? '连接成功，能力验证通过。' : `连接失败：${result.error || '未知原因'}` }))).catch((error: unknown) => setTestResult(current => ({ ...current, [type]: `连接失败：${error instanceof Error ? error.message : '测试请求未完成。'}` }))).finally(() => setTesting(''))
   }
   const migrateLegacy = () => {
     if (!window.confirm('将此浏览器中的 API 1/API 2 配置加密上传到当前账号，并删除浏览器内的对应明文配置？')) return
@@ -439,7 +451,7 @@ function SettingsPanel({ theme, setTheme, font, setFont, onClose }: { theme: The
         <div className="settings-font-row">{(Object.keys(fonts) as FontKey[]).map(key => <button className={font === key ? 'settings-font active' : 'settings-font'} key={key} onClick={() => setFont(key)} style={{ fontFamily: fonts[key].sample }}><b>{fonts[key].name}</b><small>{fonts[key].subtitle}</small></button>)}</div>
       </section>
       <section className="settings-section"><h3>API 中心</h3>
-        <p className="settings-privacy">三套 API Key 使用 AES-256-GCM 按账号加密保存。页面仅显示掩码，修改 Key 时必须重新输入完整值。</p>
+        <p className="settings-privacy">四套 API Key 使用 AES-256-GCM 按账号加密保存。页面仅显示掩码，修改 Key 时必须重新输入完整值。</p>
         {hasLegacyLlm && <div className="offline-banner" role="status">检测到此浏览器保存的旧版 API 1/API 2 配置，不会自动上传。<button onClick={migrateLegacy}>确认迁移到账号</button></div>}
         {(Object.keys(apiSlotLabels) as ApiSlot[]).map(slot => <article className="settings-api-card" key={slot}>
           <div className="settings-api-head"><b>{apiSlotLabels[slot].title}</b><small>{apiSlotLabels[slot].detail}</small></div>
@@ -450,9 +462,9 @@ function SettingsPanel({ theme, setTheme, font, setFont, onClose }: { theme: The
           <div className="settings-api-foot"><button className="outline-action" disabled={testing !== ''} onClick={() => runTest(slot)}>{testing === slot ? '验证中...' : '测试连接与能力'}</button>{testResult[slot] && <span className={testResult[slot].startsWith('连接成功') ? 'test-ok' : 'test-fail'}>{testResult[slot]}</span>}</div>
         </article>)}
         <article className="settings-api-card">
-          <div className="settings-api-head"><b>红狐 API</b><small>RedFox 热点研究数据服务，暂保持浏览器配置</small></div>
-          <label><span>Base URL</span><input value={redfox.base_url} onChange={event => setRedfox(current => ({ ...current, base_url: event.target.value }))} placeholder="https://redfox.example.com" /></label>
-          <label><span>API Key</span><input type="password" autoComplete="off" value={redfox.api_key} onChange={event => setRedfox(current => ({ ...current, api_key: event.target.value }))} placeholder="API Key" /></label>
+          <div className="settings-api-head"><b>红狐 API</b><small>RedFox 热点研究数据服务，按账号加密保存</small></div>
+          <label><span>Base URL</span><input value={redfox.base_url || 'https://redfox.hk'} onChange={event => setRedfox(current => ({ ...current, base_url: event.target.value }))} placeholder="https://redfox.hk" /></label>
+          <label><span>API Key</span><input type="password" autoComplete="new-password" value={redfox.api_key} onChange={event => setRedfox(current => ({ ...current, api_key: event.target.value }))} placeholder={redfox.api_key_masked || '输入完整 API Key'} /></label>
           <div className="settings-api-foot"><button className="outline-action" disabled={testing !== ''} onClick={() => runTest('redfox')}>{testing === 'redfox' ? '测试中...' : '测试连接'}</button>{testResult.redfox && <span className={testResult.redfox.startsWith('连接成功') ? 'test-ok' : 'test-fail'}>{testResult.redfox}</span>}</div>
         </article>
         <div className="settings-save-row"><button className="primary-action" onClick={persist}>加密保存配置 <ArrowUpRight size={16} /></button>{saved && <span className={saved.includes('失败') || saved.includes('不可用') ? 'test-fail' : 'test-ok'}>{saved}</span>}</div>
@@ -473,6 +485,8 @@ function MemoryPanel() {
   const [newContent, setNewContent] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [extractOpen, setExtractOpen] = useState(false)
+  const [extractText, setExtractText] = useState('')
 
   const load = () => {
     void apiJson<MemoryItem[]>('/api/memories').then(setItems).catch(() => undefined)
@@ -495,10 +509,16 @@ function MemoryPanel() {
   }
 
   const extract = () => {
+    if (!extractText.trim()) { setMessage('请先粘贴要提炼的对话、访谈或复盘文本。'); return }
     setBusy(true); setMessage('')
-    void apiJson<{ error?: string; reason?: string }>('/api/memories/extract', { method: 'POST', body: JSON.stringify({}) })
-      .catch(error => error)
-      .finally(() => { setBusy(false); setMessage('自动提炼需要先在上方配置大模型并保存。') })
+    void apiJson<{ items: MemoryItem[]; extracted: number }>('/api/memories/extract', { method: 'POST', body: JSON.stringify({ text: extractText.trim() }) })
+      .then(result => {
+        setItems(current => [...result.items, ...current])
+        setMessage(result.items.length ? `提炼出 ${result.items.length} 条新记忆（共识别 ${result.extracted} 条，重复已跳过）。` : '这段文本里没有提炼出新的记忆。')
+        setExtractText(''); setExtractOpen(false)
+      })
+      .catch((error: unknown) => setMessage(error instanceof Error && error.message ? error.message : '自动提炼失败，请稍后重试。'))
+      .finally(() => setBusy(false))
   }
 
   const visible = typeFilter ? items.filter(item => item.memory_type === typeFilter) : items
@@ -508,8 +528,9 @@ function MemoryPanel() {
     <div className="structure-toolbar-row memory-filter">
       {['', ...memoryTypeKeys].map(name => <button className={typeFilter === name ? 'chip active' : 'chip'} onClick={() => setTypeFilter(name)} key={name || 'all'}>{name ? memoryTypeLabels[name as MemoryItem['memory_type']] : '全部'}</button>)}
       <span className="chip-gap" />
-      <button className="outline-action" disabled={busy} onClick={extract}>从对话自动提炼</button>
+      <button className="outline-action" disabled={busy} onClick={() => { setExtractOpen(!extractOpen); setMessage('') }}>从对话自动提炼</button>
     </div>
+    {extractOpen && <div className="memory-form memory-extract"><textarea value={extractText} onChange={event => setExtractText(event.target.value)} placeholder="粘贴与客户的对话、访谈记录或复盘笔记，AI 会提炼值得长期记住的风格、选题和反馈。" aria-label="提炼文本" rows={5} /><button className="primary-action" disabled={busy || !extractText.trim()} onClick={extract}>{busy ? '提炼中...' : '提炼记忆'}</button></div>}
     <div className="memory-form">
       <select value={newType} onChange={event => setNewType(event.target.value as MemoryItem['memory_type'])} aria-label="记忆类型">
         {memoryTypeKeys.map(name => <option key={name} value={name}>{memoryTypeLabels[name]}</option>)}
@@ -547,8 +568,9 @@ function StrategyReview({ ratios, onApply, onClose }: { ratios: number[]; onAppl
   return <section className="review-panel"><div className="review-head"><div><span className="section-kicker">REVIEW / LAST 14 DAYS</span><h2>这轮复盘看到了什么</h2><p>系统根据当前策略组合生成建议，确认后会保存为新的策略版本。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="review-metrics"><div><span>泛流量触达</span><strong>+42%</strong><small>曝光增长 · 当前 {ratios[0]}%</small></div><div><span>垂直信任</span><strong>+18%</strong><small>收藏增长 · 当前 {ratios[1]}%</small></div><div><span>核心目标转化</span><strong>6 条</strong><small>有效线索 · 当前 {ratios[2]}%</small></div></div><div className="review-suggestion"><div><span>建议调整</span><strong>把一部分泛流量投入转向信任与转化</strong><p>过去两周泛流量表现稳定，垂直内容带来的收藏和私信质量更高。</p></div><div className="review-ratio"><b>40%</b><span>/</span><b>35%</b><span>/</span><b>25%</b></div></div><div className="review-actions"><button className="skip-action" onClick={onClose}>保留当前策略</button><button className="primary-action" onClick={onApply}>应用建议并保存版本 <ArrowUpRight size={16} /></button></div></section>
 }
 
-type WorkspaceSection = '热点研究' | '素材库' | '爆款方法库' | '选题助手' | '内容创作' | 'IP 档案'
-type ResearchItem = { id: number; platform: string; title: string; author?: string; url?: string | null; metrics?: { discussions?: number; growth?: number }; analysis?: { structure: string[]; summary?: string }; source_refs?: unknown[]; captured_at?: string; collected?: boolean }
+type WorkspaceSection = '热点研究' | '素材库' | '爆款方法库' | '选题助手' | '内容创作' | '发布中心' | '内容日历' | 'IP 档案'
+type ResearchItem = { id: number; platform: string; title: string; author?: string; url?: string | null; metrics?: { discussions?: number; growth?: number }; analysis?: { structure: string[]; summary?: string }; source_refs?: unknown[]; captured_at?: string; collected?: boolean; fit?: { score: number; matched: string[] } }
+type DraftAdaptation = { title: string; body: string; hashtags: string[]; provider: string; checklist: { item: string; status: string; detail: string }[]; updated_at: string }
 
 type ResearchListResponse = { items: ResearchItem[]; total: number }
 
@@ -585,7 +607,7 @@ type TopicItem = { id: number; title: string; rationale: string; content_job: st
 type DraftHook = { id: string; label: string; text: string; source_refs?: unknown[]; validation: { status: string; evidence: string[]; length: number } }
 type DraftCheck = { status: 'passed' | 'warning' | 'blocked'; score?: number | null; dimensions?: Record<string, number | boolean>; evidence: { code: string; message: string; severity: string }[]; suggestions: string[]; draft_version?: number; checked_at: string }
 type DraftApproval = { status: 'pending' | 'approved' | 'revoked'; user_id?: string | null; approved_at?: string | null; revoked_at?: string | null; revoked_by?: string | null; revoke_reason?: string | null; draft_version?: number | null; checks_snapshot?: Record<string, DraftCheck | null> | null }
-type DraftItem = { id: number; platform: string; title: string; body: string; fact_check_status: string; status: string; workflow_status?: string; hooks?: DraftHook[]; selected_hook_id?: string | null; selected_hook?: DraftHook | null; variant_group_id?: string | null; variant_type?: string; generation_context?: Record<string, unknown> | null; checks?: { persona?: DraftCheck | null; quality?: DraftCheck | null; publish_checklist?: DraftCheck | null }; approval?: DraftApproval; version?: number; history?: DraftItem[] }
+type DraftItem = { id: number; platform: string; title: string; body: string; fact_check_status: string; status: string; workflow_status?: string; hooks?: DraftHook[]; selected_hook_id?: string | null; selected_hook?: DraftHook | null; variant_group_id?: string | null; variant_type?: string; generation_context?: Record<string, unknown> | null; checks?: { persona?: DraftCheck | null; quality?: DraftCheck | null; publish_checklist?: DraftCheck | null }; approval?: DraftApproval; version?: number; history?: DraftItem[]; adaptations?: Record<string, DraftAdaptation>; planned_date?: string | null }
 type DraftApprovalResponse = { status: 'approved' | 'revoked'; draft: DraftItem; shooting: { id: number } | null }
 type SyncConflict = { id: string; resource_type: string; resource_id: number; status: string }
 const topicDimensionLabels: Record<string, string> = { traffic_potential: '流量潜力', account_fit: '账号匹配', competitive_differentiation: '竞争差异化', timeliness: '时效价值', monetization: '变现空间', production_cost: '制作成本', compliance_risk: '合规风险' }
@@ -860,7 +882,7 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
   const [page, setPage] = useState(1)
   const [query, setQuery] = useState('')
   const [platform, setPlatform] = useState('')
-  const [sort, setSort] = useState<'latest' | 'discussions' | 'growth'>('latest')
+  const [sort, setSort] = useState<'latest' | 'discussions' | 'growth' | 'fit'>('latest')
   const [openId, setOpenId] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -875,6 +897,11 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
   const [hotItems, setHotItems] = useState<HotSearchItem[]>([])
   const [hotSource, setHotSource] = useState('')
   const [hotPicked, setHotPicked] = useState<number[]>([])
+  const [kwKeyword, setKwKeyword] = useState('')
+  const [kwDays, setKwDays] = useState(7)
+  const [kwItems, setKwItems] = useState<HotSearchItem[]>([])
+  const [kwSource, setKwSource] = useState('')
+  const [kwPicked, setKwPicked] = useState<string[]>([])
   const [similarAccount, setSimilarAccount] = useState('')
   const [similarItems, setSimilarItems] = useState<SimilarAccount[]>([])
   const [similarSource, setSimilarSource] = useState('')
@@ -922,7 +949,7 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
 
   const refreshResearch = () => {
     setBusy(true)
-    void apiJson<{ items: ResearchItem[] }>('/api/research/refresh', { method: 'POST', headers: redfoxHeaders() })
+    void apiJson<{ items: ResearchItem[] }>('/api/research/refresh', { method: 'POST' })
       .then(() => apiJson<{ items: ResearchItem[]; total: number }>(`/api/research?${buildParams().toString()}`))
       .then(result => { setItems(result.items); setTotal(result.total); setPage(1); setError('') })
       .catch(() => setError('刷新研究失败，请稍后重试。'))
@@ -938,7 +965,7 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
     const target = (word ?? keyword).trim()
     if (!target) { setSkillError('请输入搜索关键词。'); return }
     runSkill('search', async () => {
-      await apiJson<{ added: number; source: string }>(`/api/research/search`, { method: 'POST', headers: { 'content-type': 'application/json', ...redfoxHeaders() }, body: JSON.stringify({ keyword: target, platform: skillPlatform }) })
+      await apiJson<{ added: number; source: string }>(`/api/research/search`, { method: 'POST', body: JSON.stringify({ keyword: target, platform: skillPlatform }) })
         .then(result => setSkillMessage(`已按「${target}」抓取 ${result.added} 条研究（${result.source === 'demo' ? '演示数据' : '红狐真实数据'}）`))
       const result = await apiJson<{ items: ResearchItem[]; total: number }>(`/api/research?${buildParams().toString()}`)
       setItems(result.items); setTotal(result.total); setPage(1)
@@ -946,7 +973,7 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
   }
 
   const fetchHotSearch = () => runSkill('hotSearch', async () => {
-    const result = await apiJson<{ items: HotSearchItem[]; source: string }>(`/api/research/hot-search`, { method: 'POST', headers: { 'content-type': 'application/json', ...redfoxHeaders() }, body: JSON.stringify({ platform: skillPlatform }) })
+    const result = await apiJson<{ items: HotSearchItem[]; source: string }>(`/api/research/hot-search`, { method: 'POST', body: JSON.stringify({ platform: skillPlatform }) })
     setHotItems(result.items || []); setHotSource(result.source === 'demo' ? '演示数据' : '红狐真实数据'); setHotPicked([])
   })
 
@@ -958,10 +985,26 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
     setItems(result.items); setTotal(result.total); setPage(1)
   })
 
+  const fetchKeywordHot = () => {
+    if (!kwKeyword.trim()) { setSkillError('请输入要检索的关键词。'); return }
+    runSkill('kwHot', async () => {
+      const result = await apiJson<{ items: HotSearchItem[]; source: string }>(`/api/research/keyword-hot-search`, { method: 'POST', body: JSON.stringify({ keyword: kwKeyword.trim(), days: kwDays }) })
+      setKwItems(result.items || []); setKwSource(result.source === 'demo' ? '演示数据' : '红狐真实数据'); setKwPicked([])
+    })
+  }
+
+  const collectKeywordHot = () => runSkill('kwCollect', async () => {
+    const entries = kwItems.filter(item => kwPicked.includes(`${item.platform}#${item.rank}`))
+    await apiJson<{ added: number }>(`/api/research/hot-search/collect`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ entries, platform: skillPlatform }) })
+      .then(result => { setSkillMessage(`已将 ${result.added} 条关键词热搜加入研究库`); setKwPicked([]) })
+    const result = await apiJson<{ items: ResearchItem[]; total: number }>(`/api/research?${buildParams().toString()}`)
+    setItems(result.items); setTotal(result.total); setPage(1)
+  })
+
   const fetchSimilar = () => {
     if (!similarAccount.trim()) { setSkillError('请输入要研究的账号名称。'); return }
     runSkill('similar', async () => {
-      const result = await apiJson<{ items: SimilarAccount[]; source: string }>(`/api/research/similar`, { method: 'POST', headers: { 'content-type': 'application/json', ...redfoxHeaders() }, body: JSON.stringify({ account: similarAccount.trim(), platform: skillPlatform }) })
+      const result = await apiJson<{ items: SimilarAccount[]; source: string }>(`/api/research/similar`, { method: 'POST', body: JSON.stringify({ account: similarAccount.trim(), platform: skillPlatform }) })
       setSimilarItems(result.items || []); setSimilarSource(result.source === 'demo' ? '演示数据' : '红狐真实数据')
     })
   }
@@ -990,6 +1033,7 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
       <div className="skill-cards">
         <article className="skill-card"><h4>关键词搜索</h4><p>默认能力 · 按关键词抓取爆款内容进研究库</p></article>
         <article className={toggles.hotSearch ? 'skill-card active' : 'skill-card'}><h4>热搜榜</h4><p>抓取平台热榜，一键加入研究库</p><button className={toggles.hotSearch ? 'chip active' : 'chip'} onClick={() => updateToggle('hotSearch')}>{toggles.hotSearch ? '已启用' : '已停用'}</button></article>
+        <article className={toggles.keywordHotSearch ? 'skill-card active' : 'skill-card'}><h4>关键词热搜</h4><p>跨平台全网检索包含关键词的热搜条目</p><button className={toggles.keywordHotSearch ? 'chip active' : 'chip'} onClick={() => updateToggle('keywordHotSearch')}>{toggles.keywordHotSearch ? '已启用' : '已停用'}</button></article>
         <article className={toggles.compliance ? 'skill-card active' : 'skill-card'}><h4>违禁词检测</h4><p>发布前扫描草稿中的风险表述</p><button className={toggles.compliance ? 'chip active' : 'chip'} onClick={() => updateToggle('compliance')}>{toggles.compliance ? '已启用' : '已停用'}</button></article>
         <article className={toggles.similarAccounts ? 'skill-card active' : 'skill-card'}><h4>相似账号对标</h4><p>找到同赛道账号，拆解内容支柱</p><button className={toggles.similarAccounts ? 'chip active' : 'chip'} onClick={() => updateToggle('similarAccounts')}>{toggles.similarAccounts ? '已启用' : '已停用'}</button></article>
       </div>
@@ -1013,6 +1057,23 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
           {hotPicked.length > 0 && <button className="primary-action" disabled={skillBusy === 'collect'} onClick={collectHot}>加入研究库（{hotPicked.length} 条）</button>}
         </div>}
       </div>}
+      {toggles.keywordHotSearch && <div className="skill-block">
+        <div className="skill-block-head"><strong>关键词热搜</strong>
+          <input className="skill-account-input" value={kwKeyword} onChange={event => setKwKeyword(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') fetchKeywordHot() }} placeholder="关键词，例如：副业" aria-label="关键词热搜关键词" />
+          <select className="structure-sort" value={kwDays} onChange={event => setKwDays(Number(event.target.value))} aria-label="检索时间范围">
+            <option value={3}>近 3 天</option><option value={7}>近 7 天</option><option value={14}>近 14 天</option><option value={30}>近 30 天</option>
+          </select>
+          <button className="outline-action" disabled={skillBusy === 'kwHot'} onClick={fetchKeywordHot}>{skillBusy === 'kwHot' ? '检索中...' : '全网检索'}</button>
+          {kwSource && <span className="skill-source-tag">{kwSource}</span>}
+        </div>
+        {kwItems.length > 0 && <div className="hot-list">
+          {kwItems.map(item => { const pickedKey = `${item.platform}#${item.rank}`; return <label className="hot-row" key={pickedKey}>
+            <input type="checkbox" checked={kwPicked.includes(pickedKey)} onChange={event => setKwPicked(current => event.target.checked ? [...current, pickedKey] : current.filter(key => key !== pickedKey))} />
+            <span className="hot-rank">#{item.rank}</span><span className="hot-title">{item.title}</span><span className="hot-heat">{item.heat}</span>
+          </label> })}
+          {kwPicked.length > 0 && <button className="primary-action" disabled={skillBusy === 'kwCollect'} onClick={collectKeywordHot}>加入研究库（{kwPicked.length} 条）</button>}
+        </div>}
+      </div>}
       {toggles.similarAccounts && <div className="skill-block">
         <div className="skill-block-head"><strong>相似账号对标</strong>
           <input className="skill-account-input" value={similarAccount} onChange={event => setSimilarAccount(event.target.value)} placeholder="输入账号名称，例如：某某聊IP" aria-label="对标账号" />
@@ -1031,8 +1092,9 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
     </div>
     <div className="structure-toolbar-row">
       <div className="structure-search"><Search size={15} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索标题或作者..." aria-label="搜索研究" /></div>
-      <select className="structure-sort" value={sort} onChange={event => setSort(event.target.value as 'latest' | 'discussions' | 'growth')} aria-label="排序方式">
+      <select className="structure-sort" value={sort} onChange={event => setSort(event.target.value as 'latest' | 'discussions' | 'growth' | 'fit')} aria-label="排序方式">
         <option value="latest">最新捕获</option>
+        <option value="fit">定位匹配度</option>
         <option value="discussions">讨论最多</option>
         <option value="growth">增长最快</option>
       </select>
@@ -1047,7 +1109,7 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
     {error && <p className="structure-error" role="alert">{error}</p>}
     {loading ? <p className="empty-state">正在加载研究数据...</p> : items.length ? <div className="asset-list research-card-grid">
       {items.map(item => <article className={openId === item.id ? 'asset-row research-row-focused' : 'asset-row'} key={item.id} ref={element => { rowRefs.current[item.id] = element }} tabIndex={-1}>
-        <span className={`platform-tag ${item.platform === '小红书' ? 'xhs' : item.platform === '公众号' ? 'wechat' : item.platform === '抖音' ? 'douyin' : ''}`}>{item.platform}</span>
+        <span className={`platform-tag ${item.platform === '小红书' ? 'xhs' : item.platform === '公众号' ? 'wechat' : item.platform === '抖音' ? 'douyin' : ''}`}>{item.platform}</span>{item.fit && <span className="fit-chip" title={item.fit.matched.length ? `匹配：${item.fit.matched.join('、')}` : '与定位暂无直接关联'}>匹配 {item.fit.score}</span>}
         <div>
           <h3>{item.title}</h3>
           <p>{item.author || 'RedFox 研究库'} · 讨论 {item.metrics?.discussions || 0} · 增长 {item.metrics?.growth || 0}%</p>
@@ -1132,6 +1194,8 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId 
   const [history, setHistory] = useState<Record<number, DraftItem[]>>({})
   const [compliance, setCompliance] = useState<Record<number, ComplianceResult>>({})
   const [complianceBusy, setComplianceBusy] = useState<number | null>(null)
+  const [deaiBusy, setDeaiBusy] = useState<number | null>(null)
+  const [deaiResults, setDeaiResults] = useState<Record<number, string>>({})
   const [topicError, setTopicError] = useState('')
   const [dirtyDrafts, setDirtyDrafts] = useState<Set<number>>(() => new Set())
   useEffect(() => {
@@ -1142,7 +1206,7 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId 
   const restoreDraft = (draft: DraftItem, version: number) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/restore`, { method: 'POST', body: JSON.stringify({ version }) }).then(updated => { setDrafts(current => current.map(item => item.id === updated.id ? updated : item)); setHistory(current => ({ ...current, [draft.id]: updated.history || [] })) }).catch(() => undefined).finally(() => setBusy(false)) }
   const checkCompliance = (draft: DraftItem) => {
     setComplianceBusy(draft.id)
-    void apiJson<ComplianceResult>(`/api/drafts/${draft.id}/compliance`, { method: 'POST', headers: { 'content-type': 'application/json', ...redfoxHeaders() }, body: JSON.stringify({}) })
+    void apiJson<ComplianceResult>(`/api/drafts/${draft.id}/compliance`, { method: 'POST', body: JSON.stringify({}) })
       .then(result => setCompliance(current => ({ ...current, [draft.id]: result })))
       .catch(() => setCompliance(current => ({ ...current, [draft.id]: { hits: [], source: 'error', checked_length: 0 } })))
       .finally(() => setComplianceBusy(null))
@@ -1169,17 +1233,20 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId 
   const decideTopic = (topic: TopicItem, decision: 'do' | 'revise' | 'defer') => { setBusy(true); void apiJson<TopicItem>(`/api/topics/${topic.id}/decision`, { method: 'PUT', body: JSON.stringify({ decision }) }).then(updated => setTopics(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => undefined).finally(() => setBusy(false)) }
   const generateDrafts = (topic: TopicItem) => { if (topic.workflow_status !== 'approved') return; setBusy(true); void apiJson<DraftItem[]>('/api/drafts/generate', { method: 'POST', body: JSON.stringify({ topic_id: topic.id }) }).then(result => setDrafts(current => [...result, ...current])).catch(() => undefined).finally(() => setBusy(false)) }
   const useStructure = (structure: StructureItem) => { setBusy(true); void apiJson<DraftItem[]>('/api/drafts/generate', { method: 'POST', body: JSON.stringify({ structure_id: structure.id, topic: { title: structure.title, strategy_layer: 'trust', goal_refs: [] } }) }).then(() => onNavigate('内容创作')).catch(() => undefined).finally(() => setBusy(false)) }
+  const deaiDraft = (draft: DraftItem) => { setDeaiBusy(draft.id); void apiJson<{ content: string }>(`/api/drafts/${draft.id}/deai`, { method: 'POST', body: '{}' }).then(result => setDeaiResults(current => ({ ...current, [draft.id]: result.content }))).catch(() => undefined).finally(() => setDeaiBusy(null)) }
   const updateDraft = (draft: DraftItem, patch: Partial<DraftItem>) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}`, { method: 'PUT', body: JSON.stringify({ ...patch, version: draft.version }) }).then(updated => { setDrafts(current => current.map(item => item.id === updated.id ? updated : item)); setDirtyDrafts(current => { const next = new Set(current); next.delete(draft.id); return next }) }).catch(() => undefined).finally(() => setBusy(false)) }
   const approveDraft = (draft: DraftItem) => { setBusy(true); void apiJson<DraftApprovalResponse>(`/api/drafts/${draft.id}/approve`, { method: 'POST', body: JSON.stringify({ version: draft.version }) }).then(result => setDrafts(current => current.map(item => item.id === result.draft.id ? result.draft : item))).catch(() => undefined).finally(() => setBusy(false)) }
   const revokeDraftApproval = (draft: DraftItem) => { const reason = window.prompt('请输入撤回原因'); if (!reason?.trim()) return; setBusy(true); void apiJson<DraftApprovalResponse>(`/api/drafts/${draft.id}/revoke-approval`, { method: 'POST', body: JSON.stringify({ version: draft.version, reason: reason.trim() }) }).then(result => setDrafts(current => current.map(item => item.id === result.draft.id ? result.draft : item))).catch(() => undefined).finally(() => setBusy(false)) }
   if ((section as string) === '素材库') return <MaterialWorkspace />
   if (section === '热点研究') return <ResearchLibrary focusedResearchId={focusedResearchId} />
+  if (section === '发布中心') return <PublishCenter />
+  if (section === '内容日历') return <ContentCalendar />
   const heading = section === '爆款方法库' ? '爆款方法库' : section === '选题助手' ? '选题助手' : '内容创作'
-  return <section className="workspace-view"><div className="workspace-view-head"><div><span className="section-kicker">WORKSPACE / {section.toUpperCase()}</span><h2>{heading}</h2><p>围绕定位和 IP 核心目标，沉淀可追溯的内容资产。</p></div>{section === '选题助手' && <button className="primary-action" onClick={generateTopics}>{busy ? '生成中...' : '生成选题'} <Sparkles size={15} /></button>}</div>{section === '选题助手' && topicError && <p className="structure-error" role="alert">{topicError}</p>}{section === '爆款方法库' && <StructureLibrary onUse={useStructure} />}{section === '选题助手' && <div className="asset-list">{topics.length ? topics.map(topic => { const evaluation = topic.evaluation; return <article className="asset-row topic-evaluation-card" key={topic.id}><div><h3>{topic.title}</h3><p>{topic.content_job} · {topic.rationale}</p>{evaluation ? <><div className="topic-score-row"><strong>{evaluation.score} 分</strong><span>{topicDecisionLabels[evaluation.decision]}</span><small>{topic.workflow_status === 'approved' ? '已确认进入创作' : topic.workflow_status === 'needs_revision' ? '等待调整后重新评估' : '已完成评估'}</small></div><div className="topic-dimensions">{Object.entries(evaluation.dimensions).map(([key, dimension]) => <span key={key}><b>{topicDimensionLabels[key] || key}</b><strong>{dimension.score}</strong></span>)}</div><details className="topic-evidence"><summary>查看评分证据与建议</summary><ul>{evaluation.evidence.map((item, index) => <li key={`${item.dimension}-${index}`}>{topicDimensionLabels[item.dimension] || item.dimension}：{item.message}</li>)}</ul>{evaluation.suggestions.length > 0 && <p>下一步：{evaluation.suggestions.join('；')}</p>}</details></> : <p className="topic-pending">尚未评估：先运行七维评估，再决定是否进入创作。</p>}</div><div className="topic-actions">{!evaluation && <button className="outline-action" disabled={busy} onClick={() => evaluateTopicItem(topic)}>七维评估</button>}{evaluation && topic.workflow_status === 'evaluated' && <><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'do')}>确认做</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'revise')}>调整方向</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'defer')}>暂缓</button></>}{evaluation && topic.workflow_status === 'approved' && <button className="outline-action" disabled={busy} onClick={() => generateDrafts(topic)}>生成草稿</button>}</div></article> }) : <div className="structure-empty"><p className="empty-state">选择生成选题，系统会从当前研究和素材中建立来源链路。</p></div>}</div>}{section === '内容创作' && <><ComposePanel onGenerated={result => setDrafts(current => [...result, ...current])} />{drafts.length ? <div className="draft-grid">{drafts.map(draft => <article className="trend-card draft-card" key={draft.id}><div className="card-top"><span className="platform-tag douyin">{draft.platform}</span><span className="draft-version">v{draft.version || 1}</span></div><input className="draft-title-input" value={draft.title} onChange={event => { setDrafts(current => current.map(item => item.id === draft.id ? { ...item, title: event.target.value } : item)); setDirtyDrafts(current => new Set(current).add(draft.id)) }} /><textarea className="draft-body-input" value={draft.body} onChange={event => { setDrafts(current => current.map(item => item.id === draft.id ? { ...item, body: event.target.value } : item)); setDirtyDrafts(current => new Set(current).add(draft.id)) }} />{draft.hooks?.length ? <div className="draft-hooks"><div className="draft-hooks-head"><span>Hook 候选</span><small>{draft.workflow_status === 'content_ready' ? '已选择，可继续修改正文' : '选择一个作为开头'}</small></div>{draft.hooks.map(hook => <button className={draft.selected_hook_id === hook.id ? 'hook-option selected' : 'hook-option'} disabled={busy || hook.validation.status !== 'passed'} onClick={() => selectDraftHook(draft, hook)} key={hook.id}><b>{hook.label}</b><span>{hook.text}</span></button>)}</div> : null}{draft.checks && <div className="draft-checks"><div className="draft-checks-head"><span>发布前检查</span><small>{draft.workflow_status || 'draft'}</small></div>{(['persona', 'quality', 'publish'] as const).map(check => { const key = check === 'publish' ? 'publish_checklist' : check; const item = draft.checks?.[key]; const current = item?.draft_version === draft.version; const personaReady = draft.checks?.persona?.draft_version === draft.version; const qualityReady = personaReady && draft.checks?.quality?.draft_version === draft.version && draft.checks?.quality?.status === 'passed'; const allowed = check === 'persona' || check === 'quality' ? (check === 'quality' ? personaReady : true) : qualityReady; const labels = { persona: '人设检查', quality: '质量门', publish: '发布清单' }; return <div className="draft-check" key={check}><div className="draft-check-top"><strong>{labels[check]}</strong><span className={item?.status || 'pending'}>{item && current ? draftCheckStatusLabels[item.status] || '待检查' : '待检查'}</span>{item?.score != null && <b>{item.score} 分</b>}</div><button className="outline-action" disabled={busy || !allowed} onClick={() => runDraftCheck(draft, check, Boolean(item && current))}>{item && current ? '重新检查' : check === 'quality' && !personaReady ? '先做人设检查' : check === 'publish' && !qualityReady ? '先通过质量门' : '开始检查'}</button>{item && current && item.evidence.length > 0 && <ul>{item.evidence.map((evidence, index) => <li key={`${evidence.code}-${index}`}>{evidence.message}</li>)}</ul>}{item && current && item.suggestions.length > 0 && <small className="draft-check-suggestions">建议：{item.suggestions.join('；')}</small>}</div> })}</div>}<DraftApprovalPanel draft={draft} busy={busy} dirty={dirtyDrafts.has(draft.id)} onApprove={() => approveDraft(draft)} onRevoke={() => revokeDraftApproval(draft)} onOpenShooting={onOpenShooting} /><div className="card-foot"><span>{draft.fact_check_status === 'verified' ? '事实已核验' : '事实待核验'}</span><div>{draft.fact_check_status !== 'verified' && <button className="outline-action" disabled={busy || dirtyDrafts.has(draft.id)} onClick={() => updateDraft(draft, { fact_check_status: 'verified' })}>标记已核验</button>}<button className="outline-action" onClick={() => updateDraft(draft, { title: draft.title, body: draft.body })}>{busy ? '保存中...' : '保存草稿'}</button></div></div>{history[draft.id] && <div className="history-list">{history[draft.id].map(item => <span key={`${draft.id}-${item.version}`}><small>v{item.version || 1}</small><button className="text-action" disabled={busy} onClick={() => restoreDraft(draft, item.version || 1)}>恢复</button></span>)}</div>}{compliance[draft.id] && <div className="compliance-result">{compliance[draft.id].source === 'error' ? <small role="alert">合规检查失败，请稍后重试。</small> : compliance[draft.id].hits.length ? compliance[draft.id].hits.map(hit => <span className="compliance-hit" key={hit.word}><strong>{hit.word}</strong><small>{hit.level} · {hit.suggestion}</small></span>) : <small>未检测到违禁词风险（{compliance[draft.id].source === 'demo' ? '演示词表' : '红狐词表'}）。</small>}</div>}<div className="draft-actions"><button className="outline-action" disabled={busy} onClick={() => generateHooks(draft)}>{draft.hooks?.length ? '重新生成 Hook' : '生成 Hook'}</button><button className="outline-action" onClick={() => loadHistory(draft)}>查看历史</button><button className="outline-action" disabled={complianceBusy === draft.id || !loadSkillToggles().compliance} onClick={() => checkCompliance(draft)}>{complianceBusy === draft.id ? '检测中...' : '合规检查'}</button><button className="outline-action" disabled={busy} onClick={() => copyDraft(draft)}>复制草稿</button></div></article>)}</div> : <div className="structure-empty"><p className="empty-state">还没有草稿。用上方组合生成面板组装第一份文案，或去选题助手生成选题。</p></div>}</>}</section>
+  return <section className="workspace-view"><div className="workspace-view-head"><div><span className="section-kicker">WORKSPACE / {section.toUpperCase()}</span><h2>{heading}</h2><p>围绕定位和 IP 核心目标，沉淀可追溯的内容资产。</p></div>{section === '选题助手' && <button className="primary-action" onClick={generateTopics}>{busy ? '生成中...' : '生成选题'} <Sparkles size={15} /></button>}</div>{section === '选题助手' && topicError && <p className="structure-error" role="alert">{topicError}</p>}{section === '爆款方法库' && <StructureLibrary onUse={useStructure} />}{section === '选题助手' && <div className="asset-list">{topics.length ? topics.map(topic => { const evaluation = topic.evaluation; return <article className="asset-row topic-evaluation-card" key={topic.id}><div><h3>{topic.title}</h3><p>{topic.content_job} · {topic.rationale}</p>{evaluation ? <><div className="topic-score-row"><strong>{evaluation.score} 分</strong><span>{topicDecisionLabels[evaluation.decision]}</span><small>{topic.workflow_status === 'approved' ? '已确认进入创作' : topic.workflow_status === 'needs_revision' ? '等待调整后重新评估' : '已完成评估'}</small></div><div className="topic-dimensions">{Object.entries(evaluation.dimensions).map(([key, dimension]) => <span key={key}><b>{topicDimensionLabels[key] || key}</b><strong>{dimension.score}</strong></span>)}</div><details className="topic-evidence"><summary>查看评分证据与建议</summary><ul>{evaluation.evidence.map((item, index) => <li key={`${item.dimension}-${index}`}>{topicDimensionLabels[item.dimension] || item.dimension}：{item.message}</li>)}</ul>{evaluation.suggestions.length > 0 && <p>下一步：{evaluation.suggestions.join('；')}</p>}</details></> : <p className="topic-pending">尚未评估：先运行七维评估，再决定是否进入创作。</p>}</div><div className="topic-actions">{!evaluation && <button className="outline-action" disabled={busy} onClick={() => evaluateTopicItem(topic)}>七维评估</button>}{evaluation && topic.workflow_status === 'evaluated' && <><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'do')}>确认做</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'revise')}>调整方向</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'defer')}>暂缓</button></>}{evaluation && topic.workflow_status === 'approved' && <button className="outline-action" disabled={busy} onClick={() => generateDrafts(topic)}>生成草稿</button>}</div></article> }) : <div className="structure-empty"><p className="empty-state">选择生成选题，系统会从当前研究和素材中建立来源链路。</p></div>}</div>}{section === '内容创作' && <><ComposePanel onGenerated={result => setDrafts(current => [...result, ...current])} />{drafts.length ? <div className="draft-grid">{drafts.map(draft => <article className="trend-card draft-card" key={draft.id}><div className="card-top"><span className="platform-tag douyin">{draft.platform}</span><span className="draft-version">v{draft.version || 1}</span></div><input className="draft-title-input" value={draft.title} onChange={event => { setDrafts(current => current.map(item => item.id === draft.id ? { ...item, title: event.target.value } : item)); setDirtyDrafts(current => new Set(current).add(draft.id)) }} /><textarea className="draft-body-input" value={draft.body} onChange={event => { setDrafts(current => current.map(item => item.id === draft.id ? { ...item, body: event.target.value } : item)); setDirtyDrafts(current => new Set(current).add(draft.id)) }} />{draft.hooks?.length ? <div className="draft-hooks"><div className="draft-hooks-head"><span>Hook 候选</span><small>{draft.workflow_status === 'content_ready' ? '已选择，可继续修改正文' : '选择一个作为开头'}</small></div>{draft.hooks.map(hook => <button className={draft.selected_hook_id === hook.id ? 'hook-option selected' : 'hook-option'} disabled={busy || hook.validation.status !== 'passed'} onClick={() => selectDraftHook(draft, hook)} key={hook.id}><b>{hook.label}</b><span>{hook.text}</span></button>)}</div> : null}{draft.checks && <div className="draft-checks"><div className="draft-checks-head"><span>发布前检查</span><small>{draft.workflow_status || 'draft'}</small></div>{(['persona', 'quality', 'publish'] as const).map(check => { const key = check === 'publish' ? 'publish_checklist' : check; const item = draft.checks?.[key]; const current = item?.draft_version === draft.version; const personaReady = draft.checks?.persona?.draft_version === draft.version; const qualityReady = personaReady && draft.checks?.quality?.draft_version === draft.version && draft.checks?.quality?.status === 'passed'; const allowed = check === 'persona' || check === 'quality' ? (check === 'quality' ? personaReady : true) : qualityReady; const labels = { persona: '人设检查', quality: '质量门', publish: '发布清单' }; return <div className="draft-check" key={check}><div className="draft-check-top"><strong>{labels[check]}</strong><span className={item?.status || 'pending'}>{item && current ? draftCheckStatusLabels[item.status] || '待检查' : '待检查'}</span>{item?.score != null && <b>{item.score} 分</b>}</div><button className="outline-action" disabled={busy || !allowed} onClick={() => runDraftCheck(draft, check, Boolean(item && current))}>{item && current ? '重新检查' : check === 'quality' && !personaReady ? '先做人设检查' : check === 'publish' && !qualityReady ? '先通过质量门' : '开始检查'}</button>{item && current && item.evidence.length > 0 && <ul>{item.evidence.map((evidence, index) => <li key={`${evidence.code}-${index}`}>{evidence.message}</li>)}</ul>}{item && current && item.suggestions.length > 0 && <small className="draft-check-suggestions">建议：{item.suggestions.join('；')}</small>}</div> })}</div>}<DraftApprovalPanel draft={draft} busy={busy} dirty={dirtyDrafts.has(draft.id)} onApprove={() => approveDraft(draft)} onRevoke={() => revokeDraftApproval(draft)} onOpenShooting={onOpenShooting} /><div className="card-foot"><span>{draft.fact_check_status === 'verified' ? '事实已核验' : '事实待核验'}</span><div>{draft.fact_check_status !== 'verified' && <button className="outline-action" disabled={busy || dirtyDrafts.has(draft.id)} onClick={() => updateDraft(draft, { fact_check_status: 'verified' })}>标记已核验</button>}<button className="outline-action" onClick={() => updateDraft(draft, { title: draft.title, body: draft.body })}>{busy ? '保存中...' : '保存草稿'}</button></div></div>{history[draft.id] && <div className="history-list">{history[draft.id].map(item => <span key={`${draft.id}-${item.version}`}><small>v{item.version || 1}</small><button className="text-action" disabled={busy} onClick={() => restoreDraft(draft, item.version || 1)}>恢复</button></span>)}</div>}{compliance[draft.id] && <div className="compliance-result">{compliance[draft.id].source === 'error' ? <small role="alert">合规检查失败，请稍后重试。</small> : compliance[draft.id].hits.length ? compliance[draft.id].hits.map(hit => <span className="compliance-hit" key={hit.word}><strong>{hit.word}</strong><small>{hit.level} · {hit.suggestion}</small></span>) : <small>未检测到违禁词风险（{compliance[draft.id].source === 'demo' ? '演示词表' : '红狐词表'}）。</small>}</div>}<div className="draft-actions"><button className="outline-action" disabled={busy} onClick={() => generateHooks(draft)}>{draft.hooks?.length ? '重新生成 Hook' : '生成 Hook'}</button><button className="outline-action" onClick={() => loadHistory(draft)}>查看历史</button><button className="outline-action" disabled={complianceBusy === draft.id || !loadSkillToggles().compliance} onClick={() => checkCompliance(draft)}>{complianceBusy === draft.id ? '检测中...' : '合规检查'}</button><button className="outline-action" disabled={busy} onClick={() => copyDraft(draft)}>复制草稿</button><button className="outline-action" disabled={deaiBusy === draft.id} onClick={() => deaiDraft(draft)}>{deaiBusy === draft.id ? '改写中...' : '去 AI 感改写'}</button></div>{deaiResults[draft.id] && <div className="deai-result"><div className="draft-check-top"><strong>去 AI 感改写预览</strong><small>建议人工过目后再替换</small></div><p>{deaiResults[draft.id]}</p><div className="deai-actions"><button className="primary-action" disabled={busy} onClick={() => { updateDraft(draft, { body: deaiResults[draft.id] }); setDeaiResults(current => { const next = { ...current }; delete next[draft.id]; return next }) }}>替换正文</button><button className="skip-action" onClick={() => setDeaiResults(current => { const next = { ...current }; delete next[draft.id]; return next })}>放弃</button></div></div>}</article>)}</div> : <div className="structure-empty"><p className="empty-state">还没有草稿。用上方组合生成面板组装第一份文案，或去选题助手生成选题。</p></div>}</>}</section>
 }
 
 type ProfileReview = { id: string; status: string; extracted: Record<string, unknown>; source_refs?: unknown[] }
-type ProfileHistory = { field: string; previous: unknown; next: unknown; created_at: string }
+type ProfileHistory = { field: string; previous: unknown; next: unknown; created_at: string; changed_at?: string }
 type ProfileDocument = { role?: string; audiences?: string[]; problems?: string[]; pillars?: string[]; viewpoints?: string[]; tone_preferences?: string[]; prohibited_patterns?: string[]; source_refs?: unknown[]; updated_at?: string; version?: number; history?: ProfileHistory[] }
 type PositioningDocument = { role?: string; positioning_statement?: string; monetization_goals?: string[]; acquisition_goals?: string[]; other_goals?: string[]; source_refs?: unknown[]; updated_at?: string; version?: number; history?: ProfileHistory[] }
 type EditableProfileField = { source: 'profile' | 'positioning'; key: string; label: string; list?: boolean }
@@ -1410,10 +1477,10 @@ function ProfileReviewPanel() {
     return <div className={`profile-field-value${prominent ? ' prominent' : ''}`}><div>{prominent ? <strong>{profileValues(value)}</strong> : <p>{profileValues(value)}</p>}</div><button className="profile-edit-button" aria-label={`编辑${field.label}`} onClick={() => startEdit(field.source, field.key, value)}><Pencil size={13} /> 编辑</button></div>
   }
   const pendingReviews = reviews.filter(item => item.status === 'pending')
-  const history = [...(profile?.history || []), ...(positioning?.history || [])].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 8)
+  const history = [...(profile?.history || []), ...(positioning?.history || [])].sort((a, b) => String(b.created_at || b.changed_at || '').localeCompare(String(a.created_at || a.changed_at || ''))).slice(0, 8)
   return <section className="workspace-view">
     <div className="workspace-view-head"><div><span className="section-kicker">ASSET / IP PROFILE</span><h2>IP 档案</h2><p>基础资料直接用于内容生成；后续访谈、素材和外部资料以增量变更进入审核。</p></div></div>
-    <section className="profile-base-panel"><div className="profile-panel-head"><div><span className="section-kicker">CONFIRMED BASE</span><h3>已确认基础档案</h3></div><span className="profile-status">已确认 · 可修改</span></div><div className="profile-identity"><div className="profile-identity-field"><span>身份定位</span>{fieldEditor({ source: 'profile', key: 'role', label: '身份定位' }, profile?.role || positioning?.role, true)}</div><div className="profile-identity-field"><span>核心定位语</span>{fieldEditor({ source: 'positioning', key: 'positioning_statement', label: '核心定位语' }, positioning?.positioning_statement, true)}</div></div><div className="profile-facts">{editableProfileFields.map(field => <div className="profile-fact" key={`${field.source}:${field.key}`}><span>{field.label}</span>{fieldEditor(field, field.source === 'profile' ? profile?.[field.key as keyof ProfileDocument] : positioning?.[field.key as keyof PositioningDocument])}</div>)}</div><small className="profile-source">来源：IP 定位档案 · {profile?.updated_at || positioning?.updated_at ? '已同步' : '初始化资料'} · 修改后立即用于内容生成</small>{history.length > 0 && <details className="profile-history"><summary>查看最近修改（{history.length}）</summary><div>{history.map((item, index) => <article key={`${item.created_at}-${item.field}-${index}`}><strong>{profileFieldName.get(item.field) || item.field}</strong><small>{new Date(item.created_at).toLocaleString('zh-CN')}</small><p><del>{profileValues(item.previous)}</del><span>→</span><ins>{profileValues(item.next)}</ins></p></article>)}</div></details>}</section>
+    <section className="profile-base-panel"><div className="profile-panel-head"><div><span className="section-kicker">CONFIRMED BASE</span><h3>已确认基础档案</h3></div><span className="profile-status">已确认 · 可修改</span></div><div className="profile-identity"><div className="profile-identity-field"><span>身份定位</span>{fieldEditor({ source: 'profile', key: 'role', label: '身份定位' }, profile?.role || positioning?.role, true)}</div><div className="profile-identity-field"><span>核心定位语</span>{fieldEditor({ source: 'positioning', key: 'positioning_statement', label: '核心定位语' }, positioning?.positioning_statement, true)}</div></div><div className="profile-facts">{editableProfileFields.map(field => <div className="profile-fact" key={`${field.source}:${field.key}`}><span>{field.label}</span>{fieldEditor(field, field.source === 'profile' ? profile?.[field.key as keyof ProfileDocument] : positioning?.[field.key as keyof PositioningDocument])}</div>)}</div><small className="profile-source">来源：IP 定位档案 · {profile?.updated_at || positioning?.updated_at ? '已同步' : '初始化资料'} · 修改后立即用于内容生成</small>{history.length > 0 && <details className="profile-history"><summary>查看最近修改（{history.length}）</summary><div>{history.map((item, index) => <article key={`${item.created_at}-${item.field}-${index}`}><strong>{profileFieldName.get(item.field) || item.field}</strong><small>{new Date(item.created_at || item.changed_at || '').toLocaleString('zh-CN')}</small><p><del>{profileValues(item.previous)}</del><span>→</span><ins>{profileValues(item.next)}</ins></p></article>)}</div></details>}</section>
     <section className="profile-pending-panel"><div className="profile-panel-head"><div><span className="section-kicker">PENDING CHANGES</span><h3>待审核变更</h3></div><span className="profile-count">{pendingReviews.length} 条</span></div><div className="asset-list">{pendingReviews.length ? pendingReviews.map(item => <article className="asset-row" key={item.id}><div><h3>{String(item.extracted.role || item.extracted.title || '待审核档案片段')}</h3><p>{Object.entries(item.extracted).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join('、') : String(value)}`).join(' · ')}</p><small>来源引用 {item.source_refs?.length || 0} 条 · 当前状态 待审核</small></div><div className="row-actions"><button className="skip-action" disabled={busy} onClick={() => review(item.id, 'rejected')}>拒绝</button><button className="primary-action" disabled={busy} onClick={() => review(item.id, 'approved')}>通过审核</button></div></article>) : <p className="empty-state">暂无待审核变更。完成未来访谈或导入素材后，新的档案信息会出现在这里。</p>}</div></section>
   </section>
 }
@@ -1421,7 +1488,7 @@ function ProfileReviewPanel() {
 type ShootingItem = { id: number; draft_id?: number; title: string; platform: string; status: string; script?: string; font_size?: number; scroll_speed?: number; version?: number; published_at?: string | null }
 type VisionCandidate = { resource_id: number; title: string; platform: string; published_at: string | null; match_reason: string; confidence: number }
 type VisionTask = { id: string; shooting_id: number | null; screenshot_file_ids: string[]; status: string; result?: unknown; error?: string | null; candidates?: VisionCandidate[]; match_status?: string; confirmed_snapshot_id?: number }
-type PerformanceSnapshot = { id: number; shooting_id: number; platform: string; published_at: string | null; captured_at: string; metrics: Record<string, number | null>; confidence: number | null; status: string }
+type PerformanceSnapshot = { id: number; shooting_id: number; platform: string; published_at: string | null; captured_at: string; metrics: Record<string, number | null>; confidence: number | null; status: string; retrospect?: { verdict: string; summary: string; lessons: string[]; drivers: string[]; rate?: number | null; provider: string; created_at: string } }
 
 const metricLabels: Record<string, string> = { views: '播放', likes: '点赞', comments: '评论', favorites: '收藏', shares: '转发', followers: '涨粉' }
 
@@ -1446,7 +1513,19 @@ function metricsFromVisionResult(result: unknown): Record<string, number | null>
 
 function PerformanceTimeline({ shooting, refreshKey }: { shooting: ShootingItem; refreshKey: number }) {
   const [snapshots, setSnapshots] = useState<PerformanceSnapshot[]>([])
+  const [retroBusy, setRetroBusy] = useState<number | null>(null)
+  const [retroMessage, setRetroMessage] = useState('')
   useEffect(() => { void apiJson<PerformanceSnapshot[]>(`/api/performance-snapshots?shooting_id=${shooting.id}`).then(setSnapshots).catch(() => setSnapshots([])) }, [shooting.id, refreshKey])
+  const retrospect = (snapshot: PerformanceSnapshot) => {
+    setRetroBusy(snapshot.id); setRetroMessage('')
+    void apiJson<{ snapshot: PerformanceSnapshot; memories_added: number }>(`/api/performance-snapshots/${snapshot.id}/retrospect`, { method: 'POST', body: '{}' })
+      .then(result => {
+        setSnapshots(current => current.map(item => item.id === result.snapshot.id ? result.snapshot : item))
+        setRetroMessage(result.memories_added > 0 ? `复盘完成，已沉淀 ${result.memories_added} 条反馈记忆，下次创作自动应用。` : '复盘已更新。')
+      })
+      .catch((error: unknown) => setRetroMessage(error instanceof Error && error.message ? error.message : '复盘失败，请稍后重试。'))
+      .finally(() => setRetroBusy(null))
+  }
   if (!snapshots.length) return <p className="empty-state performance-empty">尚无已确认的表现记录。</p>
   return <details className="performance-timeline" open><summary>表现时间线 · {snapshots.length} 次记录</summary><div>{snapshots.map((snapshot, index) => {
     const previous = snapshots[index + 1]
@@ -1455,8 +1534,130 @@ function PerformanceTimeline({ shooting, refreshKey }: { shooting: ShootingItem;
       const old = previous?.metrics[key]
       const delta = value !== null && typeof old === 'number' ? value - old : null
       return <span key={key}><small>{metricLabels[key] || key}</small><b>{value === null ? '未提供' : value.toLocaleString()}</b>{delta !== null && <i>{delta >= 0 ? '+' : ''}{delta.toLocaleString()}</i>}</span>
-    })}</div></article>
-  })}</div></details>
+    })}</div>{snapshot.retrospect && <div className="retrospect-panel"><span className={`retrospect-verdict verdict-${snapshot.retrospect.verdict}`}>{snapshot.retrospect.verdict === 'winner' ? '优于往常' : snapshot.retrospect.verdict === 'underperformed' ? '低于往常' : '表现持平'}</span><p>{snapshot.retrospect.summary}</p>{snapshot.retrospect.lessons.length > 0 && <ul>{snapshot.retrospect.lessons.map((lesson, lessonIndex) => <li key={lessonIndex}>{lesson}</li>)}</ul>}<small>来源：{snapshot.retrospect.provider === 'builtin' ? '规则复盘' : '大模型复盘'}</small></div>}{Object.keys(snapshot.metrics).length > 0 && !snapshot.retrospect && <button className="outline-action" disabled={retroBusy === snapshot.id} onClick={() => retrospect(snapshot)}>{retroBusy === snapshot.id ? '复盘生成中...' : '生成复盘'}</button>}</article>
+  })}{retroMessage && <p className="retro-message" role="status">{retroMessage}</p>}</div></details>
+}
+
+type CalendarEntry = { type: string; id: number; title: string; platform: string; status: string; date: string }
+
+function PublishCenter() {
+  const platforms = ['小红书', '抖音', '视频号', '公众号', 'B站', '快手', '今日头条', '微博', 'X']
+  const [drafts, setDrafts] = useState<DraftItem[]>([])
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [platform, setPlatform] = useState('小红书')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [confirmed, setConfirmed] = useState<string[]>([])
+
+  useEffect(() => { void apiJson<DraftItem[]>('/api/drafts').then(items => { setDrafts(items); setSelectedId(current => current ?? (items[0]?.id ?? null)) }).catch(() => undefined) }, [])
+  const selected = drafts.find(item => item.id === selectedId) || null
+  const adaptation = selected?.adaptations?.[platform] || null
+
+  const generate = () => {
+    if (!selected) { setMessage('还没有草稿，先去内容创作生成文案。'); return }
+    setBusy(true); setMessage(''); setConfirmed([])
+    void apiJson<DraftItem>(`/api/drafts/${selected.id}/adapt`, { method: 'POST', body: JSON.stringify({ platform }) })
+      .then(next => { setDrafts(current => current.map(item => item.id === next.id ? next : item)) })
+      .catch((error: unknown) => setMessage(error instanceof Error && error.message ? error.message : '适配失败，请稍后重试。'))
+      .finally(() => setBusy(false))
+  }
+
+  const copyVersion = () => {
+    if (!adaptation) return
+    const text = [adaptation.title, '', adaptation.body, adaptation.hashtags.length ? '\n' + adaptation.hashtags.join(' ') : ''].join('\n').trim()
+    void navigator.clipboard?.writeText(text)
+      .then(() => setMessage('已复制到剪贴板，去对应平台粘贴发布即可。'))
+      .catch(() => setMessage('复制失败，请手动选择文本复制。'))
+  }
+
+  return <section className="workspace-view">
+    <div className="workspace-view-head"><div><span className="section-kicker">PUBLISH / PUBLISHING CENTER</span><h2>发布中心</h2><p>一份母版，各平台自动适配格式与标签；发布前逐项确认，复制后去平台手动发布。</p></div></div>
+    <div className="structure-toolbar-row">
+      <select className="structure-sort" value={selectedId ?? ''} onChange={event => { setSelectedId(Number(event.target.value)); setConfirmed([]) }} aria-label="选择草稿">
+        {drafts.length ? drafts.map(draft => <option key={draft.id} value={draft.id}>{draft.title || `草稿 #${draft.id}`}（{draft.platform}）</option>) : <option value="">暂无草稿</option>}
+      </select>
+      <div className="publish-platform-tabs">{platforms.map(name => <button key={name} className={platform === name ? 'chip active' : 'chip'} onClick={() => { setPlatform(name); setConfirmed([]) }}>{name}</button>)}</div>
+      <button className="primary-action" disabled={busy} onClick={generate}>{busy ? '适配中...' : '生成本平台版本'}</button>
+    </div>
+    {adaptation ? <div className="publish-version">
+      <div className="publish-version-head"><strong>{platform} 版本</strong><small>{adaptation.provider === 'builtin' ? '规则适配' : '大模型适配'} · {new Date(adaptation.updated_at).toLocaleString('zh-CN')}</small></div>
+      <div className="publish-title">{adaptation.title}</div>
+      <textarea className="publish-body" value={adaptation.body} readOnly rows={8} aria-label="平台正文" />
+      {adaptation.hashtags.length > 0 && <div className="publish-tags">{adaptation.hashtags.map(tag => <span className="chip" key={tag}>{tag}</span>)}</div>}
+      <div className="publish-checklist"><strong>发布前检查</strong>{adaptation.checklist.map(entry => <label className="publish-check-row" key={entry.item}>
+        <input type="checkbox" checked={confirmed.includes(entry.item)} onChange={event => setConfirmed(current => event.target.checked ? [...current, entry.item] : current.filter(item => item !== entry.item))} />
+        <span className={`publish-check-status status-${entry.status === '通过' ? 'pass' : entry.status === '风险' ? 'risk' : entry.status === '注意' ? 'warn' : 'todo'}`}>{entry.status}</span>
+        <span>{entry.item}</span>{entry.detail && <small>{entry.detail}</small>}
+      </label>)}</div>
+      <div className="publish-actions"><button className="primary-action" onClick={copyVersion}>复制标题 + 正文 + 标签</button><small>{confirmed.length}/{adaptation.checklist.length} 项已确认</small></div>
+    </div> : <div className="structure-empty"><p className="empty-state">{selected ? `还没生成「${platform}」版本，点击右上角“生成本平台版本”。` : '还没有草稿，先去内容创作生成文案。'}</p></div>}
+    {message && <p className="skill-message" role="status">{message}</p>}
+  </section>
+}
+
+function ContentCalendar() {
+  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
+  const [entries, setEntries] = useState<CalendarEntry[]>([])
+  const [drafts, setDrafts] = useState<DraftItem[]>([])
+  const [scheduleDates, setScheduleDates] = useState<Record<number, string>>({})
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const load = (targetMonth: string) => {
+    void apiJson<{ entries: CalendarEntry[] }>(`/api/calendar?month=${targetMonth}`).then(result => setEntries(result.entries || [])).catch(() => setEntries([]))
+    void apiJson<DraftItem[]>('/api/drafts').then(setDrafts).catch(() => undefined)
+  }
+  useEffect(() => { load(month) }, [month])
+
+  const shiftMonth = (delta: number) => {
+    const [year, mon] = month.split('-').map(Number)
+    const next = new Date(year, mon - 1 + delta, 1)
+    setMonth(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`)
+  }
+  const [year, mon] = month.split('-').map(Number)
+  const firstWeekday = (new Date(year, mon - 1, 1).getDay() + 6) % 7
+  const daysInMonth = new Date(year, mon, 0).getDate()
+  const byDate = new Map<string, CalendarEntry[]>()
+  for (const entry of entries) { const list = byDate.get(entry.date) || []; list.push(entry); byDate.set(entry.date, list) }
+  const typeLabels: Record<string, string> = { draft: '草稿', shooting: '拍摄', topic: '选题', published: '已发' }
+
+  const schedule = (draft: DraftItem) => {
+    const date = scheduleDates[draft.id]
+    if (!date) { setMessage('请先选择日期。'); return }
+    setBusy(true); setMessage('')
+    void apiJson<DraftItem>(`/api/drafts/${draft.id}`, { method: 'PUT', body: JSON.stringify({ planned_date: date, version: draft.version }) })
+      .then(() => { setMessage(`《${draft.title}》已排期到 ${date}`); load(month) })
+      .catch(() => setMessage('排期失败，请稍后重试。'))
+      .finally(() => setBusy(false))
+  }
+
+  const unscheduled = drafts.filter(draft => !draft.planned_date && draft.status !== 'published')
+
+  return <section className="workspace-view">
+    <div className="workspace-view-head"><div><span className="section-kicker">PLAN / CONTENT CALENDAR</span><h2>内容日历</h2><p>草稿、拍摄与已发内容集中排期，节奏一目了然。</p></div>
+      <div className="calendar-nav"><button className="outline-action" onClick={() => shiftMonth(-1)}>上个月</button><strong>{year} 年 {mon} 月</strong><button className="outline-action" onClick={() => shiftMonth(1)}>下个月</button></div>
+    </div>
+    <div className="calendar-grid">
+      {['一', '二', '三', '四', '五', '六', '日'].map(day => <div className="calendar-weekday" key={day}>{day}</div>)}
+      {Array.from({ length: firstWeekday }, (_, index) => <div className="calendar-cell blank" key={`blank-${index}`} />)}
+      {Array.from({ length: daysInMonth }, (_, index) => {
+        const day = index + 1
+        const date = `${month}-${String(day).padStart(2, '0')}`
+        const dayEntries = byDate.get(date) || []
+        return <div className={`calendar-cell${dayEntries.length ? ' has-entries' : ''}`} key={date}><span className="calendar-day">{day}</span>{dayEntries.map(entry => <span className={`calendar-chip chip-${entry.type}`} key={`${entry.type}-${entry.id}`} title={entry.title}>{typeLabels[entry.type] || entry.type} · {entry.title.slice(0, 10)}</span>)}</div>
+      })}
+    </div>
+    <div className="calendar-legend"><span><i className="chip-draft" />草稿</span><span><i className="chip-shooting" />拍摄</span><span><i className="chip-topic" />选题</span></div>
+    {unscheduled.length > 0 && <div className="calendar-schedule">
+      <strong>待排期草稿</strong>
+      {unscheduled.map(draft => <div className="calendar-schedule-row" key={draft.id}>
+        <span>{draft.title || `草稿 #${draft.id}`}（{draft.platform}）</span>
+        <input type="date" value={scheduleDates[draft.id] || ''} onChange={event => setScheduleDates(current => ({ ...current, [draft.id]: event.target.value }))} aria-label="排期日期" />
+        <button className="outline-action" disabled={busy || !scheduleDates[draft.id]} onClick={() => schedule(draft)}>排期</button>
+      </div>)}
+    </div>}
+    {message && <p className="skill-message" role="status">{message}</p>}
+  </section>
 }
 
 function VisionConfirmationCard({ task, shooting, onChanged, onConfirmed }: { task: VisionTask; shooting: ShootingItem; onChanged: (task: VisionTask | null) => void; onConfirmed: () => void }) {
@@ -1551,21 +1752,27 @@ function ShootingWorkspace({ onClose }: { onClose: () => void }) {
 }
 
 function PasswordGate({ theme, font, onSuccess }: { theme: ThemeKey; font: FontKey; onSuccess: () => void }) {
+  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const submit = () => {
-    if (busy || !password) return
+    if (busy || !username || !password) return
     setBusy(true); setError('')
-    const request = window.desktopApp ? window.desktopApp.login(password) : apiJson('/api/auth/session', { method: 'POST', body: JSON.stringify({ password }) })
+    const request = window.desktopApp
+      ? window.desktopApp.login(password)
+      : mode === 'login'
+        ? apiJson('/api/auth/session', { method: 'POST', body: JSON.stringify({ username, password }) })
+        : apiJson('/api/auth/register', { method: 'POST', body: JSON.stringify({ username, password }) })
     void request
       .then(onSuccess)
-      .catch(() => setError('访问密码不正确，请重新输入。'))
+      .catch((err: unknown) => setError(err instanceof Error && err.message ? err.message : '登录失败，请稍后重试。'))
       .finally(() => setBusy(false))
   }
 
-  return <main className={`app theme-${theme} font-${font}`}><div className="password-gate"><div className="brand"><div className="brand-mark">定</div><div><strong>定位派</strong><span>个人 IP 内容成长平台</span></div></div><h1>输入访问密码</h1><p>这是一份私人的内容工作台，请输入访问密码继续。</p><form onSubmit={(event) => { event.preventDefault(); submit() }}><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="访问密码" autoFocus aria-label="访问密码" /><button className="primary-action" type="submit" disabled={busy || !password}>{busy ? '验证中...' : '进入工作台'} <ArrowUpRight size={16} /></button></form>{error && <p className="error-note" role="alert">{error}</p>}</div></main>
+  return <main className={`app theme-${theme} font-${font}`}><div className="password-gate"><div className="brand"><div className="brand-mark">定</div><div><strong>定位派</strong><span>个人 IP 内容成长平台</span></div></div><h1>{mode === 'login' ? '登录你的工作台' : '创建你的工作台'}</h1><p>{mode === 'login' ? '每位创作者的数据相互独立，登录后进入你自己的内容空间。' : '注册后你将拥有独立的数据空间，档案、素材与草稿只属于你。'}</p><form onSubmit={(event) => { event.preventDefault(); submit() }}><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="用户名（字母、数字、下划线或中划线）" autoFocus aria-label="用户名" autoComplete="username" /><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'register' ? '密码（至少 8 位）' : '密码'} autoFocus={false} aria-label="密码" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} /><button className="primary-action" type="submit" disabled={busy || !username || !password}>{busy ? (mode === 'login' ? '登录中...' : '注册中...') : (mode === 'login' ? '进入工作台' : '注册并进入')} <ArrowUpRight size={16} /></button></form><button className="skip-action" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError('') }}>{mode === 'login' ? '还没有账号？注册一个' : '已有账号？直接登录'}</button>{error && <p className="error-note" role="alert">{error}</p>}</div></main>
 }
 
 function Onboarding({ theme, setTheme, font, setFont, showThemes, setShowThemes, onEnter, onBack }: { theme: ThemeKey; setTheme: (theme: ThemeKey) => void; font: FontKey; setFont: (font: FontKey) => void; showThemes: boolean; setShowThemes: (value: boolean) => void; onEnter: () => void; onBack: () => void }) {

@@ -16,15 +16,15 @@ const mockServer = createServer((request, response) => {
   let body = ''
   request.on('data', chunk => { body += chunk })
   request.on('end', () => {
-    mockRequests.push({ url: request.url, authorization: request.headers.authorization || '', apiKey: request.headers['x-api-key'] || '' })
+    mockRequests.push({ url: request.url, method: request.method, authorization: request.headers.authorization || '', apiKey: request.headers['redfox_api_key'] || request.headers['x-api-key'] || '' })
     if (request.url.startsWith('/models')) {
       if (request.headers.authorization === 'Bearer good-key') { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'demo-model' }] })) }
       else { response.writeHead(401); response.end('{}') }
       return
     }
-    if (request.url.startsWith('/v1/trending')) {
+    if (request.url.startsWith('/story/api/hotKeyword/list')) {
       response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ items: [] }))
+      response.end(JSON.stringify({ code: 2000, msg: '成功', data: [] }))
       return
     }
     response.writeHead(404); response.end('{}')
@@ -77,7 +77,8 @@ test('API 中心连通测试与红狐配置透传', async t => {
   const redfoxOk = await fetch(`${baseUrl}/api/settings/test`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'redfox', base_url: mockUrl, api_key: 'fox-key' }) })
   assert.equal(redfoxOk.status, 200)
   assert.deepEqual(await redfoxOk.json(), { ok: true })
-  assert.match(mockRequests.at(-1).url, /^\/v1\/trending/)
+  assert.match(mockRequests.at(-1).url, /^\/story\/api\/hotKeyword\/list/)
+  assert.equal(mockRequests.at(-1).method, 'POST')
   assert.equal(mockRequests.at(-1).apiKey, 'fox-key')
 
   const unreachable = await fetch(`${baseUrl}/api/settings/test`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'llm', base_url: 'http://127.0.0.1:9', api_key: 'k' }) })
@@ -88,6 +89,7 @@ test('API 中心连通测试与红狐配置透传', async t => {
   const headerConfig = { 'content-type': 'application/json', 'x-redfox-base-url': mockUrl, 'x-redfox-api-key': 'header-fox-key' }
   const refresh = await fetch(`${baseUrl}/api/research/refresh`, { method: 'POST', headers: headerConfig, body: '{}' })
   assert.equal(refresh.status, 200)
-  const foxCall = mockRequests.filter(entry => entry.url.startsWith('/v1/trending')).at(-1)
+  const foxCall = mockRequests.filter(entry => entry.url.startsWith('/story/api/hotKeyword/list')).at(-1)
   assert.equal(foxCall.apiKey, 'header-fox-key')
+  assert.equal(foxCall.method, 'POST')
 })

@@ -74,9 +74,42 @@ export function publicApiConfig(config) {
   }
 }
 
-export function runtimeApiConfig(config, masterKey) {
-  if (!config?.enabled || !config.encrypted_api_key) return null
+export function runtimeApiConfig(config, masterKey, { requireEnabled = true } = {}) {
+  if ((requireEnabled && !config?.enabled) || !config?.encrypted_api_key) return null
   return { base_url: config.base_url, model: config.model, api_key: decryptApiKey(config.encrypted_api_key, masterKey) }
+}
+
+export function updateRedfoxConfig(existing, input, masterKey) {
+  const apiKey = input.api_key === undefined ? null : String(input.api_key).trim()
+  const encryptedApiKey = apiKey ? encryptApiKey(apiKey, masterKey) : existing?.encrypted_api_key
+  const baseUrl = input.base_url === undefined ? existing?.base_url : String(input.base_url || '').trim()
+  if (encryptedApiKey && !baseUrl) throw new Error('红狐 Base URL 不能为空')
+  return {
+    slot: 'redfox',
+    role: 'redfox',
+    base_url: encryptedApiKey ? normalizedBaseUrl(baseUrl) : '',
+    encrypted_api_key: encryptedApiKey || null,
+    api_key_masked: encryptedApiKey ? maskApiKey(apiKey || decryptApiKey(encryptedApiKey, masterKey)) : '',
+    updated_at: new Date().toISOString(),
+  }
+}
+
+export function publicRedfoxConfig(config) {
+  return {
+    base_url: config?.base_url || '',
+    configured: Boolean(config?.encrypted_api_key),
+    api_key_masked: config?.api_key_masked || '',
+    updated_at: config?.updated_at || null,
+  }
+}
+
+export function runtimeRedfoxConfig(config, masterKey) {
+  if (!config?.encrypted_api_key) return null
+  return { base_url: config.base_url, api_key: decryptApiKey(config.encrypted_api_key, masterKey) }
+}
+
+export function emptyPublicRedfoxConfig() {
+  return publicRedfoxConfig(null)
 }
 
 export function emptyPublicApiConfigs() {

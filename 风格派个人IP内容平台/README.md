@@ -33,7 +33,7 @@ public/sw.js          # Service Worker（缓存版本 dingweipai-shell-v3）
 server/index.mjs      # 全部 API 路由 + 业务逻辑 + 静态托管
 server/mysql.mjs      # MySQL 适配层（collection 读写）
 server/redfox.mjs     # 红狐 API 适配（x-redfox-api-key 头透传 + demo 双轨）
-server/*.test.mjs     # Node 原生测试（当前全量 119 个）
+server/*.test.mjs     # Node 原生测试（当前全量 129 个）
 desktop/              # 桌面壳（Electron）
 scripts/import-benchmark.mjs # 对标账号资料包导入器（方法库/素材原子/AI 记忆）
 scripts/benchmarks/   # 对标账号资料包（如 dontbesilent.json）
@@ -55,13 +55,19 @@ npm run dev
 
 前端通过 `/api` 前缀访问 API（Vite 代理）。端口冲突时：`API_PROXY_TARGET=http://localhost:3002 npm run dev`。
 
+### Windows 一键启动
+
+完成一次 `npm install` 后，双击项目根目录的 `一键启动.bat`。脚本会隐藏启动 API 和前端，等待服务就绪后自动打开 `http://127.0.0.1:5173/`。API、前端和启动器输出统一写入根目录的 `local-app.log`。
+
+重复双击会复用已经正常运行的 3001/5173 服务。本脚本只负责启动；如需关闭，请在任务管理器中结束对应 Node.js 进程。
+
 ## 验证（改代码后必跑）
 
 ```bash
 npm run verify
 ```
 
-完整链 = `node --test`（当前 119 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
+完整链 = `node --test`（当前 129 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
 
 新增后端功能必须在 `server/*.test.mjs` 补测试；新增前端能力在 `server/web-assets.test.mjs` 加特征断言（该测试读取 src 源码验证关键类名/组件存在）。
 

@@ -51,6 +51,10 @@ test('session 支持创建、复用和注销', async t => {
   assert.equal(forbiddenOrigin.status, 403)
   assert.equal((await forbiddenOrigin.json()).error, '请求来源不被允许')
 
+  const loopbackOrigin = await fetch(`${baseUrl}/api/auth/session`, { headers: { origin: 'http://127.0.0.1:5173' } })
+  assert.equal(loopbackOrigin.status, 200)
+  assert.equal(loopbackOrigin.headers.get('access-control-allow-origin'), 'http://127.0.0.1:5173')
+
   const created = await fetch(`${baseUrl}/api/auth/session`, {
     method: 'POST',
     headers: { 'x-user-id': 'integration-user' },
@@ -454,21 +458,51 @@ test('API 超过配置限额后返回 429 并携带请求追踪 ID', async t => 
   assert.match(second.headers.get('x-request-id'), /^[0-9a-f-]{36}$/)
 })
 
-test('生产模式未配置访问密码时直接开放访问', async t => {
+test('生产模式默认账号制：未登录拦截、注册、登录与数据隔离', async t => {
   const productionPort = port + 1000
   const server = await startServer({ serverPort: productionPort, nodeEnv: 'production' })
   t.after(() => server.kill())
+  const prodBase = `http://127.0.0.1:${productionPort}`
 
-  const probe = await fetch(`http://127.0.0.1:${productionPort}/api/auth/session`)
-  assert.equal(probe.status, 200)
-  assert.deepEqual(await probe.json(), { auth_required: false })
+  const probe = await fetch(`${prodBase}/api/auth/session`)
+  assert.equal(probe.status, 401)
+  assert.deepEqual(await probe.json(), { error: '需要登录', auth_required: true, registration_open: true })
 
-  const profile = await fetch(`http://127.0.0.1:${productionPort}/api/profile`)
-  assert.equal(profile.status, 200)
+  const gatedProfile = await fetch(`${prodBase}/api/profile`)
+  assert.equal(gatedProfile.status, 401)
 
-  const created = await fetch(`http://127.0.0.1:${productionPort}/api/auth/session`, { method: 'POST' })
-  assert.equal(created.status, 200)
-  assert.equal((await created.json()).user_id, 'owner')
+  const registerA = await fetch(`${prodBase}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'AliceBeta', password: 'password-123' }) })
+  assert.equal(registerA.status, 200)
+  assert.equal((await registerA.json()).user_id, 'alicebeta')
+  const cookieA = registerA.headers.get('set-cookie').split(';', 1)[0]
+
+  const registerDuplicate = await fetch(`${prodBase}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'alicebeta', password: 'password-456' }) })
+  assert.equal(registerDuplicate.status, 409)
+
+  const registerShortPassword = await fetch(`${prodBase}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'bobby', password: 'short' }) })
+  assert.equal(registerShortPassword.status, 422)
+
+  const registerB = await fetch(`${prodBase}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'bobby', password: 'password-456' }) })
+  assert.equal(registerB.status, 200)
+  const cookieB = registerB.headers.get('set-cookie').split(';', 1)[0]
+
+  const profileA = await fetch(`${prodBase}/api/profile`, { method: 'PUT', headers: { cookie: cookieA, 'content-type': 'application/json' }, body: JSON.stringify({ role: 'A 的身份定位' }) })
+  assert.equal(profileA.status, 200)
+
+  const memoryA = await fetch(`${prodBase}/api/memories`, { method: 'POST', headers: { cookie: cookieA, 'content-type': 'application/json' }, body: JSON.stringify({ memory_type: 'style', content: 'A 的风格记忆' }) })
+  assert.equal(memoryA.status, 201)
+
+  const profileB = await fetch(`${prodBase}/api/profile`, { headers: { cookie: cookieB } }).then(response => response.json())
+  assert.equal(profileB.role, '')
+  const memoriesB = await fetch(`${prodBase}/api/memories`, { headers: { cookie: cookieB } }).then(response => response.json())
+  assert.equal(memoriesB.length, 0)
+
+  const badLogin = await fetch(`${prodBase}/api/auth/session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'alicebeta', password: 'wrong-pass-1' }) })
+  assert.equal(badLogin.status, 401)
+
+  const goodLogin = await fetch(`${prodBase}/api/auth/session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'AliceBeta', password: 'password-123' }) })
+  assert.equal(goodLogin.status, 200)
+  assert.equal((await goodLogin.json()).user_id, 'alicebeta')
 })
 
 test('production access password gates the session', async t => {
