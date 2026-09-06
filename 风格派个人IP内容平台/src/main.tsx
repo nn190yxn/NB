@@ -16,6 +16,7 @@ import {
   Library,
   List,
   Menu,
+  MessageSquare,
   MoreHorizontal,
   PenLine,
   Pause,
@@ -106,6 +107,14 @@ function App() {
   const [focusedResearchId, setFocusedResearchId] = useState<number | null>(null)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [authState, setAuthState] = useState<'checking' | 'ok' | 'need-password'>('checking')
+  const [showFeedback, setShowFeedback] = useState(false)
+  const [feedbackUnread, setFeedbackUnread] = useState(0)
+
+  useEffect(() => {
+    void apiJson<{ is_admin: boolean; items: { status: string }[] }>('/api/feedback')
+      .then(result => setFeedbackUnread(result.is_admin ? result.items.filter(item => item.status !== 'resolved').length : 0))
+      .catch(() => undefined)
+  }, [showFeedback])
 
   useEffect(() => {
     window.localStorage.setItem('dingweipai:font', font)
@@ -203,7 +212,8 @@ function App() {
           {navItems.map(({ label, icon: Icon }) => <button className={activeNav === label ? 'nav-item active' : 'nav-item'} onClick={() => label === '定位发现' ? setShowOnboarding(true) : label === '热点研究' ? openResearch() : setActiveNav(label)} key={label}><Icon size={17} /><span>{label}</span>{label === '热点研究' && <b>12</b>}</button>)}
           <span className="nav-label secondary">资产</span>
            <button className={showShooting ? 'nav-item active' : 'nav-item'} onClick={() => setShowShooting(true)}><Video size={17} /><span>今日拍摄</span><b className="count-soft">{shootingCount}</b></button>
-           <button className={activeNav === 'IP 档案' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveNav('IP 档案')}><BookOpen size={17} /><span>IP 档案</span></button>
+            <button className={activeNav === 'IP 档案' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveNav('IP 档案')}><BookOpen size={17} /><span>IP 档案</span></button>
+            <button className="nav-item" onClick={() => setShowFeedback(true)}><MessageSquare size={17} /><span>反馈</span>{(feedbackUnread > 0) && <b>{feedbackUnread}</b>}</button>
         </nav>
          <div className="sidebar-bottom"><button className="nav-item" onClick={() => setShowSyncManager(true)}><FolderOpen size={17} /><span>桌面同步</span>{pendingSync > 0 && <b>{pendingSync}</b>}</button><button className="nav-item" onClick={() => setShowSettings(true)}><Settings2 size={17} /><span>工作台设置</span></button><button className="user-chip" onClick={logout} title="退出当前会话"><div className="avatar">姚</div><div><strong>小姚哥</strong><span>创业过来人</span></div><MoreHorizontal size={16} /></button></div>
       </aside>
@@ -213,6 +223,7 @@ function App() {
            <div className="page-content">{(!online || pendingSync > 0) && <div className="offline-banner" role="status">{online ? `有 ${pendingSync} 个素材等待同步。` : '当前处于离线状态，已加载内容仍可查看。'} <button onClick={syncNow} disabled={!online || syncing}>{syncing ? '同步中...' : '立即同步'}</button></div>}{conflicts.length > 0 && <div className="conflict-banner" role="alert"><strong>{conflicts.length} 个内容版本发生冲突</strong>{conflicts.map(conflict => <span key={conflict.id}>{conflict.resource_type === 'draft' ? '草稿' : '拍摄清单'} #{conflict.resource_id}<button onClick={() => resolveConflict(conflict, 'local')}>保留本地</button><button onClick={() => resolveConflict(conflict, 'remote')}>保留远端</button></span>)}</div>}
             {showReview && <StrategyReview ratios={strategyRatios} onApply={() => { saveStrategy([40, 35, 25]); setShowReview(false) }} onClose={() => setShowReview(false)} />}
             {showSettings && <SettingsPanel theme={theme} setTheme={setTheme} font={font} setFont={setFont} onClose={() => setShowSettings(false)} />}
+            {showFeedback && <FeedbackPanel page={activeNav} onClose={() => setShowFeedback(false)} />}
             {showSyncManager && <SyncManagementPanel onClose={() => setShowSyncManager(false)} onSync={syncNow} syncing={syncing} />}
             {showShooting && <ShootingWorkspace onClose={() => setShowShooting(false)} />}
             {activeNav === '今日工作台' ? <>
@@ -378,6 +389,70 @@ function SyncManagementPanel({ onClose, onSync, syncing }: { onClose: () => void
 }
 
 const emptyServerApis = Object.fromEntries((Object.keys(apiSlotLabels) as ApiSlot[]).map(slot => [slot, { slot, role: slot, enabled: false, base_url: '', model: '', api_key: '', api_key_masked: '', configured: false }])) as Record<ApiSlot, EditableApiConfig>
+
+type FeedbackItem = { id: string; username: string; type: 'bug' | 'feature'; title: string; description: string; page?: string; status: 'open' | 'acknowledged' | 'resolved'; created_at: string }
+const feedbackStatusLabels: Record<string, string> = { open: '待处理', acknowledged: '已受理', resolved: '已解决' }
+
+function FeedbackPanel({ page, onClose }: { page: string; onClose: () => void }) {
+  const [type, setType] = useState<'bug' | 'feature'>('bug')
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [items, setItems] = useState<FeedbackItem[]>([])
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const load = () => {
+    void apiJson<{ is_admin: boolean; items: FeedbackItem[] }>('/api/feedback')
+      .then(result => { setItems(result.items || []); setIsAdmin(result.is_admin) })
+      .catch(() => undefined)
+  }
+  useEffect(() => { load() }, [])
+
+  const submit = () => {
+    if (!title.trim() || !description.trim()) { setMessage('请填写标题和描述。'); return }
+    setBusy(true); setMessage('')
+    void apiJson('/api/feedback', { method: 'POST', body: JSON.stringify({ type, title: title.trim(), description: description.trim(), page }) })
+      .then(() => { setMessage('已提交，谢谢反馈！'); setTitle(''); setDescription(''); load() })
+      .catch((error: unknown) => setMessage(error instanceof Error && error.message ? error.message : '提交失败，请稍后重试。'))
+      .finally(() => setBusy(false))
+  }
+
+  const setStatus = (id: string, status: 'acknowledged' | 'resolved' | 'open') => {
+    void apiJson(`/api/feedback/${id}`, { method: 'PUT', body: JSON.stringify({ status }) }).then(load).catch(() => undefined)
+  }
+
+  return <div className="settings-overlay" onClick={onClose}><div className="settings-modal feedback-modal" onClick={event => event.stopPropagation()}>
+    <div className="settings-head"><h2>反馈</h2><button className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></div>
+    <p className="settings-privacy">用着不顺手、发现了 Bug、想要新功能，都直接写在这里。反馈直达开发者，处理进度会显示在下方。</p>
+    <div className="feedback-form">
+      <div className="memory-filter">
+        <button className={type === 'bug' ? 'chip active' : 'chip'} onClick={() => setType('bug')}>Bug 反馈</button>
+        <button className={type === 'feature' ? 'chip active' : 'chip'} onClick={() => setType('feature')}>功能建议</button>
+      </div>
+      <input value={title} onChange={event => setTitle(event.target.value)} placeholder="一句话说清问题或想法（必填）" maxLength={80} aria-label="反馈标题" />
+      <textarea value={description} onChange={event => setDescription(event.target.value)} placeholder={`具体描述：做了什么、期望什么、实际发生了什么。${type === 'bug' ? '如果能附上操作步骤就更好了。' : ''}`} rows={4} maxLength={2000} aria-label="反馈描述" />
+      <div className="feedback-form-foot"><small>当前页面：{page}</small><button className="primary-action" disabled={busy || !title.trim() || !description.trim()} onClick={submit}>{busy ? '提交中...' : '提交反馈'}</button></div>
+      {message && <p className="memory-message" role="status">{message}</p>}
+    </div>
+    <div className="feedback-list">
+      <h3>{isAdmin ? '全部反馈（管理员）' : '我的反馈'}</h3>
+      {items.length ? items.map(item => <article className="feedback-item" key={item.id}>
+        <div className="feedback-item-head">
+          <span className={`feedback-type ${item.type}`}>{item.type === 'bug' ? 'Bug' : '建议'}</span>
+          <strong>{item.title}</strong>
+          <span className={`feedback-status status-${item.status}`}>{feedbackStatusLabels[item.status]}</span>
+        </div>
+        <p>{item.description}</p>
+        <small>{item.username}{item.page ? ` · ${item.page}` : ''} · {new Date(item.created_at).toLocaleString('zh-CN')}</small>
+        {isAdmin && <div className="feedback-admin-actions">
+          <button className="skip-action" disabled={item.status === 'acknowledged'} onClick={() => setStatus(item.id, 'acknowledged')}>标记受理</button>
+          <button className="outline-action" disabled={item.status === 'resolved'} onClick={() => setStatus(item.id, 'resolved')}>标记解决</button>
+        </div>}
+      </article>) : <p className="empty-state">还没有反馈记录。</p>}
+    </div>
+  </div></div>
+}
 
 function SettingsPanel({ theme, setTheme, font, setFont, onClose }: { theme: ThemeKey; setTheme: (theme: ThemeKey) => void; font: FontKey; setFont: (font: FontKey) => void; onClose: () => void }) {
   const [legacySettings] = useState<ApiSettings>(loadApiSettings)

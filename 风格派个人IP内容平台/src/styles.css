@@ -167,3 +167,26 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .deai-result p { margin: 0; white-space: pre-wrap; font-size: .92rem; }
 .deai-actions { display: flex; gap: 10px; }
 .fit-chip { font-size: .72rem; padding: 2px 8px; border-radius: 999px; background: rgba(46,164,79,.14); color: #2ea44f; white-space: nowrap; cursor: help; }
+
+/* 反馈面板 */
+.feedback-modal { max-width: 620px; width: min(620px, 94vw); max-height: 88vh; overflow-y: auto; }
+.settings-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.feedback-form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.feedback-form input, .feedback-form textarea { width: 100%; border-radius: 10px; border: 1px solid var(--border-color, rgba(0,0,0,.12)); padding: 10px 12px; font: inherit; background: transparent; color: inherit; }
+.feedback-form textarea { resize: vertical; }
+.feedback-form-foot { display: flex; justify-content: space-between; align-items: center; }
+.feedback-form-foot small { opacity: .6; }
+.feedback-list { margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
+.feedback-list h3 { margin: 4px 0; }
+.feedback-item { border: 1px solid var(--border-color, rgba(0,0,0,.1)); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.feedback-item-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.feedback-item p { margin: 0; white-space: pre-wrap; font-size: .9rem; }
+.feedback-item small { opacity: .6; }
+.feedback-type { font-size: .72rem; padding: 2px 8px; border-radius: 999px; }
+.feedback-type.bug { background: rgba(218,54,51,.14); color: #da3633; }
+.feedback-type.feature { background: rgba(46,164,79,.15); color: #2ea44f; }
+.feedback-status { font-size: .72rem; padding: 2px 8px; border-radius: 999px; margin-left: auto; }
+.feedback-status.status-open { background: rgba(246,195,68,.2); color: #a07f1a; }
+.feedback-status.status-acknowledged { background: rgba(76,157,240,.16); color: #3a7fc0; }
+.feedback-status.status-resolved { background: rgba(46,164,79,.16); color: #2ea44f; }
+.feedback-admin-actions { display: flex; gap: 8px; }

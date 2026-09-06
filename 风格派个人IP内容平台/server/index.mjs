@@ -1,5 +1,6 @@
 import { createServer } from 'node:http'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { normalizeMaterialFormat, parseMaterialContent, profileGaps, validateDraftUpdate, validRatios, validateMaterialInput, validateSourceRefs } from './validation.mjs'
@@ -17,6 +18,16 @@ import { approveDraftRecord, defaultApproval, revokeDraftRecord, validateApprova
 
 const port = Number(process.env.PORT || 3001)
 const sessions = new Map()
+
+const crashLogFile = join(process.cwd(), 'logs', 'crash.log')
+try { mkdirSync(join(process.cwd(), 'logs'), { recursive: true }) } catch { /* read-only cwd: crash log disabled */ }
+process.on('unhandledRejection', reason => {
+  try { appendFileSync(crashLogFile, `${new Date().toISOString()} unhandledRejection ${(reason && reason.stack) || String(reason)}\n`) } catch { /* logging must never crash the process */ }
+})
+process.on('uncaughtException', error => {
+  try { appendFileSync(crashLogFile, `${new Date().toISOString()} uncaughtException ${error.stack || error}\n`) } catch { /* ignore */ }
+  process.exit(1)
+})
 const developmentMode = process.env.NODE_ENV !== 'production'
 const allowedOrigin = process.env.APP_ORIGIN || 'http://localhost:5173'
 const allowedOrigins = new Set([allowedOrigin])
@@ -64,6 +75,7 @@ const defaultState = {
   profile_reviews: [],
   users: [],
   usage_daily: [],
+  feedback: [],
   materials: [],
   research: [],
   structures: [],
@@ -111,6 +123,7 @@ const state = {
   memories: persistedState.memories || [],
   users: persistedState.users || [],
   usage_daily: persistedState.usage_daily || [],
+  feedback: persistedState.feedback || [],
   sync_directories: persistedState.sync_directories || [], devices: persistedState.devices || [], private_files: persistedState.private_files || [], api_configs: persistedState.api_configs || [], vision_tasks: persistedState.vision_tasks || [], performance_snapshots: persistedState.performance_snapshots || [],
 }
 for (const collection of ['users', 'materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'sync_directories', 'devices', 'private_files', 'api_configs', 'vision_tasks', 'performance_snapshots']) {
@@ -190,6 +203,7 @@ function runtimeConfig(request, slot) {
 const redfoxDailyLimit = Number(process.env.REDFOX_DAILY_LIMIT || 10)
 const llmDailyLimit = Number(process.env.LLM_DAILY_LIMIT || 20)
 const sharedLlm = { base_url: process.env.PROJECT_LLM_BASE_URL || '', api_key: process.env.PROJECT_LLM_API_KEY || '', model: process.env.PROJECT_LLM_MODEL || '' }
+const adminUsernames = String(process.env.ADMIN_USERNAMES || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean)
 
 function cstDayKey() { return new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10) }
 function quotaUsed(request, kind) {
@@ -890,6 +904,34 @@ const server = createServer(async (request, response) => {
         redfox: { used: quotaUsed(request, 'redfox'), limit: redfoxDailyLimit, shared: !hasAccountRedfox(request) },
         llm: { used: quotaUsed(request, 'llm'), limit: llmDailyLimit, shared: !hasAccountLlm(request) },
       })
+    }
+    if (url.pathname === '/api/feedback' && request.method === 'GET') {
+      const isAdmin = adminUsernames.includes(String(userId(request)).toLowerCase())
+      const items = (isAdmin ? state.feedback : owned('feedback', request)).slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 100)
+      return send(response, 200, { is_admin: isAdmin, items })
+    }
+    if (url.pathname === '/api/feedback' && request.method === 'POST') {
+      const body = await readJson(request)
+      const type = body.type === 'feature' ? 'feature' : 'bug'
+      const title = String(body.title || '').trim()
+      const description = String(body.description || '').trim()
+      if (!title || title.length > 80) return send(response, 422, { error: '请填写不超过 80 字的标题' })
+      if (!description || description.length > 2000) return send(response, 422, { error: '请填写不超过 2000 字的描述' })
+      const item = { id: randomUUID(), owner_id: userId(request), username: userId(request), type, title, description, page: String(body.page || '').slice(0, 40), user_agent: String(request.headers['user-agent'] || '').slice(0, 180), status: 'open', created_at: new Date().toISOString() }
+      state.feedback.push(item)
+      await saveState('feedback')
+      return send(response, 201, item)
+    }
+    const feedbackMatch = url.pathname.match(/^\/api\/feedback\/([0-9a-f-]{36})$/)
+    if (feedbackMatch && request.method === 'PUT') {
+      if (!adminUsernames.includes(String(userId(request)).toLowerCase())) return send(response, 403, { error: '仅管理员可更新反馈状态' })
+      const item = state.feedback.find(entry => entry.id === feedbackMatch[1])
+      if (!item) return send(response, 404, { error: '反馈不存在' })
+      const body = await readJson(request)
+      if (!['open', 'acknowledged', 'resolved'].includes(body.status)) return send(response, 422, { error: '无效的反馈状态' })
+      item.status = body.status
+      await saveState('feedback')
+      return send(response, 200, item)
     }
     if (url.pathname === '/api/calendar' && request.method === 'GET') {
       const monthParam = url.searchParams.get('month') || ''
