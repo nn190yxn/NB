@@ -180,3 +180,9 @@ node scripts/import-benchmark.mjs scripts/benchmarks/dontbesilent.json
 2. 仪表盘数字统计卡（4 列核心指标）
 3. 相似账号对标深化
 4. 记忆层升级评估（腾讯 Agent Memory / Mem0，provider 字段已预留）
+
+## 更新记录
+
+所有版本变更、功能上线与部署记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+> **多 Agent 协作约定**：CHANGELOG 为追加式日志——新条目加在最上方（`## YYYY-MM-DD · 主题`），**禁止修改或删除历史条目**；README 只维护"当前状态"，历史过程一律写入 CHANGELOG。
