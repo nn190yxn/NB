@@ -46,7 +46,7 @@ function startServer(extraEnv = {}) {
   })
 }
 
-test('红狐 Skill：无配置走演示数据双轨，六条路由可用', async t => {
+test('红狐 Skill：无配置时研究走演示数据、合规走本地词库，六条路由可用', async t => {
   const server = await startServer()
   t.after(() => server.kill())
 
@@ -65,7 +65,7 @@ test('红狐 Skill：无配置走演示数据双轨，六条路由可用', async
 
   const draft = (await (await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers, body: JSON.stringify({ topic: { title: '最好的一课' } }) })).json())[0]
   const compliance = await (await fetch(`${baseUrl}/api/drafts/${draft.id}/compliance`, { method: 'POST', headers, body: JSON.stringify({}) })).json()
-  assert.equal(compliance.source, 'demo')
+  assert.equal(compliance.source, 'builtin')
   assert.ok(compliance.hits.some(hit => hit.word === '最好'))
 
   const suggest = await (await fetch(`${baseUrl}/api/research/suggest`, { headers })).json()

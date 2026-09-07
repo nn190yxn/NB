@@ -2,6 +2,24 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { collectionNames, loadCollections, loadMysqlState, loadUserDocs, migrateMysql, mysqlConfig, saveCollections, saveMysqlState, saveUserDocs } from './mysql.mjs'
 
+test('账号 API 配置进入默认保存白名单并重新加载，保留账号隔离', async () => {
+  assert.ok(collectionNames.includes('api_configs'))
+  const rows = []
+  const pool = { execute: async (sql, params) => {
+    if (sql.startsWith('SELECT collection,')) return [structuredClone(rows), []]
+    if (sql.includes('INSERT INTO ip_collections')) {
+      const [collection, item_id, owner_id, data] = params
+      rows.push({ collection, item_id, owner_id, data: JSON.parse(data) })
+    }
+    return [[], []]
+  } }
+  const configs = ['alice', 'bob'].map(owner_id => ({ id: 'text_primary', owner_id, encrypted_api_key: `cipher-${owner_id}` }))
+  await saveCollections(pool, { api_configs: configs })
+  const reloaded = await loadCollections(pool)
+  assert.deepEqual(reloaded.api_configs, configs)
+  assert.equal(rows.length, 2)
+})
+
 test('mysqlConfig reads project-owned variables without exposing defaults', () => {
   const config = mysqlConfig({
     PROJECT_DB_HOST: '127.0.0.1',

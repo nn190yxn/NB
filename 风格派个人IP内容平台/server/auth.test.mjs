@@ -1,3 +1,7 @@
+import { after } from 'node:test'
+import { startGenerationMock } from './generation-test-helper.mjs'
+const generationMock = await startGenerationMock()
+after(() => generationMock.close())
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -13,7 +17,7 @@ writeFileSync(testDataFile, '{}')
 function startServer({ serverPort = port, nodeEnv = 'test', extraEnv = {} } = {}) {
   const child = spawn(process.execPath, ['server/index.mjs'], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(serverPort), NODE_ENV: nodeEnv, DATA_FILE: testDataFile, ...extraEnv },
+    env: { ...process.env, ...generationMock.env, PORT: String(serverPort), NODE_ENV: nodeEnv, DATA_FILE: testDataFile, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return new Promise((resolve, reject) => {
@@ -30,6 +34,17 @@ function startServer({ serverPort = port, nodeEnv = 'test', extraEnv = {} } = {}
     })
   })
 }
+
+test('未配置模型时定位生成明确失败，不返回固定模板', async t => {
+  const server = await startServer({ extraEnv: { PROJECT_LLM_BASE_URL: '', PROJECT_LLM_API_KEY: '', PROJECT_LLM_MODEL: '' } })
+  t.after(() => server.kill())
+  const headers = { 'x-user-id': 'no-model-user', 'content-type': 'application/json' }
+  await fetch(`${baseUrl}/api/positioning`, { method: 'PUT', headers, body: JSON.stringify({ interview_answers: { 0: '真实经历' } }) })
+  const result = await fetch(`${baseUrl}/api/positioning/candidates`, { method: 'POST', headers })
+  assert.equal(result.status, 422)
+  assert.equal((await result.json()).code, 'MISSING_CONFIG')
+  assert.deepEqual(await (await fetch(`${baseUrl}/api/positioning/candidates`, { headers })).json(), [])
+})
 
 test('session 支持创建、复用和注销', async t => {
   const server = await startServer()
@@ -88,7 +103,7 @@ test('session 支持创建、复用和注销', async t => {
   const saved = await fetch(`${baseUrl}/api/positioning`, {
     method: 'PUT',
     headers: { cookie, 'content-type': 'application/json' },
-    body: JSON.stringify({ interview_answers: { proof: 'owned-by-integration-user' } }),
+    body: JSON.stringify({ interview_answers: { proof: 'owned-by-integration-user', 0: '我做过内容咨询项目', 1: '擅长拆解方法', 2: '创业者' } }),
   })
   assert.equal(saved.status, 200)
 
@@ -220,12 +235,29 @@ test('session 支持创建、复用和注销', async t => {
   const candidates = await candidatesResponse.json()
   assert.equal(candidates.length, 3)
   assert.ok(candidates.every(item => item.source_refs.length))
+  for (const mode of ['failed', 'invalid']) {
+    generationMock.setMode(mode)
+    const failed = await fetch(`${baseUrl}/api/positioning/candidates`, { method: 'POST', headers: { cookie } })
+    assert.equal(failed.status, 502)
+    assert.deepEqual(await (await fetch(`${baseUrl}/api/positioning/candidates`, { headers: { cookie } })).json(), candidates)
+  }
+  generationMock.setMode('success')
   const confirmedCandidate = await fetch(`${baseUrl}/api/positioning/candidates/${candidates[0].id}`, {
     method: 'PUT',
     headers: { cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ status: 'confirmed' }),
   })
   assert.equal(confirmedCandidate.status, 200)
+  const filledProfile = await (await fetch(`${baseUrl}/api/profile`, { headers: { cookie } })).json()
+  assert.equal(filledProfile.role, '内容顾问')
+  const repeatConfirm = await fetch(`${baseUrl}/api/positioning/candidates/${candidates[0].id}`, { method: 'PUT', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ status: 'confirmed' }) })
+  assert.equal(repeatConfirm.status, 200)
+  assert.deepEqual(await (await fetch(`${baseUrl}/api/profile`, { headers: { cookie } })).json(), filledProfile)
+  assert.equal((await (await fetch(`${baseUrl}/api/positioning/candidates`, { headers: { cookie } })).json()).length, 3)
+  assert.deepEqual(await (await fetch(`${baseUrl}/api/positioning/candidates`, { headers: { cookie: otherCookie } })).json(), [])
+  await fetch(`${baseUrl}/api/positioning`, { method: 'PUT', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ interview_answers: { 0: '更新的经历' } }) })
+  const staleConfirm = await fetch(`${baseUrl}/api/positioning/candidates/${candidates[0].id}`, { method: 'PUT', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ status: 'confirmed' }) })
+  assert.equal(staleConfirm.status, 409)
 
   const keywordResponse = await fetch(`${baseUrl}/api/positioning/generate-keywords`, {
     method: 'POST',

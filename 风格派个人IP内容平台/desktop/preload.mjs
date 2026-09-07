@@ -7,7 +7,7 @@ const invoke = (channel, ...args) => {
 }
 
 contextBridge.exposeInMainWorld('desktopApp', Object.freeze({
-  login: password => invoke(IPC_CHANNELS.login, password),
+  login: credentials => invoke(IPC_CHANNELS.login, credentials),
   refreshSession: () => invoke(IPC_CHANNELS.refresh),
   logout: () => invoke(IPC_CHANNELS.clearSession),
   setLaunchAtLogin: enabled => invoke(IPC_CHANNELS.setLaunchAtLogin, enabled),

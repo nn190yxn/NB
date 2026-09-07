@@ -90,4 +90,51 @@ test('共享额度：默认走共享 Key，超额 429，自有 Key 豁免', asyn
   assert.equal(secondExtract.status, 429)
   assert.match((await secondExtract.json()).error, /共享 AI 额度已用完/)
   assert.equal(usage.date, (await (await fetch(`${baseUrl}/api/usage/today`, { headers })).json()).date)
+
+  const generated = await (await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers, body: JSON.stringify({ topic: { title: '额度降级测试', strategy_layer: 'trust', goal_refs: [] } }) })).json()
+  const draft = generated[0]
+  const redfoxHitsBeforeCompliance = upstreamHits.redfox
+  const compliance = await fetch(`${baseUrl}/api/drafts/${draft.id}/compliance`, { method: 'POST', headers, body: JSON.stringify({ text: '这是最好的测试内容' }) })
+  assert.equal(compliance.status, 200)
+  assert.equal((await compliance.json()).source, 'builtin')
+  assert.equal(upstreamHits.redfox, redfoxHitsBeforeCompliance)
+  assert.equal((await (await fetch(`${baseUrl}/api/usage/today`, { headers })).json()).redfox.used, 2)
+
+  const adaptation = await fetch(`${baseUrl}/api/drafts/${draft.id}/adapt`, { method: 'POST', headers, body: JSON.stringify({ platform: '小红书' }) })
+  assert.equal(adaptation.status, 200)
+  assert.ok((await adaptation.json()).adaptations['小红书'])
+  const snapshot = await (await fetch(`${baseUrl}/api/performance-snapshots`, { method: 'POST', headers, body: JSON.stringify({ draft_id: draft.id, platform: '抖音', metrics: { 播放量: 1000, 点赞数: 80 }, status: 'confirmed' }) })).json()
+  const retrospect = await fetch(`${baseUrl}/api/performance-snapshots/${snapshot.id}/retrospect`, { method: 'POST', headers, body: '{}' })
+  assert.equal(retrospect.status, 200)
+  assert.ok(['winner', 'ok', 'underperformed'].includes((await retrospect.json()).snapshot.retrospect.verdict))
+
+  const fallbackSession = await fetch(`${baseUrl}/api/auth/session`, { method: 'POST', headers: { 'x-user-id': 'fallback-only-user' } })
+  const fallbackCookie = fallbackSession.headers.get('set-cookie').split(';', 1)[0]
+  const fallbackHeaders = { cookie: fallbackCookie, 'content-type': 'application/json' }
+  const saveFallback = await fetch(`${baseUrl}/api/api-settings/text_fallback`, {
+    method: 'PUT', headers: fallbackHeaders,
+    body: JSON.stringify({ enabled: true, base_url: mockUrl, model: 'own-fallback-model', api_key: 'own-fallback-key' }),
+  })
+  assert.equal(saveFallback.status, 200)
+  const fallbackExtract = text => fetch(`${baseUrl}/api/memories/extract`, { method: 'POST', headers: fallbackHeaders, body: JSON.stringify({ text }) })
+  assert.equal((await fallbackExtract('只配置备用模型的第一次调用')).status, 200)
+  assert.equal((await fallbackExtract('只配置备用模型的第二次调用')).status, 429)
+  const fallbackUsage = await (await fetch(`${baseUrl}/api/usage/today`, { headers: fallbackHeaders })).json()
+  assert.equal(fallbackUsage.llm.shared, true)
+  assert.equal(fallbackUsage.llm.used, 1)
+
+  const ownLlmSession = await fetch(`${baseUrl}/api/auth/session`, { method: 'POST', headers: { 'x-user-id': 'own-llm-user' } })
+  const ownLlmCookie = ownLlmSession.headers.get('set-cookie').split(';', 1)[0]
+  const ownLlmHeaders = { cookie: ownLlmCookie, 'content-type': 'application/json' }
+  const saveOwnPrimary = await fetch(`${baseUrl}/api/api-settings/text_primary`, {
+    method: 'PUT', headers: ownLlmHeaders,
+    body: JSON.stringify({ enabled: true, base_url: mockUrl, model: 'own-primary-model', api_key: 'own-primary-key' }),
+  })
+  assert.equal(saveOwnPrimary.status, 200)
+  const ownExtract = text => fetch(`${baseUrl}/api/memories/extract`, { method: 'POST', headers: ownLlmHeaders, body: JSON.stringify({ text }) })
+  assert.equal((await ownExtract('自有主模型第一次调用')).status, 200)
+  assert.equal((await ownExtract('自有主模型第二次调用')).status, 200)
+  const ownLlmUsage = await (await fetch(`${baseUrl}/api/usage/today`, { headers: ownLlmHeaders })).json()
+  assert.equal(ownLlmUsage.llm.shared, false)
+  assert.equal(ownLlmUsage.llm.used, 0)
 })

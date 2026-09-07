@@ -36,11 +36,11 @@ import {
 } from 'lucide-react'
 import './styles.css'
 import { copyText, loadTeleprompterSettings, saveTeleprompterSettings } from './shooting-utils'
-import { flushSyncQueue, pendingSyncEvents } from './sync-queue'
+import { flushSyncQueue, pendingSyncEvents, setSyncAccount } from './sync-queue'
 
 type DesktopSyncRuntime = { device_id: string; device_name: string; directories: Array<{ id: string }>; queue_count: number; last_error: string | null }
 type DesktopBridge = {
-  login(password: string): Promise<boolean>
+  login(credentials: { mode: 'login' | 'register'; username: string; password: string }): Promise<boolean>
   refreshSession(): Promise<boolean>
   logout(): Promise<boolean>
   setLaunchAtLogin(enabled: boolean): Promise<boolean>
@@ -103,18 +103,30 @@ function App() {
   const [showThemes, setShowThemes] = useState(false)
   const [showMobileMenu, setShowMobileMenu] = useState(false)
   const [showMenu, setShowMenu] = useState(false)
-  const [activeNav, setActiveNav] = useState('今日工作台')
+  const [activeNav, setActiveNavState] = useState('今日工作台')
+  const draftLeaveGuard = useRef<() => boolean>(() => true)
+  const setActiveNav = (next: string) => { if (next === activeNav || draftLeaveGuard.current()) setActiveNavState(next) }
   const [focusedResearchId, setFocusedResearchId] = useState<number | null>(null)
-  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [showOnboarding, setShowOnboardingState] = useState(false)
+  const setShowOnboarding = (next: boolean) => { if (!next || draftLeaveGuard.current()) setShowOnboardingState(next) }
   const [authState, setAuthState] = useState<'checking' | 'ok' | 'need-password'>('checking')
+  const [expired, setExpired] = useState(false)
+  const [accountId, setAccountId] = useState('')
+  useEffect(() => {
+    const handle = () => setExpired(true)
+    window.addEventListener('session-expired', handle)
+    return () => window.removeEventListener('session-expired', handle)
+  }, [])
+  useEffect(() => { if (authState === 'ok') void apiJson<{ user_id?: string }>('/api/auth/session').then(value => { setAccountId(value.user_id || ''); setSyncAccount(value.user_id || null); setPendingSync(pendingSyncEvents().length) }).catch(() => undefined) }, [authState])
   const [showFeedback, setShowFeedback] = useState(false)
   const [feedbackUnread, setFeedbackUnread] = useState(0)
 
   useEffect(() => {
+    if (authState !== 'ok') return
     void apiJson<{ is_admin: boolean; items: { status: string }[] }>('/api/feedback')
       .then(result => setFeedbackUnread(result.is_admin ? result.items.filter(item => item.status !== 'resolved').length : 0))
       .catch(() => undefined)
-  }, [showFeedback])
+  }, [showFeedback, authState])
 
   useEffect(() => {
     window.localStorage.setItem('dingweipai:font', font)
@@ -125,6 +137,7 @@ function App() {
   const [showSyncManager, setShowSyncManager] = useState(false)
   const [strategyReady, setStrategyReady] = useState(false)
   const [strategySaving, setStrategySaving] = useState(false)
+  const [strategyError, setStrategyError] = useState('')
   const [showShooting, setShowShooting] = useState(false)
   const [shootingCount, setShootingCount] = useState(0)
   const [online, setOnline] = useState(() => navigator.onLine)
@@ -137,24 +150,37 @@ function App() {
     setActiveNav('热点研究')
   }
 
+  const checkFirstUse = () => {
+    void apiJson<{ status?: string; onboarding_seen_at?: string }>('/api/positioning')
+      .then(positioning => {
+        if (!positioning.onboarding_seen_at && !['complete', 'confirmed'].includes(positioning.status || '')) setShowOnboarding(true)
+      })
+      .catch(() => undefined)
+  }
+
   const logout = () => {
+    if (!draftLeaveGuard.current()) return
+    setSyncAccount(null)
     void apiJson('/api/auth/session', { method: 'DELETE' }).finally(() => { void window.desktopApp?.logout()
 
       void apiJson('/api/auth/session')
-        .then(() => setAuthState('ok'))
-        .catch(() => { setAuthState('need-password'); setShowOnboarding(true) })
+        .then(() => { setAuthState('ok'); setShowOnboarding(false) })
+        .catch(() => { setAuthState('need-password'); setShowOnboarding(false) })
     })
   }
 
   const enterWorkspace = () => {
-    void apiJson('/api/auth/session', { method: 'POST' }).then(() => { setAuthState('ok'); setShowOnboarding(false) }).catch(() => undefined)
+    setActiveNav('IP 档案')
+    setShowOnboarding(false)
   }
+
+  const dismissOnboarding = () => setShowOnboarding(false)
 
   useEffect(() => {
     if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js')
     void apiJson('/api/auth/session')
-      .then(() => setAuthState('ok'))
-      .catch(() => apiJson('/api/auth/session', { method: 'POST' }).then(() => setAuthState('ok')).catch(() => setAuthState('need-password')))
+      .then(() => { setAuthState('ok'); checkFirstUse() })
+      .catch(() => apiJson('/api/auth/session', { method: 'POST' }).then(() => { setAuthState('ok'); checkFirstUse() }).catch(() => setAuthState('need-password')))
   }, [])
 
   const syncNow = () => {
@@ -175,62 +201,70 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (authState !== 'ok') return
     apiJson<ShootingItem[]>('/api/shooting/today').then(items => setShootingCount(items.filter(item => item.status !== 'completed').length)).catch(() => undefined)
     apiJson<SyncConflict[]>('/api/sync/conflicts').then(setConflicts).catch(() => undefined)
-  }, [])
+  }, [authState, activeNav, showShooting])
 
   useEffect(() => {
+    if (authState !== 'ok') return
     apiJson<{ layer_ratios: { reach: number; trust: number; conversion: number } }>('/api/content-strategy')
-      .then(({ layer_ratios }) => setStrategyRatios([layer_ratios.reach, layer_ratios.trust, layer_ratios.conversion]))
-      .catch(() => undefined)
-      .finally(() => setStrategyReady(true))
-  }, [])
+      .then(({ layer_ratios }) => { setStrategyRatios([layer_ratios.reach, layer_ratios.trust, layer_ratios.conversion]); setStrategyReady(true) })
+      .catch(() => setStrategyError('策略读取失败，请刷新重试；当前不允许覆盖保存。'))
+  }, [authState])
 
   const saveStrategy = (nextRatios: number[]) => {
-    setStrategyRatios(nextRatios)
+    if (!strategyReady || strategySaving) return
+    setStrategyError('')
     setStrategySaving(true)
     return apiJson('/api/content-strategy', { method: 'PUT', body: JSON.stringify({ layer_ratios: { reach: nextRatios[0], trust: nextRatios[1], conversion: nextRatios[2] } }) })
-      .catch(() => undefined)
+      .then(() => setStrategyRatios(nextRatios))
+      .catch(() => setStrategyError('策略保存失败，未更改已保存的比例，请重试。'))
       .finally(() => setStrategySaving(false))
   }
 
+  if (authState === 'checking') return <p role="status">正在验证会话...</p>
   if (authState === 'need-password') {
-    return <PasswordGate theme={theme} font={font} onSuccess={() => { setAuthState('ok'); setShowOnboarding(false) }} />
+    return <PasswordGate theme={theme} font={font} onSuccess={() => window.location.reload()} />
   }
 
+  const reauth = expired && <dialog open aria-label="会话过期" style={{ position: 'fixed', inset: 0, zIndex: 10000, width: '100vw', height: '100vh', maxWidth: 'none', maxHeight: 'none' }}><p role="alert">会话已过期，当前编辑内容保留。请重新登录原账号。</p><PasswordGate theme={theme} font={font} expectedUser={accountId} onSuccess={() => { sessionExpired = false; setExpired(false) }} /></dialog>
+
   if (showOnboarding) {
-    return     <Onboarding theme={theme} setTheme={setTheme} font={font} setFont={setFont} showThemes={showThemes} setShowThemes={setShowThemes} onEnter={enterWorkspace} onBack={() => setShowOnboarding(false)} />
+    return <>{reauth}<Onboarding theme={theme} setTheme={setTheme} font={font} setFont={setFont} showThemes={showThemes} setShowThemes={setShowThemes} onEnter={enterWorkspace} onBack={dismissOnboarding} /></>
   }
 
   return (
     <main className={`app theme-${theme} font-${font}`}>
+       {reauth}
        <aside className={showMobileMenu ? 'sidebar mobile-open' : 'sidebar'}>
         <div className="brand"><div className="brand-mark">定</div><div><strong>定位派</strong><span>个人 IP 内容成长平台</span></div></div>
-        <button className="workspace-switch" onClick={() => setShowReview(true)}><span className="status-dot" /> 创业观察室 <ChevronDown size={14} /></button>
+        <button className="workspace-switch" onClick={() => setShowReview(true)}><span className="status-dot" /> 我的内容工作台 <ChevronDown size={14} /></button>
         <nav>
           <span className="nav-label">工作区</span>
-          {navItems.map(({ label, icon: Icon }) => <button className={activeNav === label ? 'nav-item active' : 'nav-item'} onClick={() => label === '定位发现' ? setShowOnboarding(true) : label === '热点研究' ? openResearch() : setActiveNav(label)} key={label}><Icon size={17} /><span>{label}</span>{label === '热点研究' && <b>12</b>}</button>)}
+          {navItems.map(({ label, icon: Icon }) => <button className={activeNav === label ? 'nav-item active' : 'nav-item'} onClick={() => label === '定位发现' ? setShowOnboarding(true) : label === '热点研究' ? openResearch() : setActiveNav(label)} key={label}><Icon size={17} /><span>{label}</span></button>)}
           <span className="nav-label secondary">资产</span>
            <button className={showShooting ? 'nav-item active' : 'nav-item'} onClick={() => setShowShooting(true)}><Video size={17} /><span>今日拍摄</span><b className="count-soft">{shootingCount}</b></button>
             <button className={activeNav === 'IP 档案' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveNav('IP 档案')}><BookOpen size={17} /><span>IP 档案</span></button>
             <button className="nav-item" onClick={() => setShowFeedback(true)}><MessageSquare size={17} /><span>反馈</span>{(feedbackUnread > 0) && <b>{feedbackUnread}</b>}</button>
         </nav>
-         <div className="sidebar-bottom"><button className="nav-item" onClick={() => setShowSyncManager(true)}><FolderOpen size={17} /><span>桌面同步</span>{pendingSync > 0 && <b>{pendingSync}</b>}</button><button className="nav-item" onClick={() => setShowSettings(true)}><Settings2 size={17} /><span>工作台设置</span></button><button className="user-chip" onClick={logout} title="退出当前会话"><div className="avatar">姚</div><div><strong>小姚哥</strong><span>创业过来人</span></div><MoreHorizontal size={16} /></button></div>
+         <div className="sidebar-bottom"><button className="nav-item" onClick={() => setShowSyncManager(true)}><FolderOpen size={17} /><span>桌面同步</span>{pendingSync > 0 && <b>{pendingSync}</b>}</button><button className="nav-item" onClick={() => setShowSettings(true)}><Settings2 size={17} /><span>工作台设置</span></button><button className="user-chip" onClick={logout} title="退出当前会话"><div className="avatar">我</div><div><strong>我的账号</strong><span>个人内容空间</span></div><MoreHorizontal size={16} /></button></div>
       </aside>
 
       <section className="content-shell">
-         <header className="topbar"><button className="mobile-menu" aria-label="打开导航" onClick={() => setShowMobileMenu(!showMobileMenu)}><Menu size={20} /></button><div className="breadcrumbs"><span>创业观察室</span><span>/</span><strong>{activeNav}</strong></div><GlobalSearch onNavigate={setActiveNav} /><div className="top-actions"><button className="icon-button" aria-label="帮助" onClick={() => setShowOnboarding(true)}><CircleHelp size={18} /></button><div className="theme-picker"><button className="theme-trigger" onClick={() => setShowThemes(!showThemes)}><SunMedium size={16} /><span>{themes[theme].name}</span><ChevronDown size={14} /></button>{showThemes && <ThemeMenu theme={theme} setTheme={setTheme} close={() => setShowThemes(false)} font={font} setFont={setFont} />}</div><button className="avatar small" aria-label="用户菜单" onClick={() => setShowReview(true)}>姚</button></div></header>
+         <header className="topbar"><button className="mobile-menu" aria-label="打开导航" onClick={() => setShowMobileMenu(!showMobileMenu)}><Menu size={20} /></button><div className="breadcrumbs"><span>我的内容工作台</span><span>/</span><strong>{activeNav}</strong></div><GlobalSearch onNavigate={setActiveNav} /><div className="top-actions"><button className="icon-button" aria-label="帮助" onClick={() => setShowOnboarding(true)}><CircleHelp size={18} /></button><div className="theme-picker"><button className="theme-trigger" onClick={() => setShowThemes(!showThemes)}><SunMedium size={16} /><span>{themes[theme].name}</span><ChevronDown size={14} /></button>{showThemes && <ThemeMenu theme={theme} setTheme={setTheme} close={() => setShowThemes(false)} font={font} setFont={setFont} />}</div><button className="avatar small" aria-label="用户菜单" onClick={() => setShowReview(true)}>我</button></div></header>
            <div className="page-content">{(!online || pendingSync > 0) && <div className="offline-banner" role="status">{online ? `有 ${pendingSync} 个素材等待同步。` : '当前处于离线状态，已加载内容仍可查看。'} <button onClick={syncNow} disabled={!online || syncing}>{syncing ? '同步中...' : '立即同步'}</button></div>}{conflicts.length > 0 && <div className="conflict-banner" role="alert"><strong>{conflicts.length} 个内容版本发生冲突</strong>{conflicts.map(conflict => <span key={conflict.id}>{conflict.resource_type === 'draft' ? '草稿' : '拍摄清单'} #{conflict.resource_id}<button onClick={() => resolveConflict(conflict, 'local')}>保留本地</button><button onClick={() => resolveConflict(conflict, 'remote')}>保留远端</button></span>)}</div>}
-            {showReview && <StrategyReview ratios={strategyRatios} onApply={() => { saveStrategy([40, 35, 25]); setShowReview(false) }} onClose={() => setShowReview(false)} />}
+            {showReview && <StrategyReview ratios={strategyRatios} onClose={() => setShowReview(false)} />}
             {showSettings && <SettingsPanel theme={theme} setTheme={setTheme} font={font} setFont={setFont} onClose={() => setShowSettings(false)} />}
             {showFeedback && <FeedbackPanel page={activeNav} onClose={() => setShowFeedback(false)} />}
             {showSyncManager && <SyncManagementPanel onClose={() => setShowSyncManager(false)} onSync={syncNow} syncing={syncing} />}
             {showShooting && <ShootingWorkspace onClose={() => setShowShooting(false)} />}
             {activeNav === '今日工作台' ? <>
-           <div className="page-heading"><div><p className="eyebrow">SATURDAY · AUG 29, 2026</p><h1>早上好，小姚哥<span className="accent">。</span></h1><p className="lede">今天继续帮老板看清：钱漏在哪，人卡在哪。</p></div><button className="primary-action" onClick={() => openResearch()}><Plus size={17} /> 新建研究</button></div>
+           <div className="page-heading"><div><p className="eyebrow">YOUR CONTENT WORKSPACE</p><h1>欢迎回来<span className="accent">。</span></h1><p className="lede">从定位、研究到创作，建立属于你的内容工作流。</p></div><button className="primary-action" onClick={() => openResearch()}><Plus size={17} /> 新建研究</button></div>
 
-          <div className="signal-strip"><div className="signal-icon"><Radio size={18} /></div><div><strong>今日信号</strong><span>消费降级之后，个人品牌正在进入“可信度竞争”</span></div><button onClick={() => openResearch()}>查看热点 <ArrowUpRight size={15} /></button></div>
+          <div className="signal-strip"><div className="signal-icon"><Radio size={18} /></div><div><strong>从你的定位开始</strong><span>完善 IP 档案后，研究、选题和创作会更贴近你的真实目标。</span></div><button onClick={() => setShowOnboarding(true)}>继续定位 <ArrowUpRight size={15} /></button></div>
 
+           {strategyError && <p role="alert">{strategyError}</p>}
            {strategyReady && <StrategyPanel ratios={strategyRatios} setRatios={saveStrategy} saving={strategySaving} onReview={() => setShowReview(true)} />}
 
 
@@ -241,9 +275,9 @@ function App() {
 
 
 
-           <div className="lower-grid"><section><div className="section-heading compact"><div><span className="section-kicker">02 / READY TO MAKE</span><h2>准备出发的选题</h2></div><button className="text-action" onClick={() => setActiveNav('选题助手')}>打开选题助手 <ArrowUpRight size={15} /></button></div><div className="topic-list"><Topic number="01" title="别再迷信个人 IP：先把一件小事做成" meta="商业创业 · 观点型" accent="green" onOpen={() => setActiveNav('选题助手')} /><Topic number="02" title="从摆摊到连锁：一个普通人的复利路径" meta="真实故事 · 案例型" accent="amber" onOpen={() => setActiveNav('选题助手')} /><Topic number="03" title="创业第 3 年，我终于停止了这 5 件事" meta="个人经历 · 复盘型" accent="coral" onOpen={() => setActiveNav('选题助手')} /></div></section><aside className="shoot-card"><div className="card-top"><span className="section-kicker">TODAY / SHOOTING</span><Video size={17} /></div><h3>今天拍摄</h3><div className="shoot-date"><strong>{String(shootingCount).padStart(2, '0')}</strong><span>条内容<br /><small>待拍摄</small></span></div><div className="progress"><span style={{ width: shootingCount ? '25%' : '0%' }} /></div><p>当前清单 · {shootingCount} 条待拍</p><button className="outline-action" onClick={() => setShowShooting(true)}>进入拍摄清单 <ArrowUpRight size={15} /></button></aside></div>
-          <footer className="footer-note"><span><span className="live-dot" /> 数据源已更新 · RedFox 研究库</span><span>最后同步于 09:42</span></footer>
-          </> : <WorkspaceView section={activeNav as WorkspaceSection} onNavigate={setActiveNav} onOpenShooting={() => setShowShooting(true)} focusedResearchId={focusedResearchId} />}
+           <div className="lower-grid"><section><div className="section-heading compact"><div><span className="section-kicker">02 / READY TO MAKE</span><h2>准备出发的选题</h2></div><button className="text-action" onClick={() => setActiveNav('选题助手')}>打开选题助手 <ArrowUpRight size={15} /></button></div><HomeTopics onOpen={() => setActiveNav('选题助手')} /></section><aside className="shoot-card"><div className="card-top"><span className="section-kicker">TODAY / SHOOTING</span><Video size={17} /></div><h3>今天拍摄</h3><div className="shoot-date"><strong>{String(shootingCount).padStart(2, '0')}</strong><span>条内容<br /><small>待拍摄</small></span></div><div className="progress"><span style={{ width: '0%' }} /></div><p>当前清单 · {shootingCount} 条待拍</p><button className="outline-action" onClick={() => setShowShooting(true)}>进入拍摄清单 <ArrowUpRight size={15} /></button></aside></div>
+          <footer className="footer-note"><span>研究与素材以各条记录的来源和采集时间为准</span><span>{online ? '网络已连接' : '当前离线'}</span></footer>
+          </> : <WorkspaceView leaveGuard={draftLeaveGuard} section={activeNav as WorkspaceSection} onNavigate={setActiveNav} onOpenShooting={() => setShowShooting(true)} focusedResearchId={focusedResearchId} />}
         </div>
       </section>
     </main>
@@ -251,14 +285,10 @@ function App() {
 }
 
 const interviewRounds = [
-  ['01 / YOUR STORY', '先从你的经历开始', '过去几年里，哪一件事你做得最久、最投入，或者最常被别人请教？'],
-  ['02 / YOUR EDGE', '你比别人更顺手的事', '哪些事情你做起来特别自然，却发现别人经常觉得困难？'],
-  ['03 / YOUR PEOPLE', '谁正在需要你', '什么样的人会主动来找你？他们通常在什么场景下遇到什么问题？'],
-  ['04 / YOUR VALUE', '你能带来什么改变', '经过你的帮助，对方能完成一个什么看得见的改变？'],
-  ['05 / YOUR ANGLE', '你的独特视角', '你有哪些经历、方法、审美或判断，是同行很难直接复制的？'],
-  ['06 / YOUR PROOF', '什么证明你值得被相信', '你手上有哪些作品、案例、评价、数据或长期积累，可以证明前面的价值？'],
-  ['07 / YOUR VOICE', '你愿意长期说什么', '即使没有人催促，你仍愿意持续分享哪些主题？你喜欢用什么方式表达？'],
-  ['08 / YOUR GOAL', '你为什么要经营个人 IP', '明确你希望通过个人 IP 实现的变现方式，以及获客或其他核心目的。'],
+  ['01 / YOUR STORY', '先从你的经历开始', '过去几年里，哪一段经历最能代表你？你做过什么、坚持过什么，或者经常被别人请教什么？'],
+  ['02 / YOUR EDGE', '你最擅长解决什么问题', '哪些事情你做起来很顺手？请尽量描述具体动作、方法或已经取得的结果。'],
+  ['03 / YOUR PEOPLE', '谁最需要你的内容', '你希望帮助哪类人？他们通常在什么场景下，遇到什么具体困难？'],
+  ['04 / YOUR GOAL', '你希望内容带来什么结果', '明确你希望通过个人 IP 实现的变现方式，以及获客、建立信任或其他核心目的。'],
 ] as const
 
 const strategyLayers = [
@@ -270,12 +300,15 @@ const strategyLayers = [
 type ApiErrorPayload = { error?: string; missing_fields?: string[] }
 type ApiError = Error & { status: number; payload?: ApiErrorPayload }
 
+let sessionExpired = false
 async function apiJson<T>(path: string, options?: RequestInit): Promise<T> {
+  if (sessionExpired && !path.startsWith('/api/auth/')) throw new Error('会话已过期，请先重新登录原账号；当前输入已保留。')
   const { headers: extraHeaders, ...rest } = options || {}
   const response = await fetch(path, { credentials: 'include', headers: { 'content-type': 'application/json', ...(extraHeaders || {}) }, ...rest })
   if (response.status === 204) return undefined as T
   const payload = await response.json().catch(() => undefined) as T | ApiErrorPayload | undefined
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/api/auth/')) { sessionExpired = true; window.dispatchEvent(new Event('session-expired')) }
     const error = new Error((payload as ApiErrorPayload | undefined)?.error || `API ${response.status}`) as ApiError
     error.status = response.status
     error.payload = payload as ApiErrorPayload | undefined
@@ -640,18 +673,25 @@ function StrategyPanel({ ratios, setRatios, saving, onReview }: { ratios: number
     next[otherIndexes[otherIndexes.length - 1]] += 100 - next.reduce((total, itemRatio) => total + itemRatio, 0)
     setRatios(next)
   }
-  return <section className="strategy-panel"><div className="strategy-panel-head"><div><span className="section-kicker">IP STRATEGY / FLEXIBLE MIX</span><h2>当前内容策略</h2><p>目标主线保持稳定，内容配比跟着阶段和复盘结果调整。</p></div><button className="outline-action" onClick={onReview}>开始复盘 <ArrowUpRight size={15} /></button></div><div className="strategy-bars">{strategyLayers.map((layer, index) => <div className="strategy-row" key={layer.label}><div className="strategy-label"><span className={`strategy-dot ${layer.color}`} /><strong>{layer.label}</strong><small>{layer.task}</small></div><input type="range" min="0" max="100" value={ratios[index]} onChange={event => updateRatio(index, Number(event.target.value))} aria-label={`${layer.label}比例`} /><b>{ratios[index]}%</b></div>)}</div><div className="strategy-foot"><span>{saving ? '正在保存策略版本...' : '策略已同步 · 下次复盘：两周后'}</span><span>总比例 {ratios.reduce((total, ratio) => total + ratio, 0)}%</span></div></section>
+  return <section className="strategy-panel"><div className="strategy-panel-head"><div><span className="section-kicker">IP STRATEGY / FLEXIBLE MIX</span><h2>当前内容策略</h2><p>目标主线保持稳定，内容配比跟着阶段和复盘结果调整。</p></div><button className="outline-action" onClick={onReview}>开始复盘 <ArrowUpRight size={15} /></button></div><div className="strategy-bars">{strategyLayers.map((layer, index) => <div className="strategy-row" key={layer.label}><div className="strategy-label"><span className={`strategy-dot ${layer.color}`} /><strong>{layer.label}</strong><small>{layer.task}</small></div><input type="range" min="0" max="100" value={ratios[index]} onChange={event => updateRatio(index, Number(event.target.value))} aria-label={`${layer.label}比例`} /><b>{ratios[index]}%</b></div>)}</div><div className="strategy-foot"><span>{saving ? '正在保存策略版本...' : '配置比例 · 非表现指标'}</span><span>总比例 {ratios.reduce((total, ratio) => total + ratio, 0)}%</span></div></section>
 }
 
-function StrategyReview({ ratios, onApply, onClose }: { ratios: number[]; onApply: () => void; onClose: () => void }) {
-  return <section className="review-panel"><div className="review-head"><div><span className="section-kicker">REVIEW / LAST 14 DAYS</span><h2>这轮复盘看到了什么</h2><p>系统根据当前策略组合生成建议，确认后会保存为新的策略版本。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="review-metrics"><div><span>泛流量触达</span><strong>+42%</strong><small>曝光增长 · 当前 {ratios[0]}%</small></div><div><span>垂直信任</span><strong>+18%</strong><small>收藏增长 · 当前 {ratios[1]}%</small></div><div><span>核心目标转化</span><strong>6 条</strong><small>有效线索 · 当前 {ratios[2]}%</small></div></div><div className="review-suggestion"><div><span>建议调整</span><strong>把一部分泛流量投入转向信任与转化</strong><p>过去两周泛流量表现稳定，垂直内容带来的收藏和私信质量更高。</p></div><div className="review-ratio"><b>40%</b><span>/</span><b>35%</b><span>/</span><b>25%</b></div></div><div className="review-actions"><button className="skip-action" onClick={onClose}>保留当前策略</button><button className="primary-action" onClick={onApply}>应用建议并保存版本 <ArrowUpRight size={16} /></button></div></section>
+function StrategyReview({ ratios, onClose }: { ratios: number[]; onClose: () => void }) {
+  return <section className="review-panel"><div className="review-head"><div><span className="section-kicker">STRATEGY REVIEW</span><h2>内容策略复盘</h2><p>尚未形成口径一致、可核验的周期对比数据，暂不提供增长率或自动配比建议。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="review-metrics">{strategyLayers.map((layer, index) => <div key={layer.label}><span>{layer.label}</span><strong>{ratios[index]}%</strong><small>当前配置比例，不是表现指标</small></div>)}</div><p>请先在发布中心录入内容表现，核对数据来源与日期；如需调整，可手动修改当前内容策略。</p><button className="skip-action" onClick={onClose}>返回工作台</button></section>
 }
-
 type WorkspaceSection = '热点研究' | '素材库' | '爆款方法库' | '选题助手' | '内容创作' | '发布中心' | '内容日历' | 'IP 档案'
 type ResearchItem = { id: number; platform: string; title: string; author?: string; url?: string | null; metrics?: { discussions?: number; growth?: number }; analysis?: { structure: string[]; summary?: string }; source_refs?: unknown[]; captured_at?: string; collected?: boolean; fit?: { score: number; matched: string[] } }
 type DraftAdaptation = { title: string; body: string; hashtags: string[]; provider: string; checklist: { item: string; status: string; detail: string }[]; updated_at: string }
 
 type ResearchListResponse = { items: ResearchItem[]; total: number }
+
+function HomeTopics({ onOpen }: { onOpen: () => void }) {
+  const [items, setItems] = useState<TopicItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  useEffect(() => { let active = true; void apiJson<TopicItem[]>('/api/topics').then(result => { if (active) setItems(result) }).catch(() => { if (active) setError('选题加载失败，请进入选题助手重新加载。') }).finally(() => { if (active) setLoading(false) }); return () => { active = false } }, [])
+  return <div className="structure-empty">{loading ? <p>正在加载选题...</p> : error ? <p role="alert">{error}</p> : items.length ? <><p>共 {items.length} 个选题</p>{items.slice(-3).reverse().map(item => <button className="text-action" key={item.id} onClick={onOpen}>{item.title} <ArrowUpRight size={15} /></button>)}</> : <p className="empty-state">还没有选题。先完善定位并收集真实素材，再生成第一批选题。</p>}</div>
+}
 
 function ResearchPulse({ onOpen }: { onOpen: (id?: number) => void }) {
   const [items, setItems] = useState<ResearchItem[]>([])
@@ -715,7 +755,8 @@ function GlobalSearch({ onNavigate }: { onNavigate: (section: string) => void })
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [hits, setHits] = useState<SearchHit[]>([])
-  const indexRef = useRef<SearchHit[] | null>(null)
+  const searchVersion = useRef(0)
+  const [searchError, setSearchError] = useState('')
   const boxRef = useRef<HTMLDivElement | null>(null)
   const timerRef = useRef<number | undefined>(undefined)
 
@@ -728,35 +769,42 @@ function GlobalSearch({ onNavigate }: { onNavigate: (section: string) => void })
   }, [])
 
   const buildIndex = async (): Promise<SearchHit[]> => {
-    const [research, drafts, materials, structures] = await Promise.all([
-      apiJson<ResearchItem[]>('/api/research').catch(() => [] as ResearchItem[]),
-      apiJson<DraftItem[]>('/api/drafts').catch(() => [] as DraftItem[]),
-      apiJson<MaterialItem[]>('/api/materials').catch(() => [] as MaterialItem[]),
-      apiJson<{ items: StructureItem[] }>('/api/structures?page=1').catch(() => ({ items: [] as StructureItem[] }))
+    const methods: StructureItem[] = []
+    let page = 1
+    while (true) {
+      const result = await apiJson<{ items: StructureItem[]; total: number }>(`/api/structures?page=${page}`)
+      methods.push(...result.items)
+      if (!result.items.length || methods.length >= result.total) break
+      page++
+    }
+    const [research, drafts, materials, topics] = await Promise.all([
+      apiJson<ResearchItem[]>('/api/research'), apiJson<DraftItem[]>('/api/drafts'),
+      apiJson<MaterialItem[]>('/api/materials'), apiJson<TopicItem[]>('/api/topics')
     ])
+    const structures = { items: methods }
     const hits: SearchHit[] = []
     for (const item of research) hits.push({ kind: '研究', title: item.title, sub: item.platform, target: '热点研究' })
     for (const item of drafts) hits.push({ kind: '草稿', title: item.title, sub: item.platform, target: '内容创作' })
     for (const item of materials) hits.push({ kind: '素材', title: item.name, sub: item.format, target: '素材库' })
     for (const item of structures.items) hits.push({ kind: '方法', title: item.title, sub: item.platform, target: '爆款方法库' })
+    for (const item of topics) hits.push({ kind: '选题', title: item.title, sub: item.content_job, target: '选题助手' })
     return hits
   }
 
   const runSearch = (keyword: string) => {
-    setQuery(keyword)
+    const version = ++searchVersion.current
+    setQuery(keyword); setSearchError('')
     if (timerRef.current) window.clearTimeout(timerRef.current)
     if (!keyword.trim()) { setHits([]); setOpen(false); return }
     timerRef.current = window.setTimeout(() => {
-      void (async () => {
-        if (!indexRef.current) indexRef.current = await buildIndex().catch(() => [] as SearchHit[])
+      void buildIndex().then(index => {
+        if (version !== searchVersion.current) return
         const key = keyword.trim().toLowerCase()
-        const matched = (indexRef.current || []).filter(hit => hit.title.toLowerCase().includes(key) || hit.sub.toLowerCase().includes(key)).slice(0, 8)
-        setHits(matched)
+        setHits(index.filter(hit => hit.title.toLowerCase().includes(key) || hit.sub.toLowerCase().includes(key)).slice(0, 8))
         setOpen(true)
-      })()
+      }).catch(() => { if (version === searchVersion.current) { setHits([]); setSearchError('搜索加载失败，请重新输入重试。'); setOpen(true) } })
     }, 250)
   }
-
   const go = (hit: SearchHit) => {
     setOpen(false)
     setQuery('')
@@ -779,7 +827,7 @@ function GlobalSearch({ onNavigate }: { onNavigate: (section: string) => void })
       {open && (
         <div className="search-menu">
           {hits.length === 0
-            ? <p className="search-empty">未找到相关内容</p>
+            ? <p className="search-empty">{searchError || '未找到相关内容'}</p>
             : hits.map((hit, index) => (
               <button key={`${hit.kind}-${index}`} onClick={() => go(hit)}>
                 <span className="search-kind">{hit.kind}</span>
@@ -1266,8 +1314,26 @@ function DraftApprovalPanel({ draft, busy, dirty, onApprove, onRevoke, onOpenSho
   return <div className="draft-approval"><div><strong>{revoked ? `已撤回：${approval.revoke_reason || '需要修改'}` : '等待人工确认'}</strong><small>{hint}</small></div><button className="primary-action" disabled={busy || dirty || !publishReady} onClick={onApprove}>确认进入拍摄</button></div>
 }
 
-function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId }: { section: WorkspaceSection; onNavigate: (section: WorkspaceSection) => void; onOpenShooting: () => void; focusedResearchId: number | null }) {
+function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId, leaveGuard }: { leaveGuard: { current: () => boolean }; section: WorkspaceSection; onNavigate: (section: WorkspaceSection) => void; onOpenShooting: () => void; focusedResearchId: number | null }) {
   const [topics, setTopics] = useState<TopicItem[]>([])
+  const [topicsLoading, setTopicsLoading] = useState(true)
+  const [topicEdit, setTopicEdit] = useState<{ id: number; title: string; rationale: string } | null>(null)
+  const topicRequest = useRef(false)
+  const loadTopics = () => {
+    setTopicsLoading(true)
+    void apiJson<TopicItem[]>('/api/topics').then(items => { setTopics(items); setTopicError('') }).catch(() => setTopicError('历史选题加载失败，请重新加载。')).finally(() => setTopicsLoading(false))
+  }
+  useEffect(loadTopics, [])
+  const topicAction = async (path: string, method: string, body: object) => {
+    if (topicRequest.current || topicsLoading) return
+    topicRequest.current = true; setBusy(true); setTopicError('')
+    try {
+      const updated = await apiJson<TopicItem>(path, { method, body: JSON.stringify(body) })
+      setTopics(current => current.map(item => item.id === updated.id ? updated : item))
+      setTopicEdit(null)
+    } catch (error) { setTopicError(error instanceof Error ? error.message : '选题操作失败，请重试。') }
+    finally { topicRequest.current = false; setBusy(false) }
+  }
   const [drafts, setDrafts] = useState<DraftItem[]>([])
   const [busy, setBusy] = useState(false)
   const [history, setHistory] = useState<Record<number, DraftItem[]>>({})
@@ -1277,43 +1343,59 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId 
   const [deaiResults, setDeaiResults] = useState<Record<number, string>>({})
   const [topicError, setTopicError] = useState('')
   const [dirtyDrafts, setDirtyDrafts] = useState<Set<number>>(() => new Set())
+  const [draftError, setDraftError] = useState('')
+  const saveInFlight = useRef(false)
+  useEffect(() => {
+    leaveGuard.current = () => !saveInFlight.current && (!dirtyDrafts.size || window.confirm('有未保存的草稿，确定离开？未保存内容可能丢失。'))
+    const warn = (event: BeforeUnloadEvent) => { if (dirtyDrafts.size || saveInFlight.current) { event.preventDefault(); event.returnValue = '' } }
+    window.addEventListener('beforeunload', warn)
+    return () => { leaveGuard.current = () => true; window.removeEventListener('beforeunload', warn) }
+  }, [dirtyDrafts, leaveGuard])
+  const draftActionBlocked = (draft: DraftItem) => {
+    if (busy || saveInFlight.current) return true
+    if (dirtyDrafts.has(draft.id)) { setDraftError('请先保存当前草稿，再执行检查、恢复或改写操作。'); return true }
+    setDraftError(''); return false
+  }
   useEffect(() => {
     void apiJson<DraftItem[]>('/api/drafts').then(setDrafts).catch(() => undefined)
   }, [])
   const copyDraft = (draft: DraftItem) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/copy`, { method: 'POST' }).then(copy => setDrafts(current => [copy, ...current])).catch(() => undefined).finally(() => setBusy(false)) }
   const loadHistory = (draft: DraftItem) => { void apiJson<DraftItem[]>(`/api/drafts/${draft.id}/history`).then(items => setHistory(current => ({ ...current, [draft.id]: items }))).catch(() => undefined) }
-  const restoreDraft = (draft: DraftItem, version: number) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/restore`, { method: 'POST', body: JSON.stringify({ version }) }).then(updated => { setDrafts(current => current.map(item => item.id === updated.id ? updated : item)); setHistory(current => ({ ...current, [draft.id]: updated.history || [] })) }).catch(() => undefined).finally(() => setBusy(false)) }
+  const restoreDraft = (draft: DraftItem, version: number) => { if (draftActionBlocked(draft)) return; setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/restore`, { method: 'POST', body: JSON.stringify({ version }) }).then(updated => { setDrafts(current => current.map(item => item.id === updated.id ? updated : item)); setHistory(current => ({ ...current, [draft.id]: updated.history || [] })) }).catch(() => undefined).finally(() => setBusy(false)) }
   const checkCompliance = (draft: DraftItem) => {
+    if (draftActionBlocked(draft)) return
     setComplianceBusy(draft.id)
     void apiJson<ComplianceResult>(`/api/drafts/${draft.id}/compliance`, { method: 'POST', body: JSON.stringify({}) })
       .then(result => setCompliance(current => ({ ...current, [draft.id]: result })))
       .catch(() => setCompliance(current => ({ ...current, [draft.id]: { hits: [], source: 'error', checked_length: 0 } })))
       .finally(() => setComplianceBusy(null))
   }
-  const generateHooks = (draft: DraftItem) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/hooks`, { method: 'POST', body: JSON.stringify({}) }).then(updated => setDrafts(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => undefined).finally(() => setBusy(false)) }
-  const runDraftCheck = (draft: DraftItem, check: 'persona' | 'quality' | 'publish', force = false) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/checks/${check}`, { method: 'POST', body: JSON.stringify({ force }) }).then(updated => setDrafts(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => undefined).finally(() => setBusy(false)) }
-  const selectDraftHook = (draft: DraftItem, hook: DraftHook) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}`, { method: 'PUT', body: JSON.stringify({ selected_hook_id: hook.id, version: draft.version }) }).then(updated => setDrafts(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => undefined).finally(() => setBusy(false)) }
+  const generateHooks = (draft: DraftItem) => { if (draftActionBlocked(draft)) return; setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/hooks`, { method: 'POST', body: JSON.stringify({}) }).then(updated => setDrafts(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => undefined).finally(() => setBusy(false)) }
+  const runDraftCheck = (draft: DraftItem, check: 'persona' | 'quality' | 'publish', force = false) => { if (draftActionBlocked(draft)) return; setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/checks/${check}`, { method: 'POST', body: JSON.stringify({ force }) }).then(updated => setDrafts(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => undefined).finally(() => setBusy(false)) }
+  const selectDraftHook = (draft: DraftItem, hook: DraftHook) => { if (draftActionBlocked(draft)) return; setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}`, { method: 'PUT', body: JSON.stringify({ selected_hook_id: hook.id, version: draft.version }) }).then(updated => setDrafts(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => undefined).finally(() => setBusy(false)) }
   if (section === 'IP 档案') return <ProfileReviewPanel />
   const generateTopics = () => {
+    if (busy || topicsLoading || topicRequest.current) return
+    topicRequest.current = true
     setTopicError('')
     setBusy(true)
     void Promise.all([apiJson<ResearchItem[]>('/api/research'), apiJson<MaterialItem[]>('/api/materials')])
       .then(([research, materials]) => apiJson<TopicItem[]>('/api/topics/generate', { method: 'POST', body: JSON.stringify({ research_ids: research.slice(0, 3).map(item => item.id), material_ids: materials.slice(0, 3).map(item => item.id) }) }))
-      .then(result => setTopics(result))
+      .then(result => setTopics(current => [...result, ...current]))
       .catch(error => {
         const apiError = error as Partial<ApiError>
         const payload = apiError.payload
         const missing = Array.isArray(payload?.missing_fields) ? payload.missing_fields.map(field => topicMissingFieldLabels[field] || field).join('、') : ''
         setTopicError([payload?.error, missing ? `还缺少：${missing}` : ''].filter(Boolean).join('；') || '选题生成失败，请稍后重试。')
       })
-      .finally(() => setBusy(false))
+      .finally(() => { topicRequest.current = false; setBusy(false) })
   }
-  const evaluateTopicItem = (topic: TopicItem) => { setBusy(true); void apiJson<TopicItem>(`/api/topics/${topic.id}/evaluate`, { method: 'POST', body: JSON.stringify({}) }).then(updated => setTopics(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => undefined).finally(() => setBusy(false)) }
-  const decideTopic = (topic: TopicItem, decision: 'do' | 'revise' | 'defer') => { setBusy(true); void apiJson<TopicItem>(`/api/topics/${topic.id}/decision`, { method: 'PUT', body: JSON.stringify({ decision }) }).then(updated => setTopics(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => undefined).finally(() => setBusy(false)) }
+  const evaluateTopicItem = (topic: TopicItem) => { void topicAction(`/api/topics/${topic.id}/evaluate`, 'POST', {}) }
+  const decideTopic = (topic: TopicItem, decision: 'do' | 'revise' | 'defer') => { void topicAction(`/api/topics/${topic.id}/decision`, 'PUT', { decision }) }
   const generateDrafts = (topic: TopicItem) => { if (topic.workflow_status !== 'approved') return; setBusy(true); void apiJson<DraftItem[]>('/api/drafts/generate', { method: 'POST', body: JSON.stringify({ topic_id: topic.id }) }).then(result => setDrafts(current => [...result, ...current])).catch(() => undefined).finally(() => setBusy(false)) }
   const useStructure = (structure: StructureItem) => { setBusy(true); void apiJson<DraftItem[]>('/api/drafts/generate', { method: 'POST', body: JSON.stringify({ structure_id: structure.id, topic: { title: structure.title, strategy_layer: 'trust', goal_refs: [] } }) }).then(() => onNavigate('内容创作')).catch(() => undefined).finally(() => setBusy(false)) }
-  const deaiDraft = (draft: DraftItem) => { setDeaiBusy(draft.id); void apiJson<{ content: string }>(`/api/drafts/${draft.id}/deai`, { method: 'POST', body: '{}' }).then(result => setDeaiResults(current => ({ ...current, [draft.id]: result.content }))).catch(() => undefined).finally(() => setDeaiBusy(null)) }
-  const updateDraft = (draft: DraftItem, patch: Partial<DraftItem>) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}`, { method: 'PUT', body: JSON.stringify({ ...patch, version: draft.version }) }).then(updated => { setDrafts(current => current.map(item => item.id === updated.id ? updated : item)); setDirtyDrafts(current => { const next = new Set(current); next.delete(draft.id); return next }) }).catch(() => undefined).finally(() => setBusy(false)) }
+  const deaiDraft = (draft: DraftItem) => { if (draftActionBlocked(draft)) return; setDeaiBusy(draft.id); void apiJson<{ content: string }>(`/api/drafts/${draft.id}/deai`, { method: 'POST', body: '{}' }).then(result => setDeaiResults(current => ({ ...current, [draft.id]: result.content }))).catch(() => undefined).finally(() => setDeaiBusy(null)) }
+  const updateDraft = (draft: DraftItem, patch: Partial<DraftItem>) => { if (busy || saveInFlight.current) return; saveInFlight.current = true; setDraftError(''); setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}`, { method: 'PUT', body: JSON.stringify({ ...patch, version: draft.version }) }).then(updated => { setDrafts(current => current.map(item => item.id === updated.id ? updated : item)); setDirtyDrafts(current => { const next = new Set(current); next.delete(draft.id); return next }) }).catch((error: unknown) => setDraftError(error instanceof Error ? `保存失败：${error.message}。输入已保留，请重试。` : '保存失败，输入已保留，请重试。')).finally(() => { saveInFlight.current = false; setBusy(false) }) }
   const approveDraft = (draft: DraftItem) => { setBusy(true); void apiJson<DraftApprovalResponse>(`/api/drafts/${draft.id}/approve`, { method: 'POST', body: JSON.stringify({ version: draft.version }) }).then(result => setDrafts(current => current.map(item => item.id === result.draft.id ? result.draft : item))).catch(() => undefined).finally(() => setBusy(false)) }
   const revokeDraftApproval = (draft: DraftItem) => { const reason = window.prompt('请输入撤回原因'); if (!reason?.trim()) return; setBusy(true); void apiJson<DraftApprovalResponse>(`/api/drafts/${draft.id}/revoke-approval`, { method: 'POST', body: JSON.stringify({ version: draft.version, reason: reason.trim() }) }).then(result => setDrafts(current => current.map(item => item.id === result.draft.id ? result.draft : item))).catch(() => undefined).finally(() => setBusy(false)) }
   if ((section as string) === '素材库') return <MaterialWorkspace />
@@ -1321,7 +1403,7 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId 
   if (section === '发布中心') return <PublishCenter />
   if (section === '内容日历') return <ContentCalendar />
   const heading = section === '爆款方法库' ? '爆款方法库' : section === '选题助手' ? '选题助手' : '内容创作'
-  return <section className="workspace-view"><div className="workspace-view-head"><div><span className="section-kicker">WORKSPACE / {section.toUpperCase()}</span><h2>{heading}</h2><p>围绕定位和 IP 核心目标，沉淀可追溯的内容资产。</p></div>{section === '选题助手' && <button className="primary-action" onClick={generateTopics}>{busy ? '生成中...' : '生成选题'} <Sparkles size={15} /></button>}</div>{section === '选题助手' && topicError && <p className="structure-error" role="alert">{topicError}</p>}{section === '爆款方法库' && <StructureLibrary onUse={useStructure} />}{section === '选题助手' && <div className="asset-list">{topics.length ? topics.map(topic => { const evaluation = topic.evaluation; return <article className="asset-row topic-evaluation-card" key={topic.id}><div><h3>{topic.title}</h3><p>{topic.content_job} · {topic.rationale}</p>{evaluation ? <><div className="topic-score-row"><strong>{evaluation.score} 分</strong><span>{topicDecisionLabels[evaluation.decision]}</span><small>{topic.workflow_status === 'approved' ? '已确认进入创作' : topic.workflow_status === 'needs_revision' ? '等待调整后重新评估' : '已完成评估'}</small></div><div className="topic-dimensions">{Object.entries(evaluation.dimensions).map(([key, dimension]) => <span key={key}><b>{topicDimensionLabels[key] || key}</b><strong>{dimension.score}</strong></span>)}</div><details className="topic-evidence"><summary>查看评分证据与建议</summary><ul>{evaluation.evidence.map((item, index) => <li key={`${item.dimension}-${index}`}>{topicDimensionLabels[item.dimension] || item.dimension}：{item.message}</li>)}</ul>{evaluation.suggestions.length > 0 && <p>下一步：{evaluation.suggestions.join('；')}</p>}</details></> : <p className="topic-pending">尚未评估：先运行七维评估，再决定是否进入创作。</p>}</div><div className="topic-actions">{!evaluation && <button className="outline-action" disabled={busy} onClick={() => evaluateTopicItem(topic)}>七维评估</button>}{evaluation && topic.workflow_status === 'evaluated' && <><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'do')}>确认做</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'revise')}>调整方向</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'defer')}>暂缓</button></>}{evaluation && topic.workflow_status === 'approved' && <button className="outline-action" disabled={busy} onClick={() => generateDrafts(topic)}>生成草稿</button>}</div></article> }) : <div className="structure-empty"><p className="empty-state">选择生成选题，系统会从当前研究和素材中建立来源链路。</p></div>}</div>}{section === '内容创作' && <><ComposePanel onGenerated={result => setDrafts(current => [...result, ...current])} />{drafts.length ? <div className="draft-grid">{drafts.map(draft => <article className="trend-card draft-card" key={draft.id}><div className="card-top"><span className="platform-tag douyin">{draft.platform}</span><span className="draft-version">v{draft.version || 1}</span></div><input className="draft-title-input" value={draft.title} onChange={event => { setDrafts(current => current.map(item => item.id === draft.id ? { ...item, title: event.target.value } : item)); setDirtyDrafts(current => new Set(current).add(draft.id)) }} /><textarea className="draft-body-input" value={draft.body} onChange={event => { setDrafts(current => current.map(item => item.id === draft.id ? { ...item, body: event.target.value } : item)); setDirtyDrafts(current => new Set(current).add(draft.id)) }} />{draft.hooks?.length ? <div className="draft-hooks"><div className="draft-hooks-head"><span>Hook 候选</span><small>{draft.workflow_status === 'content_ready' ? '已选择，可继续修改正文' : '选择一个作为开头'}</small></div>{draft.hooks.map(hook => <button className={draft.selected_hook_id === hook.id ? 'hook-option selected' : 'hook-option'} disabled={busy || hook.validation.status !== 'passed'} onClick={() => selectDraftHook(draft, hook)} key={hook.id}><b>{hook.label}</b><span>{hook.text}</span></button>)}</div> : null}{draft.checks && <div className="draft-checks"><div className="draft-checks-head"><span>发布前检查</span><small>{draft.workflow_status || 'draft'}</small></div>{(['persona', 'quality', 'publish'] as const).map(check => { const key = check === 'publish' ? 'publish_checklist' : check; const item = draft.checks?.[key]; const current = item?.draft_version === draft.version; const personaReady = draft.checks?.persona?.draft_version === draft.version; const qualityReady = personaReady && draft.checks?.quality?.draft_version === draft.version && draft.checks?.quality?.status === 'passed'; const allowed = check === 'persona' || check === 'quality' ? (check === 'quality' ? personaReady : true) : qualityReady; const labels = { persona: '人设检查', quality: '质量门', publish: '发布清单' }; return <div className="draft-check" key={check}><div className="draft-check-top"><strong>{labels[check]}</strong><span className={item?.status || 'pending'}>{item && current ? draftCheckStatusLabels[item.status] || '待检查' : '待检查'}</span>{item?.score != null && <b>{item.score} 分</b>}</div><button className="outline-action" disabled={busy || !allowed} onClick={() => runDraftCheck(draft, check, Boolean(item && current))}>{item && current ? '重新检查' : check === 'quality' && !personaReady ? '先做人设检查' : check === 'publish' && !qualityReady ? '先通过质量门' : '开始检查'}</button>{item && current && item.evidence.length > 0 && <ul>{item.evidence.map((evidence, index) => <li key={`${evidence.code}-${index}`}>{evidence.message}</li>)}</ul>}{item && current && item.suggestions.length > 0 && <small className="draft-check-suggestions">建议：{item.suggestions.join('；')}</small>}</div> })}</div>}<DraftApprovalPanel draft={draft} busy={busy} dirty={dirtyDrafts.has(draft.id)} onApprove={() => approveDraft(draft)} onRevoke={() => revokeDraftApproval(draft)} onOpenShooting={onOpenShooting} /><div className="card-foot"><span>{draft.fact_check_status === 'verified' ? '事实已核验' : '事实待核验'}</span><div>{draft.fact_check_status !== 'verified' && <button className="outline-action" disabled={busy || dirtyDrafts.has(draft.id)} onClick={() => updateDraft(draft, { fact_check_status: 'verified' })}>标记已核验</button>}<button className="outline-action" onClick={() => updateDraft(draft, { title: draft.title, body: draft.body })}>{busy ? '保存中...' : '保存草稿'}</button></div></div>{history[draft.id] && <div className="history-list">{history[draft.id].map(item => <span key={`${draft.id}-${item.version}`}><small>v{item.version || 1}</small><button className="text-action" disabled={busy} onClick={() => restoreDraft(draft, item.version || 1)}>恢复</button></span>)}</div>}{compliance[draft.id] && <div className="compliance-result">{compliance[draft.id].source === 'error' ? <small role="alert">合规检查失败，请稍后重试。</small> : compliance[draft.id].hits.length ? compliance[draft.id].hits.map(hit => <span className="compliance-hit" key={hit.word}><strong>{hit.word}</strong><small>{hit.level} · {hit.suggestion}</small></span>) : <small>未检测到违禁词风险（{compliance[draft.id].source === 'demo' ? '演示词表' : '红狐词表'}）。</small>}</div>}<div className="draft-actions"><button className="outline-action" disabled={busy} onClick={() => generateHooks(draft)}>{draft.hooks?.length ? '重新生成 Hook' : '生成 Hook'}</button><button className="outline-action" onClick={() => loadHistory(draft)}>查看历史</button><button className="outline-action" disabled={complianceBusy === draft.id || !loadSkillToggles().compliance} onClick={() => checkCompliance(draft)}>{complianceBusy === draft.id ? '检测中...' : '合规检查'}</button><button className="outline-action" disabled={busy} onClick={() => copyDraft(draft)}>复制草稿</button><button className="outline-action" disabled={deaiBusy === draft.id} onClick={() => deaiDraft(draft)}>{deaiBusy === draft.id ? '改写中...' : '去 AI 感改写'}</button></div>{deaiResults[draft.id] && <div className="deai-result"><div className="draft-check-top"><strong>去 AI 感改写预览</strong><small>建议人工过目后再替换</small></div><p>{deaiResults[draft.id]}</p><div className="deai-actions"><button className="primary-action" disabled={busy} onClick={() => { updateDraft(draft, { body: deaiResults[draft.id] }); setDeaiResults(current => { const next = { ...current }; delete next[draft.id]; return next }) }}>替换正文</button><button className="skip-action" onClick={() => setDeaiResults(current => { const next = { ...current }; delete next[draft.id]; return next })}>放弃</button></div></div>}</article>)}</div> : <div className="structure-empty"><p className="empty-state">还没有草稿。用上方组合生成面板组装第一份文案，或去选题助手生成选题。</p></div>}</>}</section>
+  return <section className="workspace-view"><div className="workspace-view-head"><div><span className="section-kicker">WORKSPACE / {section.toUpperCase()}</span><h2>{heading}</h2><p>围绕定位和 IP 核心目标，沉淀可追溯的内容资产。</p></div>{section === '选题助手' && <button className="primary-action" disabled={busy || topicsLoading} onClick={generateTopics}>{busy ? '生成中...' : '生成选题'} <Sparkles size={15} /></button>}</div>{section === '选题助手' && topicError && <p className="structure-error" role="alert">{topicError}</p>}{section === '爆款方法库' && <StructureLibrary onUse={useStructure} />}{section === '选题助手' && <><button disabled={busy || topicsLoading} onClick={loadTopics}>重新加载历史选题</button>{topicsLoading && <p role="status">正在加载历史选题...</p>}{topicEdit && <div><input aria-label="选题标题" value={topicEdit.title} disabled={busy} onChange={event => setTopicEdit({ ...topicEdit, title: event.target.value })} /><textarea aria-label="选题说明" value={topicEdit.rationale} disabled={busy} onChange={event => setTopicEdit({ ...topicEdit, rationale: event.target.value })} /><button disabled={busy} onClick={() => void topicAction(`/api/topics/${topicEdit.id}/revision`, 'PUT', topicEdit)}>保存调整</button><button disabled={busy} onClick={() => setTopicEdit(null)}>取消</button></div>}</>}{section === '选题助手' && <div className="asset-list">{topics.length ? topics.map(topic => { const evaluation = topic.evaluation; return <article className="asset-row topic-evaluation-card" key={topic.id}><div><h3>{topic.title}</h3><p>{topic.content_job} · {topic.rationale}</p>{evaluation ? <><div className="topic-score-row"><strong>{evaluation.score} 分</strong><span>{topicDecisionLabels[evaluation.decision]}</span><small>{topic.workflow_status === 'approved' ? '已确认进入创作' : topic.workflow_status === 'needs_revision' ? '等待调整后重新评估' : '已完成评估'}</small></div><div className="topic-dimensions">{Object.entries(evaluation.dimensions).map(([key, dimension]) => <span key={key}><b>{topicDimensionLabels[key] || key}</b><strong>{dimension.score}</strong></span>)}</div><details className="topic-evidence"><summary>查看评分证据与建议</summary><ul>{evaluation.evidence.map((item, index) => <li key={`${item.dimension}-${index}`}>{topicDimensionLabels[item.dimension] || item.dimension}：{item.message}</li>)}</ul>{evaluation.suggestions.length > 0 && <p>下一步：{evaluation.suggestions.join('；')}</p>}</details></> : <p className="topic-pending">尚未评估：先运行七维评估，再决定是否进入创作。</p>}</div><div className="topic-actions">{topic.workflow_status === 'needs_revision' && <button disabled={busy || topicsLoading} onClick={() => setTopicEdit({ id: topic.id, title: topic.title, rationale: topic.rationale })}>编辑方向</button>}{(!evaluation || topic.workflow_status === 'needs_revision') && <button className="outline-action" disabled={busy} onClick={() => evaluateTopicItem(topic)}>七维评估</button>}{evaluation && topic.workflow_status === 'evaluated' && <><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'do')}>确认做</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'revise')}>调整方向</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'defer')}>暂缓</button></>}{evaluation && topic.workflow_status === 'approved' && <button className="outline-action" disabled={busy} onClick={() => generateDrafts(topic)}>生成草稿</button>}</div></article> }) : <div className="structure-empty"><p className="empty-state">{topicsLoading ? '正在读取历史选题...' : topicError ? '请先处理上述错误，或重新加载历史选题。' : '选择生成选题，系统会从当前研究和素材中建立来源链路。'}</p></div>}</div>}{section === '内容创作' && <>{draftError && <p role="alert">{draftError}</p>}<ComposePanel onGenerated={result => setDrafts(current => [...result, ...current])} />{drafts.length ? <div className="draft-grid">{drafts.map(draft => <article className="trend-card draft-card" key={draft.id}><div className="card-top"><span className="platform-tag douyin">{draft.platform}</span><span className="draft-version">v{draft.version || 1}</span></div><input className="draft-title-input" disabled={busy} value={draft.title} onChange={event => { setDrafts(current => current.map(item => item.id === draft.id ? { ...item, title: event.target.value } : item)); setDirtyDrafts(current => new Set(current).add(draft.id)) }} /><textarea className="draft-body-input" disabled={busy} value={draft.body} onChange={event => { setDrafts(current => current.map(item => item.id === draft.id ? { ...item, body: event.target.value } : item)); setDirtyDrafts(current => new Set(current).add(draft.id)) }} />{draft.hooks?.length ? <div className="draft-hooks"><div className="draft-hooks-head"><span>Hook 候选</span><small>{draft.workflow_status === 'content_ready' ? '已选择，可继续修改正文' : '选择一个作为开头'}</small></div>{draft.hooks.map(hook => <button className={draft.selected_hook_id === hook.id ? 'hook-option selected' : 'hook-option'} disabled={busy || hook.validation.status !== 'passed'} onClick={() => selectDraftHook(draft, hook)} key={hook.id}><b>{hook.label}</b><span>{hook.text}</span></button>)}</div> : null}{draft.checks && <div className="draft-checks"><div className="draft-checks-head"><span>发布前检查</span><small>{draft.workflow_status || 'draft'}</small></div>{(['persona', 'quality', 'publish'] as const).map(check => { const key = check === 'publish' ? 'publish_checklist' : check; const item = draft.checks?.[key]; const current = item?.draft_version === draft.version; const personaReady = draft.checks?.persona?.draft_version === draft.version; const qualityReady = personaReady && draft.checks?.quality?.draft_version === draft.version && draft.checks?.quality?.status === 'passed'; const allowed = check === 'persona' || check === 'quality' ? (check === 'quality' ? personaReady : true) : qualityReady; const labels = { persona: '人设检查', quality: '质量门', publish: '发布清单' }; return <div className="draft-check" key={check}><div className="draft-check-top"><strong>{labels[check]}</strong><span className={item?.status || 'pending'}>{item && current ? draftCheckStatusLabels[item.status] || '待检查' : '待检查'}</span>{item?.score != null && <b>{item.score} 分</b>}</div><button className="outline-action" disabled={busy || !allowed} onClick={() => runDraftCheck(draft, check, Boolean(item && current))}>{item && current ? '重新检查' : check === 'quality' && !personaReady ? '先做人设检查' : check === 'publish' && !qualityReady ? '先通过质量门' : '开始检查'}</button>{item && current && item.evidence.length > 0 && <ul>{item.evidence.map((evidence, index) => <li key={`${evidence.code}-${index}`}>{evidence.message}</li>)}</ul>}{item && current && item.suggestions.length > 0 && <small className="draft-check-suggestions">建议：{item.suggestions.join('；')}</small>}</div> })}</div>}<DraftApprovalPanel draft={draft} busy={busy} dirty={dirtyDrafts.has(draft.id)} onApprove={() => approveDraft(draft)} onRevoke={() => revokeDraftApproval(draft)} onOpenShooting={onOpenShooting} /><div className="card-foot"><span>{draft.fact_check_status === 'verified' ? '事实已核验' : '事实待核验'}</span><div>{draft.fact_check_status !== 'verified' && <button className="outline-action" disabled={busy || dirtyDrafts.has(draft.id)} onClick={() => updateDraft(draft, { fact_check_status: 'verified' })}>标记已核验</button>}<button className="outline-action" onClick={() => updateDraft(draft, { title: draft.title, body: draft.body })}>{busy ? '保存中...' : '保存草稿'}</button></div></div>{history[draft.id] && <div className="history-list">{history[draft.id].map(item => <span key={`${draft.id}-${item.version}`}><small>v{item.version || 1}</small><button className="text-action" disabled={busy} onClick={() => restoreDraft(draft, item.version || 1)}>恢复</button></span>)}</div>}{compliance[draft.id] && <div className="compliance-result">{compliance[draft.id].source === 'error' ? <small role="alert">合规检查失败，请稍后重试。</small> : compliance[draft.id].hits.length ? compliance[draft.id].hits.map(hit => <span className="compliance-hit" key={hit.word}><strong>{hit.word}</strong><small>{hit.level} · {hit.suggestion}</small></span>) : <small>未检测到违禁词风险（本地词库）。</small>}</div>}<div className="draft-actions"><button className="outline-action" disabled={busy} onClick={() => generateHooks(draft)}>{draft.hooks?.length ? '重新生成 Hook' : '生成 Hook'}</button><button className="outline-action" onClick={() => loadHistory(draft)}>查看历史</button><button className="outline-action" disabled={complianceBusy === draft.id || !loadSkillToggles().compliance} onClick={() => checkCompliance(draft)}>{complianceBusy === draft.id ? '检测中...' : '合规检查'}</button><button className="outline-action" disabled={busy} onClick={() => copyDraft(draft)}>复制草稿</button><button className="outline-action" disabled={deaiBusy === draft.id} onClick={() => deaiDraft(draft)}>{deaiBusy === draft.id ? '改写中...' : '去 AI 感改写'}</button></div>{deaiResults[draft.id] && <div className="deai-result"><div className="draft-check-top"><strong>去 AI 感改写预览</strong><small>建议人工过目后再替换</small></div><p>{deaiResults[draft.id]}</p><div className="deai-actions"><button className="primary-action" disabled={busy} onClick={() => { if (draftActionBlocked(draft)) return; updateDraft(draft, { body: deaiResults[draft.id] }); setDeaiResults(current => { const next = { ...current }; delete next[draft.id]; return next }) }}>替换正文</button><button className="skip-action" onClick={() => setDeaiResults(current => { const next = { ...current }; delete next[draft.id]; return next })}>放弃</button></div></div>}</article>)}</div> : <div className="structure-empty"><p className="empty-state">还没有草稿。用上方组合生成面板组装第一份文案，或去选题助手生成选题。</p></div>}</>}</section>
 }
 
 type ProfileReview = { id: string; status: string; extracted: Record<string, unknown>; source_refs?: unknown[] }
@@ -1830,18 +1912,19 @@ function ShootingWorkspace({ onClose }: { onClose: () => void }) {
   return <section className="shoot-workspace"><div className="shoot-workspace-head"><div><span className="section-kicker">TODAY / SHOOTING DESK</span><h2>今日拍摄清单</h2><p>把准备好的内容，转成可以直接开拍的动作。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="shoot-workspace-grid"><div className="shoot-items">{items.length ? items.map(item => <article className={active?.id === item.id ? 'shoot-item selected' : 'shoot-item'} key={item.id}><div><span className={`platform-tag ${item.platform === '小红书' ? 'xhs' : item.platform === '公众号' ? 'wechat' : 'douyin'}`}>{item.platform}</span><h3>{item.title}</h3></div><select value={item.status} onChange={event => update(item.id, { status: event.target.value })}><option value="ready_to_shoot">待拍摄</option><option value="in_progress">拍摄中</option><option value="completed">已完成</option></select><button className="row-arrow" onClick={() => { setActive(item); setFontSize(item.font_size || 24); setScrollSpeed(item.scroll_speed || 3) }}><ArrowUpRight size={17} /></button></article>) : <p className="empty-state">暂无待拍摄内容。先在内容创作中准备一条脚本。</p>}</div>{active && <div className="teleprompter"><div className="teleprompter-tools"><button onClick={() => setPlaying(!playing)}>{playing ? <Pause size={15} /> : <Play size={15} />} {playing ? '暂停' : '开始滚动'}</button><label>字号 <input type="range" min="16" max="42" value={fontSize} onChange={event => setFontSize(Number(event.target.value))} /></label><label>速度 <input type="range" min="1" max="8" value={scrollSpeed} onChange={event => setScrollSpeed(Number(event.target.value))} /></label><label className="outline-action">{visionBusy ? '上传中…' : '上传表现截图'}<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={event => { void analyzeScreenshots(event.target.files); event.currentTarget.value = '' }} /></label></div>{visionMessage && <p className="error-note" role="status">{visionMessage}</p>}{visionTasks.filter(task => task.match_status !== 'confirmed').map(task => <VisionConfirmationCard key={task.id} task={task} shooting={active} onChanged={next => setVisionTasks(current => next ? current.map(item => item.id === next.id ? next : item) : current.filter(item => item.id !== task.id))} onConfirmed={() => setSnapshotRefresh(value => value + 1)} />)}<PerformanceTimeline shooting={active} refreshKey={snapshotRefresh} /><div className={playing ? 'teleprompter-script is-playing' : 'teleprompter-script'} style={{ fontSize }}><span>{active.platform} · 提词模式</span><h3>{active.title}</h3><p>{active.script || '脚本内容将在内容创作完成后显示。你可以先确认镜头节奏，再开始拍摄。'}</p></div><button className="primary-action" onClick={() => update(active.id, { status: active.status === 'completed' ? 'ready_to_shoot' : 'completed', font_size: fontSize, scroll_speed: scrollSpeed })}>{active.status === 'completed' ? '重新安排拍摄' : '标记为已完成'} <Check size={16} /></button></div>}</div></section>
 }
 
-function PasswordGate({ theme, font, onSuccess }: { theme: ThemeKey; font: FontKey; onSuccess: () => void }) {
+function PasswordGate({ theme, font, onSuccess, expectedUser }: { theme: ThemeKey; font: FontKey; onSuccess: () => void; expectedUser?: string }) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
-  const [username, setUsername] = useState('')
+  const [username, setUsername] = useState(expectedUser || '')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const submit = () => {
     if (busy || !username || !password) return
+    if (expectedUser !== undefined && (!expectedUser || username.trim().toLowerCase() !== expectedUser)) { setError('请登录原账号；无法确认原账号时，请先复制保存当前输入再刷新。'); return }
     setBusy(true); setError('')
     const request = window.desktopApp
-      ? window.desktopApp.login(password)
+      ? window.desktopApp.login({ mode, username, password })
       : mode === 'login'
         ? apiJson('/api/auth/session', { method: 'POST', body: JSON.stringify({ username, password }) })
         : apiJson('/api/auth/register', { method: 'POST', body: JSON.stringify({ username, password }) })
@@ -1851,7 +1934,7 @@ function PasswordGate({ theme, font, onSuccess }: { theme: ThemeKey; font: FontK
       .finally(() => setBusy(false))
   }
 
-  return <main className={`app theme-${theme} font-${font}`}><div className="password-gate"><div className="brand"><div className="brand-mark">定</div><div><strong>定位派</strong><span>个人 IP 内容成长平台</span></div></div><h1>{mode === 'login' ? '登录你的工作台' : '创建你的工作台'}</h1><p>{mode === 'login' ? '每位创作者的数据相互独立，登录后进入你自己的内容空间。' : '注册后你将拥有独立的数据空间，档案、素材与草稿只属于你。'}</p><form onSubmit={(event) => { event.preventDefault(); submit() }}><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="用户名（字母、数字、下划线或中划线）" autoFocus aria-label="用户名" autoComplete="username" /><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'register' ? '密码（至少 8 位）' : '密码'} autoFocus={false} aria-label="密码" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} /><button className="primary-action" type="submit" disabled={busy || !username || !password}>{busy ? (mode === 'login' ? '登录中...' : '注册中...') : (mode === 'login' ? '进入工作台' : '注册并进入')} <ArrowUpRight size={16} /></button></form><button className="skip-action" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError('') }}>{mode === 'login' ? '还没有账号？注册一个' : '已有账号？直接登录'}</button>{error && <p className="error-note" role="alert">{error}</p>}</div></main>
+  return <main className={`app theme-${theme} font-${font}`}><div className="password-gate"><div className="brand"><div className="brand-mark">定</div><div><strong>定位派</strong><span>个人 IP 内容成长平台</span></div></div><h1>{mode === 'login' ? '登录你的工作台' : '创建你的工作台'}</h1><p>{mode === 'login' ? '每位创作者的数据相互独立，登录后进入你自己的内容空间。' : '注册后你将拥有独立的数据空间，档案、素材与草稿只属于你。'}</p><form onSubmit={(event) => { event.preventDefault(); submit() }}><input readOnly={Boolean(expectedUser)} value={username} onChange={(event) => setUsername(event.target.value)} placeholder="用户名（字母、数字、下划线或中划线）" autoFocus aria-label="用户名" autoComplete="username" /><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'register' ? '密码（至少 8 位）' : '密码'} autoFocus={false} aria-label="密码" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} /><button className="primary-action" type="submit" disabled={busy || !username || !password}>{busy ? (mode === 'login' ? '登录中...' : '注册中...') : (mode === 'login' ? '进入工作台' : '注册并进入')} <ArrowUpRight size={16} /></button></form><button className="skip-action" disabled={expectedUser !== undefined || busy} onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError('') }}>{mode === 'login' ? '还没有账号？注册一个' : '已有账号？直接登录'}</button>{error && <p className="error-note" role="alert">{error}</p>}</div></main>
 }
 
 function Onboarding({ theme, setTheme, font, setFont, showThemes, setShowThemes, onEnter, onBack }: { theme: ThemeKey; setTheme: (theme: ThemeKey) => void; font: FontKey; setFont: (font: FontKey) => void; showThemes: boolean; setShowThemes: (value: boolean) => void; onEnter: () => void; onBack: () => void }) {
@@ -1861,30 +1944,54 @@ function Onboarding({ theme, setTheme, font, setFont, showThemes, setShowThemes,
   const [acquisitionGoal, setAcquisitionGoal] = useState('')
   const finished = round === interviewRounds.length
   const current = interviewRounds[Math.min(round, interviewRounds.length - 1)]
-  const hints = ['可以说一段工作经历、一个长期爱好、一次转行或你反复解决的一类问题。', '请描述具体动作，例如“我能把复杂的菜谱改成新手能照做的步骤”。', '具体到身份和场景，例如“刚接手小店、每天不知道发什么内容的老板”。', '可以是省下时间、学会技能、做出作品，或获得一种新的视角。', '一个特殊行业、一条反常识经验或一种独有做法都可以。', '可以说作品照片、客户反馈、过程记录或真实前后变化。', '可以选择文字、视频、直播、教程、故事、测评或过程记录。', '变现可以是课程、服务、产品、咨询、合作或会员；目的也可以是获客、建立信任、招募伙伴或拓展机会。']
-  const advance = () => {
-    const interviewUpdate = round < interviewRounds.length - 1 && answer.trim()
-      ? { interview_answers: { [round]: answer.trim() } }
-      : {}
-    if (round === interviewRounds.length - 1) {
-      void apiJson('/api/positioning', {
-        method: 'PUT',
-        body: JSON.stringify({
-          status: 'complete',
-          monetization_goals: monetizationGoal ? [monetizationGoal] : [],
-          acquisition_goals: acquisitionGoal ? [acquisitionGoal] : [],
-          ...interviewUpdate,
-        }),
-      })
-    } else if (Object.keys(interviewUpdate).length) {
-      void apiJson('/api/positioning', { method: 'PUT', body: JSON.stringify(interviewUpdate) })
-    }
-    setAnswer(''); setMonetizationGoal(''); setAcquisitionGoal(''); setRound(round + 1)
+  const hints = ['可以说一段工作经历、一个长期爱好、一次转行，或者你反复解决的一类问题。', '请描述具体动作，例如“我能把复杂方案拆成普通人能执行的步骤”。', '具体到身份和场景，例如“刚开始经营账号、不知道该持续讲什么的创业者”。', '变现可以是课程、服务、产品、咨询或合作；也可以是获客、建立信任或寻找伙伴。']
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const savingRef = useRef(false)
+  const [dirty, setDirty] = useState(false)
+  const loadInterview = () => {
+    setLoading(true); setSaveError('')
+    void apiJson<{ interview_step?: number; interview_answers?: Record<string, string>; monetization_goals?: string[]; acquisition_goals?: string[]; status?: string }>('/api/positioning')
+      .then(doc => {
+        const saved = doc.interview_answers || {}
+        const missing = [0, 1, 2].find(index => !saved[index]) ?? 3
+        const step = Number.isInteger(doc.interview_step) ? Math.max(0, Math.min(4, doc.interview_step!)) : doc.status === 'complete' ? 4 : missing
+        setAnswers(saved); setRound(step); setAnswer(saved[step] || '')
+        setMonetizationGoal((doc.monetization_goals || []).join('；')); setAcquisitionGoal((doc.acquisition_goals || []).join('；'))
+        setLoading(false); setDirty(false)
+      }).catch(() => setSaveError('访谈加载失败，请重试。'))
   }
-  return <main className={`app onboarding theme-${theme} font-${font}`}><header className="onboarding-top"><div className="brand"><div className="brand-mark">定</div><div><strong>定位派</strong><span>个人 IP 内容成长平台</span></div></div><div className="onboarding-actions"><button className="outline-action" onClick={onBack}><ArrowUpRight size={15} /> 返回工作台</button><div className="theme-picker"><button className="theme-trigger" onClick={() => setShowThemes(!showThemes)}><SunMedium size={16} /><span>{themes[theme].name}</span><ChevronDown size={14} /></button>{showThemes && <ThemeMenu theme={theme} setTheme={setTheme} close={() => setShowThemes(false)} font={font} setFont={setFont} />}</div></div></header><div className="onboarding-body">{finished ? <PositioningResult monetizationGoal={monetizationGoal} acquisitionGoal={acquisitionGoal} onEnter={onEnter} /> : <><div className="onboarding-progress"><span>定位发现访谈</span><span>{round + 1} / {interviewRounds.length}</span></div><div className="progress-track"><span style={{ width: `${((round + 1) / interviewRounds.length) * 100}%` }} /></div><div className="question-layout"><section className="question-main"><span className="section-kicker">{current[0]}</span><h1>{current[1]}</h1><p className="question">{current[2]}</p>{round === interviewRounds.length - 1 ? <div className="goal-fields"><label><span>变现目标</span><textarea value={monetizationGoal} onChange={(event) => setMonetizationGoal(event.target.value)} placeholder="例如：咨询服务、课程、产品、品牌合作..." autoFocus /></label><label><span>获客目标 / 其他目的</span><textarea value={acquisitionGoal} onChange={(event) => setAcquisitionGoal(event.target.value)} placeholder="例如：获得客户、建立信任、寻找合作伙伴、扩大影响力..." /></label></div> : <textarea value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="写下你的真实经历，不需要组织得很完美..." autoFocus />}<div className="question-actions"><button className="skip-action" onClick={advance}>暂时想不到</button><button className="primary-action" onClick={advance}>{round === interviewRounds.length - 1 ? '生成我的定位' : '继续回答'} <ArrowUpRight size={16} /></button></div></section><aside className="question-aside"><div className="aside-orbit"><div className="orbit-core">{round + 1}</div><span className="orbit-dot dot-one" /><span className="orbit-dot dot-two" /><span className="orbit-dot dot-three" /></div><strong>{hints[round]}</strong><p>你的回答会成为定位证据，系统会区分事实和推断。</p></aside></div></>}</div></main>
+  useEffect(loadInterview, [])
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => { if (dirty || savingRef.current) { event.preventDefault(); event.returnValue = '' } }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+  const saveInterview = async (leave: boolean) => {
+    if (loading || savingRef.current) return
+    savingRef.current = true; setSaving(true); setSaveError('')
+    const nextAnswers = round < 3 ? { ...answers, [round]: answer.trim() } : answers
+    try {
+      await apiJson('/api/positioning', { method: 'PUT', body: JSON.stringify({
+        interview_answers: nextAnswers,
+        interview_step: leave ? round : Math.min(4, round + 1),
+        monetization_goals: monetizationGoal.trim() ? [monetizationGoal.trim()] : [],
+        acquisition_goals: acquisitionGoal.trim() ? [acquisitionGoal.trim()] : [],
+        ...(leave ? { onboarding_seen_at: new Date().toISOString() } : {}),
+      }) })
+      setDirty(false); setAnswers(nextAnswers)
+      if (leave) onBack()
+      else { setRound(round + 1); setAnswer(nextAnswers[round + 1] || '') }
+    } catch { setSaveError('保存失败，输入已保留，请重试。') }
+    finally { savingRef.current = false; setSaving(false) }
+  }
+  const advance = () => { void saveInterview(false) }
+  return <main className={`app onboarding theme-${theme} font-${font}`}><header className="onboarding-top"><div className="brand"><div className="brand-mark">定</div><div><strong>定位派</strong><span>个人 IP 内容成长平台</span></div></div><div className="onboarding-actions"><button className="outline-action" disabled={loading || saving} onClick={() => void saveInterview(true)}><ArrowUpRight size={15} /> 稍后填写</button><div className="theme-picker"><button className="theme-trigger" onClick={() => setShowThemes(!showThemes)}><SunMedium size={16} /><span>{themes[theme].name}</span><ChevronDown size={14} /></button>{showThemes && <ThemeMenu theme={theme} setTheme={setTheme} close={() => setShowThemes(false)} font={font} setFont={setFont} />}</div></div></header><div className="onboarding-body">{saveError && <p role="alert">{saveError}{loading && <button onClick={loadInterview}>重新加载</button>}</p>}{loading ? <p role="status">正在加载访谈...</p> : finished ? <PositioningResult monetizationGoal={monetizationGoal} acquisitionGoal={acquisitionGoal} onEnter={onEnter} /> : <><div className="onboarding-progress"><span>定位发现访谈</span><span>{round + 1} / {interviewRounds.length}</span></div><div className="progress-track"><span style={{ width: `${((round + 1) / interviewRounds.length) * 100}%` }} /></div><div className="question-layout"><section className="question-main"><span className="section-kicker">{current[0]}</span><h1>{current[1]}</h1><p className="question">{current[2]}</p>{round === interviewRounds.length - 1 ? <div className="goal-fields"><label><span>变现目标</span><textarea value={monetizationGoal} disabled={saving} onChange={(event) => { setMonetizationGoal(event.target.value); setDirty(true) }} placeholder="例如：咨询服务、课程、产品、品牌合作..." autoFocus /></label><label><span>获客目标 / 其他目的</span><textarea value={acquisitionGoal} disabled={saving} onChange={(event) => { setAcquisitionGoal(event.target.value); setDirty(true) }} placeholder="例如：获得客户、建立信任、寻找合作伙伴、扩大影响力..." /></label></div> : <textarea value={answer} disabled={saving} onChange={(event) => { setAnswer(event.target.value); setDirty(true) }} placeholder="写下你的真实经历，不需要组织得很完美..." autoFocus />}<div className="question-actions"><button className="skip-action" disabled={saving} onClick={advance}>暂时想不到</button><button className="primary-action" disabled={saving} onClick={advance}>{round === interviewRounds.length - 1 ? '生成我的定位' : '继续回答'} <ArrowUpRight size={16} /></button></div></section><aside className="question-aside"><div className="aside-orbit"><div className="orbit-core">{round + 1}</div><span className="orbit-dot dot-one" /><span className="orbit-dot dot-two" /><span className="orbit-dot dot-three" /></div><strong>{hints[round]}</strong><p>你的回答会成为定位证据，系统会区分事实和推断。</p></aside></div></>}</div></main>
 }
 
-type PositioningCandidate = { id: string; name: string; positioning_statement: string; audiences: string[]; pillars: string[]; scores: Record<string, number>; status: string }
+type PositioningCandidate = { id: string; name: string; positioning_statement: string; audiences: string[]; pillars: string[]; uncertainties?: string[]; status: string }
 
 function PositioningResult({ monetizationGoal, acquisitionGoal, onEnter }: { monetizationGoal: string; acquisitionGoal: string; onEnter: () => void }) {
   const [candidates, setCandidates] = useState<PositioningCandidate[]>([])
@@ -1893,22 +2000,23 @@ function PositioningResult({ monetizationGoal, acquisitionGoal, onEnter }: { mon
   const [error, setError] = useState('')
 
   useEffect(() => {
-    void apiJson<PositioningCandidate[]>('/api/positioning/candidates', { method: 'POST' })
+    void apiJson<PositioningCandidate[]>('/api/positioning/candidates')
+      .then(saved => saved.length ? saved : apiJson<PositioningCandidate[]>('/api/positioning/candidates', { method: 'POST' }))
       .then(result => { setCandidates(result); setSelected(result[0]?.id || '') })
-      .catch(() => setError('候选定位生成失败，请检查访谈内容后重试。'))
+      .catch((error: unknown) => setError(error instanceof Error ? error.message : '候选定位加载或生成失败，请重试。'))
       .finally(() => setBusy(false))
   }, [])
 
   const confirm = () => {
-    if (!selected) return
+    if (busy || !selected) return
     setBusy(true)
     void apiJson(`/api/positioning/candidates/${selected}`, { method: 'PUT', body: JSON.stringify({ status: 'confirmed' }) })
       .then(onEnter)
-      .catch(() => setError('确认定位失败，请稍后重试。'))
+      .catch((error: unknown) => setError(error instanceof Error ? error.message : '确认定位失败，请稍后重试。'))
       .finally(() => setBusy(false))
   }
 
-  return <div className="result-screen"><span className="section-kicker">POSITION FOUND / 03 DIRECTIONS</span><h1>你的独特价值，正在成形。</h1><p className="result-lede">根据访谈中的经历、能力、目标人群和核心目标，我们生成了 3 个可以继续验证的定位方向。</p><div className="goal-summary"><div><span>变现目标</span><strong>{monetizationGoal || '待进一步明确'}</strong></div><div><span>获客目标 / 其他目的</span><strong>{acquisitionGoal || '待进一步明确'}</strong></div></div>{busy && !candidates.length ? <p className="empty-state">正在根据访谈生成候选定位...</p> : <div className="candidate-grid">{candidates.map((candidate, index) => <article className={selected === candidate.id ? 'candidate featured' : 'candidate'} key={candidate.id} onClick={() => setSelected(candidate.id)}><span>{index === 0 ? 'A / 推荐方向' : `${String.fromCharCode(65 + index)} / 另一种可能`}</span><h2>{candidate.name}</h2><p>{candidate.positioning_statement}</p><div><b>适合人群</b><small>{candidate.audiences.length ? candidate.audiences.join(' · ') : '正在从访谈中提炼'}</small></div><div><b>内容支柱</b><small>{candidate.pillars.join(' · ')}</small></div></article>)}</div>}{error && <p className="error-note" role="alert">{error}</p>}<div className="result-actions"><button className="skip-action" onClick={() => { setBusy(true); void apiJson<PositioningCandidate[]>('/api/positioning/candidates', { method: 'POST' }).then(result => { setCandidates(result); setSelected(result[0]?.id || '') }).catch(() => setError('重新生成失败，请稍后重试。')).finally(() => setBusy(false)) }}>重新生成候选</button><button className="primary-action" disabled={busy || !selected} onClick={confirm}>{busy ? '处理中...' : '确认方向，进入工作台'} <ArrowUpRight size={16} /></button></div></div>
+  return <div className="result-screen"><span className="section-kicker">POSITION FOUND / 03 DIRECTIONS</span><h1>你的独特价值，正在成形。</h1><p className="result-lede">以下是根据已保存访谈生成的定位建议，不代表已验证的事实。确认只补齐空白档案，已有内容保持不变；缺失资料请进入 IP 档案补充。</p><div className="goal-summary"><div><span>变现目标</span><strong>{monetizationGoal || '待进一步明确'}</strong></div><div><span>获客目标 / 其他目的</span><strong>{acquisitionGoal || '待进一步明确'}</strong></div></div>{busy && !candidates.length ? <p className="empty-state">正在根据访谈生成候选定位...</p> : <div className="candidate-grid">{candidates.map((candidate, index) => <article className={selected === candidate.id ? 'candidate featured' : 'candidate'} key={candidate.id} onClick={() => { if (!busy) setSelected(candidate.id) }}><span>{`${String.fromCharCode(65 + index)} / 待验证方向`}</span><h2>{candidate.name}</h2><p>{candidate.positioning_statement}</p><div><b>适合人群</b><small>{candidate.audiences.length ? candidate.audiences.join(' · ') : '正在从访谈中提炼'}</small></div><div><b>内容支柱</b><small>{candidate.pillars.join(' · ') || '待补充'}</small></div><div><b>待验证信息</b><small>{candidate.uncertainties?.join('；') || '请核实以上建议是否符合真实经历。'}</small></div></article>)}</div>}{error && <p className="error-note" role="alert">{error}</p>}<div className="result-actions"><button className="skip-action" disabled={busy} onClick={() => { setBusy(true); setError(''); void apiJson<PositioningCandidate[]>('/api/positioning/candidates', { method: 'POST' }).then(result => { setCandidates(result); setSelected(result[0]?.id || '') }).catch((error: unknown) => setError(error instanceof Error ? error.message : '重新生成失败，请稍后重试。')).finally(() => setBusy(false)) }}>重新生成候选</button><button className="primary-action" disabled={busy || !selected} onClick={confirm}>{busy ? '处理中...' : '确认方向，核对 IP 档案'} <ArrowUpRight size={16} /></button></div></div>
 }
 
 function ThemeMenu({ theme, setTheme, close, font, setFont }: { theme: ThemeKey; setTheme: (theme: ThemeKey) => void; close: () => void; font: FontKey; setFont: (font: FontKey) => void }) {

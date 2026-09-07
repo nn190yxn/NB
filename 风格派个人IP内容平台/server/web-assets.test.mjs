@@ -6,17 +6,37 @@ import { join, dirname } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-test('工作台展示小姚哥 IP 身份而不是示例创作者', () => {
+test('访谈保存等待响应并恢复账号进度，失败保留输入', () => {
   const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
-  assert.match(source, /小姚哥/)
-  assert.match(source, /创业过来人/)
-  assert.match(source, /钱漏在哪，人卡在哪/)
-  assert.doesNotMatch(source, /林默/)
+  const onboarding = source.slice(source.indexOf('function Onboarding('), source.indexOf('type PositioningCandidate'))
+  assert.match(onboarding, /useEffect\(loadInterview, \[\]\)/)
+  assert.match(onboarding, /interview_step: leave \? round/)
+  assert.match(onboarding, /await apiJson[\s\S]*setDirty\(false\); setAnswers/)
+  assert.match(onboarding, /保存失败，输入已保留/)
+  assert.match(onboarding, /savingRef\.current = true/)
+  assert.doesNotMatch(onboarding, /setMonetizationGoal\(''\)/)
+  assert.match(onboarding, /beforeunload/)
+})
 
-  const data = JSON.parse(readFileSync(join(root, 'server/data.json'), 'utf8'))
-  assert.equal(data.profile.role, '小姚哥｜创业过来人')
-  assert.equal(data.positioning.positioning_statement, '帮本地生意老板诊断：钱漏在哪，人卡在哪。')
-  assert.ok(data.profile.audiences.includes('本地生意老板'))
+test('草稿覆盖动作受脏状态保护，保存失败不清除脏状态', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  for (const name of ['generateHooks', 'runDraftCheck', 'selectDraftHook', 'restoreDraft', 'deaiDraft']) {
+    const start = source.indexOf(`const ${name} =`)
+    assert.ok(start > 0)
+    assert.match(source.slice(start, source.indexOf('\n', start)), /draftActionBlocked\(draft\)/)
+  }
+  assert.match(source, /draftLeaveGuard\.current\(\)/)
+  assert.match(source, /draft-title-input" disabled=\{busy\}/)
+  assert.match(source, /保存失败，输入已保留，请重试/)
+})
+
+test('工作台使用通用空白账号文案并保留 IP 档案能力', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /我的内容工作台/)
+  assert.match(source, /我的账号/)
+  assert.match(source, /还没有选题/)
+  assert.doesNotMatch(source, /早上好，小姚哥/)
+  assert.doesNotMatch(source, /消费降级之后/)
   assert.match(source, /已确认基础档案/)
   assert.match(source, /待审核变更/)
   assert.match(source, /reviews\.filter\(item => item\.status === 'pending'\)/)
@@ -25,7 +45,6 @@ test('工作台展示小姚哥 IP 身份而不是示例创作者', () => {
   assert.match(source, /查看最近修改/)
   assert.match(source, /修改后立即用于内容生成/)
 })
-
 test('PWA manifest 声明可安装图标', () => {
   const manifest = JSON.parse(readFileSync(join(root, 'public/manifest.webmanifest'), 'utf8'))
   assert.equal(manifest.display, 'standalone')
@@ -54,12 +73,14 @@ test('前端包含离线同步和冲突恢复入口', () => {
   assert.match(source, /restoreDraft/)
 })
 
-test('登录失败时保留引导页，成功后才进入工作台', () => {
+test('首次登录会检查账号引导状态，稍后填写后不重复自动出现', () => {
   const source = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8')
-  assert.match(source, /apiJson\('\/api\/auth\/session', \{ method: 'POST' \}\)\.then\(\(\) => \{ setAuthState\('ok'\); setShowOnboarding\(false\) \}\)/)
-  assert.doesNotMatch(source, /apiJson\('\/api\/auth\/session', \{ method: 'POST' \}\)\.finally\(\(\) => setShowOnboarding\(false\)\)/)
+  assert.match(source, /const checkFirstUse/)
+  assert.match(source, /onboarding_seen_at/)
+  assert.match(source, /稍后填写/)
+  assert.match(source, /04 \/ YOUR GOAL/)
+  assert.doesNotMatch(source, /05 \/ YOUR ANGLE/)
 })
-
 test('工作台设置按钮打开设置面板且面板含 API 中心', () => {
   const source = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8')
   assert.match(source, /onClick=\{\(\) => setShowSettings\(true\)\}/)

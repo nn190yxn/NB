@@ -1,3 +1,7 @@
+import { after } from 'node:test'
+import { startGenerationMock } from './generation-test-helper.mjs'
+const generationMock = await startGenerationMock()
+after(() => generationMock.close())
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -10,7 +14,7 @@ const base = `http://127.0.0.1:${port}`
 const dataFile = join(mkdtempSync(join(tmpdir(), 'content-ip-cross-platform-')), 'data.json')
 
 async function start() {
-  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...generationMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('跨端链路 API 启动超时')), 5000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timer); resolve() } })

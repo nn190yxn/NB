@@ -6,22 +6,61 @@
 
 本文档面向所有后续接手本项目的开发者与 AI Agent，读完即可独立开展开发、验证与部署。
 
+## 当前发布状态（2026-09-07 · 用户旅程修复）
+
+作者：Monkeycode。
+
+- 三批修复已部署至 `https://content.woyai.cn`：配置持久化白名单、访谈恢复与失败保护、模型定位和选题闭环、草稿保护、真实首页与复盘反馈、搜索刷新、账号重登和桌面账号协议。
+- 账号同步队列改为分账号存储，归属不明的旧队列保留但不会自动上传；策略保存失败不再显示成功。
+- 验证：串行全套测试 163/163、TypeScript/生产构建通过；本地模拟 API 浏览器验证访谈与草稿的失败恢复。生产登录页、新资源和 MySQL 健康检查通过，三个后端文件及首页文件哈希与本地一致。
+- 备份：`/home/ubuntu/content-ip-workbench/deploy-backup-20260907-231225-user-journey`，含代码和校验通过的 MySQL 压缩备份；没有替换环境配置、用户数据、私有文件或其他项目。
+- 边界：未调用真实付费模型，未做真实账号配置的 MySQL 重启回读验收；桌面源码已修复，但既有安装包不会自动获得新 IPC，尚未重新打包及完成 Electron 真机验收。
+- 下一步：GitHub 同步发布记录；后续安排桌面新包和上述真实环境验收。以下第一、二批段落保留为历史过程记录，以本节状态为准。
+- 使用方式、关键文件与详细验收见 `docs/audits/2026-09-07-user-journey/README.md`；依赖沿用 React、Vite、Node.js、MySQL、Electron，未新增依赖。
+
+## 综合审计（2026-09-07）
+
+使用流程与存储审计报告见 `docs/audits/2026-09-07-user-journey/README.md`。发现配置 MySQL 持久化、首次定位闭环、访谈恢复与草稿保存保护等待修问题；现有 35 项专项回归通过，但未覆盖这些缺口。仅完成源码审计与生产登录页查看，未完成浏览器全流程验收，未修改业务代码。
+
+## 第一批可靠保存修复（本地，2026-09-07）
+
+作者：Monkeycode。
+
+- API 配置已加入 MySQL 集合保存白名单；访谈加载账号进度、等待保存成功后跳步、稍后填写保存当前答案，失败保留输入，结果目标摘要不清空。
+- 未保存草稿执行检查/Hook/恢复/改写前会提示先保存；保存期间禁用编辑并防重复请求，失败显示提示；离开工作区和刷新增加未保存提醒。
+- 验证：`npm run verify` 155/155、类型检查与构建通过。新增访谈真实处理器测试、模拟 MySQL 重载测试和源码契约断言；未完成真实 MySQL 重启及浏览器全流程验收。
+- 关键文件：`server/mysql.mjs`、`src/main.tsx`、`server/mysql.test.mjs`、`server/onboarding-saving.test.mjs`、`server/web-assets.test.mjs`。
+- 设计产出：`docs/superpowers/specs/2026-09-07-reliable-saving-design.md`。依赖沿用 React、Vite、MySQL 和 Node test。
+- 当前仅本地修复，未部署/提交。历史已遗失配置无法自动找回；下一批处理定位到档案及选题闭环。
+
+## 第二批定位到选题闭环（本地，2026-09-07）
+
+作者：Monkeycode。
+
+- 定位建议和选题生成接入账号文本模型/共享模型，不再返回固定模板；失败显示错误并保留已有候选或历史选题。来源编号经过服务端校验，模型建议仍需人工核实。
+- 候选通过访谈摘要识别过期，返回页面先加载当前候选；确认只补齐空白档案字段并记录历史，已有内容不覆盖，重复确认不重复写历史。确认后进入 IP 档案核对与补充。
+- 新增账号历史选题 GET 与调整接口。新选题合并历史列表；调整/暂缓后可编辑标题说明、重新评估，再确认创作。修改会清除旧评估，不绕过批准状态限制。
+- 使用：完成访谈→确认建议→核对 IP 档案→收录研究或素材→生成选题→评估/调整→确认生成草稿。文本模型必须配置可用；不再把无配置当作模板生成成功。
+- 关键文件：`server/positioning-generation.mjs`、`server/index.mjs`、`src/main.tsx`；测试在 `server/positioning-generation.test.mjs`、`server/auth.test.mjs`、`server/topic-evaluation-api.test.mjs`，模拟上游为 `server/generation-test-helper.mjs`。
+- 产出：`docs/superpowers/specs/2026-09-07-positioning-topic-loop-{design,plan}.md`；依赖复用 Node、React、已有模型主备调用及 MySQL，无新增包。
+- 验证：160/160 测试、类型检查、构建通过；最终前端提示调整后再次类型与构建通过。模拟接口覆盖上游失败、非法输出、候选保留、过期、重复确认、账号隔离、暂缓调整重评。
+- 边界：未调用真实模型，未进行本批浏览器全流程和真实 MySQL 事务/重启验收。确认的 MySQL 写入采用事务，但未证明所有并发写入场景均安全；模型内容正确性仍需人工验收。
+- 状态：本地实现完成，未部署、未提交；下一步优先本地浏览器与真实数据库验收，再处理第三批真实指标、首页与桌面登录。
+
 ## 当前状态
 
-内容决策与创作质量链 Task 1–6 已全部完成：能力契约、选题七维评估、Hook/平台草稿、三道草稿检查、人工确认/撤回与第一阶段质量门均已验证。2026-09-03 代码级验收复核通过：全量质量门 119/119、真实临时 API 关键链 7/7、类型检查和生产构建通过；未部署、未提交、未推送。下一步等待生产验收或另行定义第二阶段。
+当前内测版本已完成红狐官网 API、多用户账号与数据隔离、服务器共享 API Key 及每日额度、发布适配/复盘闭环、记忆自动提炼和用户反馈通道。账号首次登录会自动进入 4 步定位访谈，可稍后填写并从“定位发现”继续；首页不再展示固定演示身份和示例选题。质量门当前为 149 项自动化测试、TypeScript 检查和生产构建。
 
-## 当前 IP 初始化档案
+## 内测数据状态
 
-当前演示工作区已按 `E:\Work\Alex\个人IP\01_定位与战略.md` 映射为：**小姚哥｜创业过来人**。核心定位是“帮本地生意老板诊断：钱漏在哪，人卡在哪。”，目标用户为本地生意老板、实体门店老板、本地服务商和小团队老板。数据只写入与产品字段对应的核心定位、受众、问题、内容支柱和表达边界，不复制完整私密档案；暂定假设仍保持为待验证状态。
-
-当前首页“研究脉搏”读取 `/api/research?sort=latest` 的最新三条真实研究；点击卡片会进入“热点研究”并自动定位、展开对应详情。热点研究列表采用桌面双列、移动单列的响应式卡片网格，小红书标签使用暖橙文字与浅杏底色。首页与各子页面采用 React 条件渲染隔离。产品界面统一使用“爆款方法库”，按“选题方法、标题方法、开头方法、内容结构”四类组织；底层继续兼容既有 `/api/structures`、`content_type` 和历史数据。方法库筛选区采用“方法分类为一级导航、适用平台为二级筛选”的层级。
+2026-09-07 已在生产数据库备份后清空业务测试数据，保留账号、反馈、账号加密 API 配置、系统方法和违禁词库。清理范围包括研究、素材、选题、草稿、拍摄、同步、档案审核、冲突、记忆、额度及跨端业务集合；定位、策略和档案用户文档未删除。清理后生产库仅保留 2 条账号集合记录，服务健康检查为 MySQL。
 
 ## 技术栈与架构
 
-- **前端**：Vite + React 19 + TypeScript，单入口 `src/main.tsx`（全部 UI 组件）+ `src/styles.css`（全部样式，CSS 变量主题系统）。PWA（Service Worker + manifest），离线应用壳。
+- **前端**：Vite + React 19 + TypeScript，单入口 `src/main.tsx`（全部 UI 组件）+ `src/styles.css`（全部样式，CSS 变量主题系统）。PWA（Service Worker + manifest），离线应用壳。首次使用状态保存在账号的定位文档中，不使用浏览器本地标记。
 - **后端**：Node.js 原生 `http` 模块单文件路由（`server/index.mjs`），零框架依赖。
 - **存储双轨**：本地/开发用 JSON 文件（`DATA_FILE`）；生产用 MySQL（`server/mysql.mjs`，按 `PROJECT_DB_*` 环境变量自动切换，数据按 `collection` 分表）。
-- **外部服务**：红狐内容 API（热搜榜、违禁词检测、相似账号对标），三技能均带演示数据双轨（无 Key 时自动降级 demo）。
+- **外部服务**：红狐官网内容 API（聚合热点、平台热榜、关键词热搜、七平台作品搜索、小红书对标账号）；违禁词检测使用本地词库，不请求红狐、不消耗红狐额度。无 Key 时研究能力自动降级为演示数据。
 - **AI 能力**：选题评估、Hook 和草稿质量检查采用确定性规则；API 1/2 为主备文本调用，API 3 为独立视觉调用，账号级配置由服务端加密保存且前端只读取掩码。
 
 ### 目录结构
@@ -32,8 +71,8 @@ src/styles.css        # 主题变量 + 全部样式
 public/sw.js          # Service Worker（缓存版本 dingweipai-shell-v3）
 server/index.mjs      # 全部 API 路由 + 业务逻辑 + 静态托管
 server/mysql.mjs      # MySQL 适配层（collection 读写）
-server/redfox.mjs     # 红狐 API 适配（x-redfox-api-key 头透传 + demo 双轨）
-server/*.test.mjs     # Node 原生测试（当前全量 129 个）
+server/redfox.mjs     # 红狐官网 API 适配（服务端读取账号加密 Key 或项目共享 Key）
+server/*.test.mjs     # Node 原生测试（当前全量 149 个）
 desktop/              # 桌面壳（Electron）
 scripts/import-benchmark.mjs # 对标账号资料包导入器（方法库/素材原子/AI 记忆）
 scripts/benchmarks/   # 对标账号资料包（如 dontbesilent.json）
@@ -67,7 +106,7 @@ npm run dev
 npm run verify
 ```
 
-完整链 = `node --test`（当前 129 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
+完整链 = `node --test`（当前 149 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
 
 新增后端功能必须在 `server/*.test.mjs` 补测试；新增前端能力在 `server/web-assets.test.mjs` 加特征断言（该测试读取 src 源码验证关键类名/组件存在）。
 
@@ -87,13 +126,13 @@ npm run verify
 
 ### AI 记忆层
 
-三类记忆 `type`：`style`（风格）/ `topic`（选题）/ `feedback`（反馈）。CRUD 见 `/api/memories`；active 状态的记忆会在草稿生成时注入"创作风格要求"段落。`POST /api/memories/extract` 是自动提炼桩，当前固定返回 422 `llm_not_configured`，等大模型 Key 接入后实现。记忆 `provider` 字段已预留升级路径（内建 → 腾讯 Agent Memory / Mem0）。
+三类记忆 `type`：`style`（风格）/ `topic`（选题）/ `feedback`（反馈）。CRUD 见 `/api/memories`；active 状态的记忆会在草稿生成时注入"创作风格要求"段落。`POST /api/memories/extract` 使用账号自有或项目共享的主备大模型，从对话/访谈文本提炼记忆；没有可用模型时返回 422 `llm_not_configured`。记忆 `provider` 字段保留后续升级路径。
 
 ## 认证与密钥模型
 
-- **认证可选**：设置环境变量 `PRODUCT_ACCESS_PASSWORD` 即启用密码门槛；不设置则开放访问（userId 固定 `owner`）。当前生产为开放模式。
+- **生产账号制**：生产环境要求注册或登录后访问 `/api/*`；开发/测试保留免登录身份，设置 `PRODUCT_ACCESS_PASSWORD` 时继续兼容旧访问密码通道。
 - **API 配置服务端加密**：大模型 API 1/API 2/API 3 按账号使用 `API_CONFIG_ENCRYPTION_KEY` 进行 AES-256-GCM 加密，前端只读取掩码；API 1/2 串行兜底，视觉任务只使用 API 3。旧浏览器配置只通过显式迁移接口导入。
-- 生产拒绝演示会话；项目级红狐 Key 可用环境变量 `PROJECT_REDFOX_API_KEY`（仅服务端读取）。
+- 生产拒绝演示会话；项目共享红狐和文本模型 Key 只从服务端环境变量读取，并受每账号每日额度限制。
 
 ## 生产部署
 
@@ -104,7 +143,7 @@ npm run verify
 | 目录 | `/home/ubuntu/content-ip-workbench` |
 | 进程 | PM2 `content-ip-workbench`，端口 3003 |
 | 域名 | `https://content.woyai.cn`（Nginx 反代 → 3003） |
-| 环境 | `.env.production`（PROJECT_DB_*、APP_ORIGIN、PORT、DATA_FILE、NODE_ENV） |
+| 环境 | `.env.production`（PROJECT_DB_*、APP_ORIGIN、PORT、API_CONFIG_ENCRYPTION_KEY、共享 API 与额度配置） |
 | 数据库 | MySQL 库名读 `PROJECT_DB_NAME`（当前 `ip_collections`） |
 
 ### 部署流程
@@ -124,6 +163,8 @@ ssh 服务器 "pm2 restart content-ip-workbench --update-env"
 
 # 4. 验证服务端新路由特征（curl 打新端点确认 200/预期响应）
 ```
+
+生产必须配置随机的 32 字节十六进制或 Base64 `API_CONFIG_ENCRYPTION_KEY`。当前代码为开发兼容保留固定默认值，因此部署检查必须保证生产环境变量存在，禁止使用默认值保存用户 API Key。
 
 **最大陷阱**：服务端变更后只部署 dist 忘了 scp + pm2 restart，前端已更新而后端仍旧代码，表现为"接口不存在/行为不对"。部署后必须用 curl 验证一个新路由的特征响应。
 
@@ -149,7 +190,7 @@ pm2 start server/index.mjs --name content-ip-workbench \
 
 - 未经明确授权不执行 `git commit` / `git push`。
 - 改动后先 `npm run verify` 全绿再交付；部署后单独验证代码特征（bundle 名、新路由响应）。
-- 大模型 Key 由用户自行提供并存浏览器，Agent 不得从执行环境读取或写入任何 Key 到代码。
+- 大模型和红狐 Key 由用户通过 API 中心提交，由服务端按账号加密保存；Agent 不得读取生产 Key、写入代码或输出到日志。
 - 需求与设计文档放 `.monkeycode/specs/{特性名}/`（requirements.md + design.md）。
 - 远端仓库：`github.com/nn190yxn/NB` 的 `风格派个人IP内容平台/` 子文件夹（推送时用临时克隆组装，排除 node_modules/dist/数据/密钥）。
 
@@ -176,10 +217,10 @@ node scripts/import-benchmark.mjs scripts/benchmarks/dontbesilent.json
 
 ## Roadmap（按优先级）
 
-1. 大模型 API 接入：记忆自动提炼（extract 桩已就位）、选题/草稿升级为真实 LLM 生成
+1. 完成内测反馈收集与额度使用观察
 2. 仪表盘数字统计卡（4 列核心指标）
 3. 相似账号对标深化
-4. 记忆层升级评估（腾讯 Agent Memory / Mem0，provider 字段已预留）
+4. 评估多实例部署时的数据库原子额度计数
 
 ## 更新记录
 

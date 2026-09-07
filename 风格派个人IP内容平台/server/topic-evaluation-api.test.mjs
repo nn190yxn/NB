@@ -1,3 +1,7 @@
+import { after } from 'node:test'
+import { startGenerationMock } from './generation-test-helper.mjs'
+const generationMock = await startGenerationMock()
+after(() => generationMock.close())
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
@@ -11,7 +15,7 @@ const dataFile = join(mkdtempSync(join(tmpdir(), 'topic-evaluation-test-')), 'da
 writeFileSync(dataFile, '{}')
 
 function startServer() {
-  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...generationMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 5000)
     child.stdout.on('data', data => {
@@ -50,6 +54,15 @@ test('topic evaluation and decision are isolated, bounded and idempotent', async
   assert.equal(repeated.status, 200)
   assert.equal((await repeated.json()).evaluation.evaluated_at, evaluatedBody.evaluation.evaluated_at)
 
+  const deferred = await fetch(`${baseUrl}/api/topics/${topic.id}/decision`, { method: 'PUT', headers: headers(owner), body: JSON.stringify({ decision: 'defer' }) })
+  assert.equal(deferred.status, 200)
+  const revision = await fetch(`${baseUrl}/api/topics/${topic.id}/revision`, { method: 'PUT', headers: headers(owner), body: JSON.stringify({ title: '修改后的选题', rationale: '补充真实案例' }) })
+  assert.equal(revision.status, 200)
+  assert.equal((await revision.json()).evaluation, null)
+  const resumed = await fetch(`${baseUrl}/api/topics/${topic.id}/evaluate`, { method: 'POST', headers: headers(owner), body: '{}' })
+  assert.equal(resumed.status, 200)
+  const history = await (await fetch(`${baseUrl}/api/topics`, { headers: headers(owner) })).json()
+  assert.equal(history.find(item => item.id === topic.id).title, '修改后的选题')
   const invalidDecision = await fetch(`${baseUrl}/api/topics/${topic.id}/decision`, { method: 'PUT', headers: headers(owner), body: JSON.stringify({ decision: 'approved' }) })
   assert.equal(invalidDecision.status, 422)
   assert.equal((await invalidDecision.json()).code, 'validation_failed')
