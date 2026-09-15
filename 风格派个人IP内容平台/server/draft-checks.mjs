@@ -1,6 +1,7 @@
 import { prohibitedWordlist } from './redfox.mjs'
 import { validateSourceRefs } from './validation.mjs'
 import { openingReadiness } from './draft-workflow.mjs'
+import { draftLengthRange, draftLengthTargets } from './draft-writing.mjs'
 
 const riskWords = prohibitedWordlist.map(item => item.word)
 const qualityKeys = ['opening_clarity', 'audience_fit', 'core_point', 'evidence', 'structure_and_risk']
@@ -63,6 +64,13 @@ export function checkQuality(draft, profile = {}) {
   if (body && structureScore < 100) { evidence.push(evidenceItem('structure_weak', '正文长度或段落结构仍需加强')); suggestions.push('补充真实过程、证据和可执行步骤') }
   if (audienceScore < 100) { evidence.push(evidenceItem('audience_weak', '正文与当前受众问题的连接不够明确')); suggestions.push('明确读者是谁以及正在解决什么问题') }
   if (pointScore < 100) { evidence.push(evidenceItem('point_weak', '核心观点或内容支柱不够明确')); suggestions.push('用一句话写出你的判断，再用过程或案例支撑') }
+  // 模型并不遵守提示词里的字数要求（实测：提示词写抖音不超 250 字，模型给了 384 字），所以这里做确定性校验。
+  const lengthTarget = draftLengthTargets[draft?.platform]
+  const bodyLength = String(draft?.body || '').trim().length
+  if (lengthTarget && bodyLength && (bodyLength < lengthTarget.min || bodyLength > lengthTarget.max)) {
+    evidence.push(evidenceItem('platform_length', `正文 ${bodyLength} 字，${draft.platform}目标${draftLengthRange(draft.platform)} 字`))
+    suggestions.push(`把正文调整到 ${draftLengthRange(draft.platform)} 字`)
+  }
   const scoreBlocked = score < 60
   if (scoreBlocked) evidence.push(evidenceItem('score_low', '质量综合分低于 60 分', 'blocked'))
   const blocked = evidence.some(item => item.severity === 'blocked') || scoreBlocked

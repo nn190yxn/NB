@@ -3,6 +3,20 @@
 
 export const draftPlatforms = ['小红书', '抖音', '视频号', '公众号']
 
+// 平台长度目标：提示词与发布前检查共用这一份，避免两处数字各说各话。
+// 修改这里的数字后，draft-writing.test.mjs 会让提示词文案不同步这件事直接挂掉。
+export const draftLengthTargets = {
+  小红书: { min: 400, max: 800 },
+  抖音: { min: 0, max: 250 },
+  视频号: { min: 0, max: 250 },
+  公众号: { min: 600, max: 1200 },
+}
+export function draftLengthRange(platform) {
+  const target = draftLengthTargets[platform]
+  if (!target) return ''
+  return target.min ? `${target.min}-${target.max}` : `不超过 ${target.max}`
+}
+
 export function buildDraftBrief({ topic, structure, quotes, experiences, memories, mechanisms, hookText }) {
   return {
     title: String(topic?.title || '').trim(),
