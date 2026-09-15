@@ -26,6 +26,14 @@ function openingSentence(body) {
   return ''
 }
 
+// 自我介绍与引导关注：实测模型会把自己服务商的名字当成创作者（「大家好，我是Agnes」），这条同样是提示词拦不住的。
+// 只抓确定能判的模式：大家好、我是 + 英文名、我叫 + 中文名、关注我。不猜中文混合句，避免误伤「我是做个人IP的」。
+function selfIntroHits(body) {
+  const value = String(body || '')
+  const patterns = [/大家好/, /我是([A-Za-z][A-Za-z0-9]{1,11})/, /我叫[\u4e00-\u9fa5A-Za-z]{2,6}/, /关注我/]
+  return [...new Set(patterns.map(pattern => value.match(pattern)).filter(Boolean).map(matched => matched[0]))]
+}
+
 export function checkPersona(draft, profile = {}) {
   const body = text(draft?.body)
   const audiences = list(profile.audiences)
@@ -82,6 +90,11 @@ export function checkQuality(draft, profile = {}) {
     suggestions.push(`把正文调整到 ${draftLengthRange(draft.platform)} 字`)
   }
   // 提示词要求「开头第一句直给冲突或结论」，模型实测仍会用设问开头，所以也用可算的判据检查。
+  const introHits = selfIntroHits(draft?.body)
+  if (introHits.length) {
+    evidence.push(evidenceItem('self_intro', `正文出现自我介绍或引导关注：${introHits.join('、')}`))
+    suggestions.push('删掉自我介绍与引导关注，改成直给结论的开头')
+  }
   // 判据要按行找：口播稿开头常是一行镜头提示（如「（镜头怼脸，语速快）」），那不是句子，要跳到下一行。
   const opening = openingSentence(draft?.body)
   if (opening) {
