@@ -1,5 +1,20 @@
 # 更新记录（CHANGELOG）
 
+## 2026-09-14 · 分离「对标机制」与「自有表达」（style 字段错位）
+
+- **缺陷**：`buildDraftBrief` 把 9 条 dbs 打法记忆塞进 `style`，而提示词写着「style 是创作者本人的表达习惯，必须遵守」——对标账号的机制被当成他本人的表达习惯；这 9 条 `source_refs` 全为空，没有任何来源标记。同一批 dbs 知识在 `structures` 里还有一份拷贝，但只有选中 `structure_id` 才生效（存量 8 条草稿 `structure_id` 全为 null）。
+- 文件：`server/draft-writing.mjs`、`server/index.mjs`、`scripts/import-benchmark.mjs`、`scripts/benchmarks/dontbesilent.json`、新增 `scripts/migrate-benchmark-memories.mjs` 与 `server/benchmark-memory-api.test.mjs`、`server/draft-writing.test.mjs`、`server/materials-atoms.test.mjs`、`src/main.tsx`、`src/styles.css`。
+- **简报分层**：`style` 只放他本人的表达习惯（style/feedback）；新增 `mechanisms`（对标机制，每条带 `source`）；`quotes` 由字符串改为 `{text, source}`，来源取自素材原子名称（如「对标dbs·金句」）。提示词分别规定：style 必须遵守；mechanisms 可照用结构与节奏但不能写成他的习惯；quotes 只能当引用且必须写出 source 给的来源；两者为空时不许提对标、不许虚构来源。
+- **记忆新增类型 `benchmark`（对标机制）+ `source_label`**：`POST /api/memories` 建对标机制必须带来源（否则 422）；`PUT /api/memories/:id` 支持改类型与来源，用于纠正错记。自动提炼仍只产出 style/topic/feedback，对标机制只能从资料包导入或手工录入。
+- **导入器**：资料包 `memories` 统一按 `benchmark` + `pack.source_label` 导入，不再沿用包里的 `memory_type`（旧包把它写成 style/topic，正是错位的来源）；去重键从「类型+内容」改为按内容，避免重跑产生同内容的重复记忆。
+- **存量迁移**：`scripts/migrate-benchmark-memories.mjs` 按内容与资料包精确匹配（不猜测），把错记的 9 条（8 条 style + 1 条 topic）改为 benchmark + 「对标dbs」，幂等、支持 `--dry-run`。已在本地执行：9 条全部迁移，二次执行无改动。
+- **界面标来源**：记忆面板新增「对标机制」标签、筛选与类型下拉，建对标机制时要求填来源，列表显示来源；草稿卡新增「写作依据」，列出本次用到的对标机制/对标原话（含来源）、他自己的表达习惯与经历条数。存量草稿的简报是旧口径，会显示「旧记录未区分对标机制」，不把机制冒充成他的习惯。
+- **连带**：平台适配原来是通过 style 记忆吃进对标机制的，改为独立的 `mechanism_memories` 字段并在提示词里注明边界，避免能力静默消失。
+- **影响**：迁移后他的 `style` 为空（原有 9 条全是对标机制），新生成的草稿 `style` 会是空数组，直到他自己录入表达习惯。这是预期结果，不是丢失数据。
+- 验证：185/185 自动化测试、`tsc --noEmit`、生产构建 1818 modules 通过；本地 API 已重启并跑完迁移。未跑真实大模型端到端生成（会消耗额度并产生真实草稿）。
+- 待办：`structures` 里那份 dbs 拷贝与 memories 仍有重复，本次未合并；真实生成待手动验。
+
+
 ## 2026-09-14 · 提交记录：草稿槽位选择器与开头机制收敛
 
 - 提交：`93070f0` `feat-draft-slots-and-llm-written-body`，28 个文件，+1084 / -239。
