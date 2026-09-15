@@ -61,6 +61,23 @@ export function normalizeResearchItem(payload, { platform = '未知平台', quer
   }
 }
 
+// 违禁词里有些词在正文中绝大多数是正常用法，必须看上下文，不能裸子串匹配。
+// 「第一」实测：32 条真实草稿命中 18 条，全部是序数或固定词（第一步 / 第一句 / 第一性原理 / 第一，…），
+// 没有一条是广告法意义上的极限用语，却把质量门整条判成 blocked：过不了门、进不了发布链路。
+// 所以只有两种算命中：① 带主张前缀（全网 / 销量 / 排名…）；② 后面不是序数词、也不是列表用的逗号顿号。
+// 注意「全网第一，…」是主张，不能因为后面跟逗号就放过（这个漏洞第一版就踩了）。
+const prohibitedGuards = {
+  第一: /(?:全网|全国|行业|市场|销量|排名|同城|本地|全球|世界|亚洲|中国|国内)第一|第一(?![，,。、！？：:\s]|[步句次个件层条种点性段])/,
+}
+
+export function prohibitedHits(text = '') {
+  const content = String(text || '')
+  return prohibitedWordlist.filter(entry => {
+    const guard = prohibitedGuards[entry.word]
+    return guard ? guard.test(content) : content.includes(entry.word)
+  }).map(entry => ({ ...entry }))
+}
+
 export const prohibitedWordlist = [
   { word: '第一', level: '极限词', suggestion: '改为“头部/领先”等可举证表述' },
   { word: '最好', level: '极限词', suggestion: '改为“更适合”并给出对比证据' },
@@ -148,7 +165,7 @@ export function demoSearchWork(keyword, platform = '小红书') {
 
 export function demoProhibitedCheck(text = '') {
   const content = String(text || '')
-  const hits = prohibitedWordlist.filter(entry => content.includes(entry.word)).map(entry => ({ ...entry }))
+  const hits = prohibitedHits(content)
   return { source: 'demo', hits, checked_length: content.length }
 }
 
@@ -237,7 +254,7 @@ export function createRedFoxAdapter({ baseUrl, apiKey, fetchImpl = fetch } = {})
     },
     async prohibitedCheck({ text = '' } = {}) {
       const content = String(text || '')
-      const hits = prohibitedWordlist.filter(entry => content.includes(entry.word)).map(entry => ({ ...entry }))
+      const hits = prohibitedHits(content)
       return { source: 'builtin', hits, checked_length: content.length }
     },
     async similarAccounts({ platform = '小红书', account = '' } = {}) {

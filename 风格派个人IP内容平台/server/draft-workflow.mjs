@@ -1,14 +1,13 @@
-import { prohibitedWordlist } from './redfox.mjs'
+import { prohibitedHits } from './redfox.mjs'
 import { defaultApproval } from './draft-approval.mjs'
 
 const MAX_HOOK_LENGTH = 60
-const hookRiskWords = prohibitedWordlist.map(item => item.word)
 
 function clean(value) { return String(value || '').replace(/\s+/g, ' ').trim() }
 
 export function validateHookText(value) {
   const text = clean(value)
-  const hits = hookRiskWords.filter(word => text.includes(word))
+  const hits = prohibitedHits(text).map(item => item.word)
   const evidence = []
   if (!text) evidence.push('Hook 不能为空')
   if (text.length > MAX_HOOK_LENGTH) evidence.push(`Hook 不能超过 ${MAX_HOOK_LENGTH} 个字符`)

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { normalizeMaterialFormat, parseMaterialContent, profileGaps, validateDraftUpdate, validRatios, validateMaterialInput, validateSourceRefs } from './validation.mjs'
-import { createRedFoxAdapter, demoHotSearch, demoSearchWork, demoSimilarAccounts, demoTrending, prohibitedWordlist } from './redfox.mjs'
+import { createRedFoxAdapter, demoHotSearch, demoSearchWork, demoSimilarAccounts, demoTrending, prohibitedHits, prohibitedWordlist } from './redfox.mjs'
 import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterministic } from './growth.mjs'
 import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCollections, saveMysqlState, saveUserDocs, collectionNames, userDocNames } from './mysql.mjs'
 import { emptyPublicApiConfigs, emptyPublicRedfoxConfig, parseApiConfigKey, publicApiConfig, publicRedfoxConfig, runtimeApiConfig, runtimeRedfoxConfig, updateApiConfig, updateRedfoxConfig } from './api-settings.mjs'
@@ -1317,7 +1317,7 @@ const server = createServer(async (request, response) => {
       const platform = researchPlatforms.includes(body.platform) && body.platform !== '全平台' ? body.platform : draft.platform
       if (!platform || platform === '全平台') return send(response, 422, { error: '请选择一个发布平台' })
       const profile = userDocument('profile', request)
-      const hits = prohibitedWordlist.filter(entry => String(draft.body || '').includes(entry.word)).map(entry => ({ ...entry }))
+      const hits = prohibitedHits(String(draft.body || ''))
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       let adaptation = null
       let useAdaptLlm = Boolean(configs.primary || configs.fallback)

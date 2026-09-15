@@ -1,9 +1,9 @@
-import { prohibitedWordlist } from './redfox.mjs'
+import { prohibitedHits } from './redfox.mjs'
 import { validateSourceRefs } from './validation.mjs'
 import { openingReadiness } from './draft-workflow.mjs'
 import { draftLengthRange, draftLengthTargets } from './draft-writing.mjs'
 
-const riskWords = prohibitedWordlist.map(item => item.word)
+const riskWordHits = value => prohibitedHits(value).map(item => item.word)
 const qualityKeys = ['opening_clarity', 'audience_fit', 'core_point', 'evidence', 'structure_and_risk']
 
 function text(value) { return String(value || '').replace(/\s+/g, ' ').trim() }
@@ -88,14 +88,20 @@ export function checkPersona(draft, profile = {}) {
 
 export function checkQuality(draft, profile = {}) {
   const body = text(draft?.body)
+  // 段落判据必须用未折叠换行的原文：body 走过 text()，换行已被替成空格，
+  // 再 split(/\n\s*\n/) 永远是 1 段 —— 实测 32 条真实草稿 100% 命中 structure_weak，这一维从来没得过 100 分。
+  const rawBody = String(draft?.body || '').trim()
+  const paragraphCount = rawBody.split(/\n\s*\n/).filter(part => part.trim()).length
   const openingReady = openingReadiness(draft)
   const sourceValid = validateSourceRefs(draft?.source_refs)
-  const riskHits = hitsFor(body, riskWords)
+  const riskHits = riskWordHits(body)
   const audienceValues = list(profile.audiences)
   const pillarValues = [...list(profile.pillars), ...list(profile.viewpoints), ...list(profile.problems)]
   const audienceScore = audienceValues.length && audienceValues.some(value => body.includes(value)) ? 100 : audienceValues.length ? 50 : 40
   const pointScore = pillarValues.length && pillarValues.some(value => body.includes(value)) ? 100 : pillarValues.length ? 55 : 45
-  const structureScore = body.length >= 120 && body.split(/\n\s*\n/).length >= 2 ? 100 : body.length >= 60 ? 65 : 20
+  // 口播稿（≤250 字）本来就常常是一整段，不拿段落数要求它们；长文才看分段。
+  const structureReady = rawBody.length >= 120 && (rawBody.length <= 250 || paragraphCount >= 2)
+  const structureScore = structureReady ? 100 : rawBody.length >= 60 ? 65 : 20
   const dimensions = {
     opening_clarity: openingReady ? 100 : 0,
     audience_fit: audienceScore,
@@ -154,7 +160,7 @@ export function checkQuality(draft, profile = {}) {
 
 export function checkPublishChecklist(draft) {
   const body = text(draft?.body)
-  const riskHits = hitsFor(body, riskWords)
+  const riskHits = riskWordHits(body)
   const checks = {
     title: Boolean(text(draft?.title)),
     body: Boolean(body),

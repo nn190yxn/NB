@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRedFoxAdapter, normalizeResearchItem, demoProhibitedCheck, parseHeatValue } from './redfox.mjs'
+import { createRedFoxAdapter, normalizeResearchItem, demoProhibitedCheck, parseHeatValue, prohibitedHits } from './redfox.mjs'
 
 function captureAdapter(response, { status = 200 } = {}) {
   const calls = []
@@ -136,6 +136,19 @@ test('对标账号仅支持小红书且关键词必填', async () => {
   const { adapter } = captureAdapter({ code: 2000, data: [] })
   await assert.rejects(() => adapter.similarAccounts({ platform: '抖音', account: '某某' }), error => error.code === 'UNSUPPORTED_PLATFORM')
   await assert.rejects(() => adapter.similarAccounts({ platform: '小红书', account: ' ' }), error => error.code === 'INVALID_INPUT')
+})
+
+test('违禁词「第一」看上下文：序数不算，主张才算', () => {
+  // 实测 32 条真实草稿命中 18 条，全部是序数或固定词，没有一条极限用语，
+  // 但 checkQuality 把 risk_words 当 blocked —— 那 18 条永远过不了质量门。
+  for (const ordinal of ['先做第一步', '开头第一句直给结论', '用第一性原理拆开', '第一，定义边界', '第一层是定义边界', '第一个素材']) {
+    assert.equal(prohibitedHits(ordinal).some(hit => hit.word === '第一'), false, ordinal)
+  }
+  for (const claim of ['全网第一', '销量第一', '排名第一', '这是第一名', '行业第一品牌', '全网第一，包赚不赔', '稳居行业第一。']) {
+    assert.ok(prohibitedHits(claim).some(hit => hit.word === '第一'), claim)
+  }
+  assert.ok(prohibitedHits('最好的选择').some(hit => hit.word === '最好'))
+  assert.ok(prohibitedHits('稳赚不赔').some(hit => hit.word === '稳赚'))
 })
 
 test('违禁词检测使用本地词库且不发起任何上游请求', async () => {

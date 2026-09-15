@@ -16,6 +16,36 @@ test('persona check warns without blocking and quality returns bounded dimension
   assert.ok(Object.values(quality.dimensions).every(score => score >= 0 && score <= 100))
 })
 
+test('段落结构判据用未折叠的原文，口播稿不按分段要求', () => {
+  // 修复前：body 先被 text() 折叠掉换行，再 split(/\n\s*\n/) 永远是 1 段，
+  // 实测 32 条真实草稿 100% 命中 structure_weak，这一维从来没得过 100 分。
+  const paragraphs = checkQuality({ ...baseDraft, body: `${'第一段：先说结论，再给过程。'.repeat(6)}\n\n${'第二段：给可执行的一步。'.repeat(6)}` }, {})
+  assert.equal(paragraphs.dimensions.structure_and_risk, 100)
+  assert.equal(paragraphs.evidence.some(item => item.code === 'structure_weak'), false)
+
+  // 长文一整段不分段仍要提示
+  const flat = checkQuality({ ...baseDraft, body: '一整段长文，中间没有空行。'.repeat(20) }, {})
+  assert.equal(flat.dimensions.structure_and_risk, 65)
+  assert.ok(flat.evidence.some(item => item.code === 'structure_weak'))
+
+  // 口播稿（≤250 字）本来就常常一整段，不因为段落数被扣分
+  const spoken = checkQuality({ ...baseDraft, platform: '抖音', body: '口播稿一整段，不超过两百五十个字。'.repeat(8) }, {})
+  assert.equal(spoken.dimensions.structure_and_risk, 100)
+  assert.equal(spoken.evidence.some(item => item.code === 'structure_weak'), false)
+})
+
+test('质量门不把序数「第一」当风险词阻断，真主张仍然阻断', () => {
+  const ordinal = checkQuality({ ...baseDraft, body: `${'第一步，先把真实过程讲清楚。'.repeat(5)}\n\n${'第二步，用第一性原理解释为什么。'.repeat(5)}` }, {})
+  assert.equal(ordinal.evidence.some(item => item.code === 'risk_words'), false)
+  assert.equal(ordinal.dimensions.structure_and_risk, 100)
+
+  const claim = checkQuality({ ...baseDraft, body: '我们全网第一，包赚不赔。' }, {})
+  const risk = claim.evidence.find(item => item.code === 'risk_words')
+  assert.ok(risk, '极限用语必须仍然阻断')
+  assert.equal(risk.severity, 'blocked')
+  assert.equal(claim.status, 'blocked')
+})
+
 test('quality and publish checks block missing evidence, risk and fact verification', () => {
   const quality = checkQuality({ ...baseDraft, opening_ref: null, source_refs: [], body: '包赚' }, {})
   assert.equal(quality.status, 'blocked')
