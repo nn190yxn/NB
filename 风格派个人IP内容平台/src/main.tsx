@@ -34,7 +34,7 @@ import {
   X,
 } from 'lucide-react'
 import './styles.css'
-import { copyText, loadTeleprompterSettings, saveTeleprompterSettings } from './shooting-utils'
+import { copyText, loadTeleprompterSettings, saveTeleprompterSettings, teleprompterStep } from './shooting-utils'
 import { flushSyncQueue, pendingSyncEvents, setSyncAccount } from './sync-queue'
 
 type DesktopSyncRuntime = { device_id: string; device_name: string; directories: Array<{ id: string }>; queue_count: number; last_error: string | null }
@@ -1980,7 +1980,26 @@ function ShootingWorkspace({ onClose }: { onClose: () => void }) {
   const [visionMessage, setVisionMessage] = useState('')
   const [visionTasks, setVisionTasks] = useState<VisionTask[]>([])
   const [snapshotRefresh, setSnapshotRefresh] = useState(0)
+  const scriptRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => { void apiJson<ShootingItem[]>('/api/shooting/today').then(setItems).catch(() => setItems([])) }, [])
+  // 「开始滚动」原来只把文字上移 11.5px（CSS transition），速度滑块只存值、不参与渲染：拍摄时实际上不滚动。
+  // 这里按档位真实滚动；暂停后从当前位置继续；滚到底自动停，再点开始则从头滚（否则一按就到底停住，成死路）。
+  useEffect(() => {
+    const element = scriptRef.current
+    if (!playing || !element) return
+    if (element.scrollTop + element.clientHeight >= element.scrollHeight - 1) element.scrollTop = 0
+    let frame = 0
+    let last = performance.now()
+    const step = (now: number) => {
+      const delta = now - last
+      last = now
+      element.scrollTop += teleprompterStep(scrollSpeed, delta)
+      if (element.scrollTop + element.clientHeight >= element.scrollHeight - 1) { setPlaying(false); return }
+      frame = window.requestAnimationFrame(step)
+    }
+    frame = window.requestAnimationFrame(step)
+    return () => window.cancelAnimationFrame(frame)
+  }, [playing, scrollSpeed, active?.id])
   useEffect(() => {
     if (!active) { setVisionTasks([]); return }
     const refresh = () => void apiJson<VisionTask[]>(`/api/vision-tasks?shooting_id=${active.id}`).then(setVisionTasks).catch(() => setVisionTasks([]))
@@ -2019,7 +2038,7 @@ function ShootingWorkspace({ onClose }: { onClose: () => void }) {
   const update = (id: number, patch: Record<string, unknown>) => {
     void apiJson<ShootingItem>(`/api/shooting/${id}`, { method: 'PUT', body: JSON.stringify(patch) }).then(next => { setItems(current => current.map(item => item.id === id ? next : item)); setActive(next) }).catch(() => undefined)
   }
-  return <section className="shoot-workspace"><div className="shoot-workspace-head"><div><span className="section-kicker">TODAY / SHOOTING DESK</span><h2>今日拍摄清单</h2><p>把准备好的内容，转成可以直接开拍的动作。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="shoot-workspace-grid"><div className="shoot-items">{items.length ? items.map(item => <article className={active?.id === item.id ? 'shoot-item selected' : 'shoot-item'} key={item.id}><div><span className={`platform-tag ${item.platform === '小红书' ? 'xhs' : item.platform === '公众号' ? 'wechat' : 'douyin'}`}>{item.platform}</span><h3>{item.title}</h3></div><select value={item.status} onChange={event => update(item.id, { status: event.target.value })}><option value="ready_to_shoot">待拍摄</option><option value="in_progress">拍摄中</option><option value="completed">已完成</option></select><button className="row-arrow" onClick={() => { setActive(item); setFontSize(item.font_size || 24); setScrollSpeed(item.scroll_speed || 3) }}><ArrowUpRight size={17} /></button></article>) : <p className="empty-state">暂无待拍摄内容。先在内容创作中准备一条脚本。</p>}</div>{active && <div className="teleprompter"><div className="teleprompter-tools"><button onClick={() => setPlaying(!playing)}>{playing ? <Pause size={15} /> : <Play size={15} />} {playing ? '暂停' : '开始滚动'}</button><label>字号 <input type="range" min="16" max="42" value={fontSize} onChange={event => setFontSize(Number(event.target.value))} /></label><label>速度 <input type="range" min="1" max="8" value={scrollSpeed} onChange={event => setScrollSpeed(Number(event.target.value))} /></label><label className="outline-action">{visionBusy ? '上传中…' : '上传表现截图'}<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={event => { void analyzeScreenshots(event.target.files); event.currentTarget.value = '' }} /></label></div>{visionMessage && <p className="error-note" role="status">{visionMessage}</p>}{visionTasks.filter(task => task.match_status !== 'confirmed').map(task => <VisionConfirmationCard key={task.id} task={task} shooting={active} onChanged={next => setVisionTasks(current => next ? current.map(item => item.id === next.id ? next : item) : current.filter(item => item.id !== task.id))} onConfirmed={() => setSnapshotRefresh(value => value + 1)} />)}<PerformanceTimeline shooting={active} refreshKey={snapshotRefresh} /><div className={playing ? 'teleprompter-script is-playing' : 'teleprompter-script'} style={{ fontSize }}><span>{active.platform} · 提词模式</span><h3>{active.title}</h3><p>{active.script || '脚本内容将在内容创作完成后显示。你可以先确认镜头节奏，再开始拍摄。'}</p></div><button className="primary-action" onClick={() => update(active.id, { status: active.status === 'completed' ? 'ready_to_shoot' : 'completed', font_size: fontSize, scroll_speed: scrollSpeed })}>{active.status === 'completed' ? '重新安排拍摄' : '标记为已完成'} <Check size={16} /></button></div>}</div></section>
+  return <section className="shoot-workspace"><div className="shoot-workspace-head"><div><span className="section-kicker">TODAY / SHOOTING DESK</span><h2>今日拍摄清单</h2><p>把准备好的内容，转成可以直接开拍的动作。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="shoot-workspace-grid"><div className="shoot-items">{items.length ? items.map(item => <article className={active?.id === item.id ? 'shoot-item selected' : 'shoot-item'} key={item.id}><div><span className={`platform-tag ${item.platform === '小红书' ? 'xhs' : item.platform === '公众号' ? 'wechat' : 'douyin'}`}>{item.platform}</span><h3>{item.title}</h3></div><select value={item.status} onChange={event => update(item.id, { status: event.target.value })}><option value="ready_to_shoot">待拍摄</option><option value="in_progress">拍摄中</option><option value="completed">已完成</option></select><button className="row-arrow" onClick={() => { setActive(item); setFontSize(item.font_size || 24); setScrollSpeed(item.scroll_speed || 3) }}><ArrowUpRight size={17} /></button></article>) : <p className="empty-state">暂无待拍摄内容。先在内容创作中准备一条脚本。</p>}</div>{active && <div className="teleprompter"><div className="teleprompter-tools"><button onClick={() => setPlaying(!playing)}>{playing ? <Pause size={15} /> : <Play size={15} />} {playing ? '暂停' : '开始滚动'}</button><label>字号 <input type="range" min="16" max="42" value={fontSize} onChange={event => setFontSize(Number(event.target.value))} /></label><label>速度 <input type="range" min="1" max="8" value={scrollSpeed} onChange={event => setScrollSpeed(Number(event.target.value))} /></label><label className="outline-action">{visionBusy ? '上传中…' : '上传表现截图'}<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={event => { void analyzeScreenshots(event.target.files); event.currentTarget.value = '' }} /></label></div>{visionMessage && <p className="error-note" role="status">{visionMessage}</p>}{visionTasks.filter(task => task.match_status !== 'confirmed').map(task => <VisionConfirmationCard key={task.id} task={task} shooting={active} onChanged={next => setVisionTasks(current => next ? current.map(item => item.id === next.id ? next : item) : current.filter(item => item.id !== task.id))} onConfirmed={() => setSnapshotRefresh(value => value + 1)} />)}<PerformanceTimeline shooting={active} refreshKey={snapshotRefresh} /><div className={playing ? 'teleprompter-script is-playing' : 'teleprompter-script'} ref={scriptRef} style={{ fontSize }}><span>{active.platform} · 提词模式</span><h3>{active.title}</h3><p>{active.script || '脚本内容将在内容创作完成后显示。你可以先确认镜头节奏，再开始拍摄。'}</p></div><button className="primary-action" onClick={() => update(active.id, { status: active.status === 'completed' ? 'ready_to_shoot' : 'completed', font_size: fontSize, scroll_speed: scrollSpeed })}>{active.status === 'completed' ? '重新安排拍摄' : '标记为已完成'} <Check size={16} /></button></div>}</div></section>
 }
 
 function PasswordGate({ theme, font, onSuccess, expectedUser }: { theme: ThemeKey; font: FontKey; onSuccess: () => void; expectedUser?: string }) {
