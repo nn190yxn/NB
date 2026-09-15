@@ -1,5 +1,42 @@
 # 更新记录（CHANGELOG）
 
+## 2026-09-14 · 提交记录：草稿槽位选择器与开头机制收敛
+
+- 提交：`93070f0` `feat-draft-slots-and-llm-written-body`，28 个文件，+1084 / -239。
+- 仓库既有约定是 ASCII 短横线标题（`docs-record-...` / `fix-user-journey-...`），本次沿用；中文细节放在本文件与任务 README。
+- 中文提交信息在 GBK 终端下会被写坏，已改用 Node 以 UTF-8 写消息文件再 `git commit -F`，并回读校验字节无替换字符。
+- 未做 hunk 级拆分：`server/index.mjs`、`src/main.tsx`、`server/generation-test-helper.mjs` 同时承载「正文改由大模型撰写」「工作台布局与归档」「槽位选择器与开头机制收敛」三项改动，按文件拆分会得到测试不过的中间提交，故合并为一次提交。
+
+
+
+## 2026-09-14 · 草稿槽位选择器（标题改法 / 开头句 / 正文结构 / 结尾）
+
+- 新增：`server/draft-slots.mjs`、`GET /api/draft-slots?platform=`、`POST /api/drafts/:id/slots/:slot`；新增测试 `server/draft-slots.test.mjs`（8 项）、`server/draft-slot-api.test.mjs`（2 项）。
+- 文件：`server/draft-slots.mjs`（新增）、`server/index.mjs`、`server/generation-test-helper.mjs`、`src/main.tsx`、`src/styles.css`。
+- **设计**：槽位是“生成后”用的——选中一个写法只重写对应那一段，不重写全篇。标题改法是**整组作用域**（同 `variant_group_id` 的四条平台草稿一起改）。
+- **目录来源**：标题 8 种改法为内置（5 种来自对标 dbs 句式 + 3 种自有）；开头句 / 结尾 / 内容骨架直接从爆款方法库按 `content_type` 取（要求有 steps）；正文结构拆为「平台体裁（内置 4 条，来自现有分平台长度与口播约束）」+「内容骨架（母模板）」。每个选项都标 `对标dbs` / `自有`。
+- **不扣额度**：槽位目录接口不调大模型；只有确认改写才调，并计入共享额度。
+- **真实数据验证**：用线上 18 条方法库跑抖音平台目录 —— 标题 8 / 开头 4（dbs 四种开头范式）/ 结尾 3（金句复现、社会反思、行动号召）/ 正文结构 2（抖音口播三段 + 爆款四段式骨架）。
+- **修正的缺陷**：正文首尾段原本按空行块切分，而真实正文中「正文：」标题行与第一段同属一块，会把“改开头”改到中间段；改为按行定位（先跳过「标题：」「正文：」行）。
+- **收敛重复的开头机制**：删除规则引擎硬编码的 4 条 Hook 候选与 `POST /api/drafts/:id/hooks` 路由，开头统一由「开头句」槽位（方法库开头范式）确定；发布清单的 `selected_hook` 项与质量项的 `hook_clarity` 改为 `opening` / `opening_clarity`，以 `drafts.opening_ref` 为准，旧记录里的 `selected_hook` 继续兼容；能力目录中 `hook_generate` 替换为 `opening_choose`。前端删除「生成 Hook / Hook 候选」入口。
+- 验证：183/183 自动化测试、`tsc --noEmit`、生产构建 1818 modules 全部通过。未做真实大模型端到端改写（会消耗额度并改动真实草稿）。
+- 提交：`93070f0 feat-draft-slots-and-llm-written-body`（含本页上一轮的工作台布局与正文由大模型撰写）。
+
+前一轮的工作台布局、手动归档、正文改由大模型撰写与本次槽位选择器同处 `server/index.mjs`、`src/main.tsx`、`server/generation-test-helper.mjs`，无法按文件拆成各自独立可运行的提交，故合并为一次提交。
+
+
+
+
+## 2026-09-14 · 内容创作页改为工作台布局，新增手动归档
+
+- 文件：`src/main.tsx`、`src/styles.css`、`server/index.mjs`、`server/draft-workflow.mjs`、`server/auth.test.mjs`、新增 `server/draft-archive-api.test.mjs`。
+- **布局**：内容创作页由双列网格改为「左列表 + 右全宽编辑器」两栏工作台（`.draft-workbench`）。左栏按选题分组列出草稿（平台、字数、归档/变体标记、状态），带 进行中 / 已归档 / 全部 筛选；右栏是全宽编辑区。原卡片 JSX 未改写，仅把它从网格卡片改为右侧面板。窄屏（≤1100px）自动退回上下堆叠。
+- **手动归档**：新增 `POST /api/drafts/:id/archive`，body `{archived: true|false}`。只写 `archived_at`，**不递增 version、不写 history、不重置 checks/approval**，避免归档这个纯视图动作让已通过的检查失效。`archived_at` 进入 `defaultDraftWorkflowFields` 归一化，旧记录自动补 `null`。
+- **手动加变体**：`POST /api/drafts/:id/copy` 的产物现在标记为 `variant_type: 'manual'` + `variant_of: <源草稿 id>`，标题后缀由「（副本）」改为「（变体）」，前端按钮改名为「复制成变体」。保留 `variant_group_id` 以维持发布前检查通过。
+- 验证：171/171 自动化测试（新增 2 项：归档不改版本/检查/确认状态、变体复制保留变体组）、`tsc --noEmit`、生产构建（1818 modules）全部通过。
+
+
+
 > **维护规则（所有后续接手的开发者与 AI Agent 必读）：**
 > 1. 本文件是**追加式**日志：只在最上方新增条目，**不修改、不删除任何历史条目**。
 > 2. README.md 是"当前状态"文档；发生过什么、什么时候发生，查这里。
