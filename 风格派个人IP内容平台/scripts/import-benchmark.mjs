@@ -91,7 +91,7 @@ async function main() {
   for (const item of pack.atoms || []) {
     if (atomTexts.has(item.text)) { summary.atoms.skipped++; continue }
     try {
-      await api('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: item.kind, name: item.name, text: item.text }) })
+      await api('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: item.kind, name: item.name, text: item.text, source_label: sourceLabel }) })
       summary.atoms.created++
     } catch (error) { console.error(`✖ 原子「${(item.text || '').slice(0, 20)}…」: ${error.message}`); errors++ }
   }

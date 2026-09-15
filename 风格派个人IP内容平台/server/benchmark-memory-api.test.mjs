@@ -56,6 +56,24 @@ test('对标机制必须带来源，并支持把错记的机制纠正过来', as
   assert.equal(badType.status, 422)
 })
 
+test('对标素材留存来源标注，旧数据回退到名称前缀', async t => {
+  const server = await startServer()
+  t.after(() => server.kill())
+  const owner = 'atom-source-owner'
+
+  const created = await readJson(await fetch(`${baseUrl}/api/materials/atoms`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ kind: 'quote', name: '对标dbs·金句', text: '对标账号的金句要能看出出处', source_label: '对标dbs' }) }))
+  assert.equal(created.source_label, '对标dbs')
+  assert.equal(created.name, '对标dbs·金句')
+
+  const listed = await readJson(await fetch(`${baseUrl}/api/materials?kind=quote`, { headers: headers(owner) }))
+  const row = (listed.items || listed).find(item => item.id === created.id)
+  assert.equal(row.source_label, '对标dbs')
+
+  // 手工录入的素材不带来源，界面按手动创建处理
+  const manual = await readJson(await fetch(`${baseUrl}/api/materials/atoms`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ kind: 'quote', name: '自己的金句', text: '这是我自己总结的一句话' }) }))
+  assert.equal(manual.source_label, null)
+})
+
 test('生成简报把对标机制与他本人的表达习惯分开，并带上来源', async t => {
   const server = await startServer()
   t.after(() => server.kill())

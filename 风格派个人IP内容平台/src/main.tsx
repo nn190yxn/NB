@@ -719,7 +719,12 @@ function ResearchPulse({ onOpen }: { onOpen: (id?: number) => void }) {
   </>
 }
 type MaterialKind = 'article' | 'quote' | 'hotspot' | 'insight' | 'experience'
-type MaterialItem = { id: number; name: string; format: string; status: string; review_status: string; content?: string; url?: string | null; material_kind?: MaterialKind; source_type?: string; source_id?: number | null; source_path?: string | null; device_id?: string | null; research_platform?: string; research_metrics?: { discussions?: number; growth?: number }; origin_source_id?: number | null; origin_text?: string; origin_material_name?: string | null; extracted_fields?: { segments?: string[]; candidate_topics?: string[]; quotes?: string[]; collected?: Partial<Record<'quote' | 'hotspot', string[]>> }; imported_at?: string }
+// 对标素材必须能看出出处：source_label 是导入时写下的来源，旧数据回退到名称里「对标dbs·金句」的前缀。
+const materialSourceLabel = (item: MaterialItem) => String(item.source_label || '').trim() || (String(item.name || '').includes('·') ? String(item.name).split('·')[0].trim() : '')
+// 句式自带的类型标签就写在末尾括号里（数字冲击开场 / 量化损失…），只用于展示。
+const materialPatternTag = (item: MaterialItem) => (String(item.content || '').match(/（([^（）]{2,12})）\s*$/) || [])[1] || ''
+const materialGroupKey = (item: MaterialItem) => !item.material_kind || item.material_kind === 'article' ? '文章素材' : String(item.name || '').trim() || materialKindLabels[item.material_kind]
+type MaterialItem = { id: number; name: string; format: string; status: string; review_status: string; content?: string; url?: string | null; material_kind?: MaterialKind; source_type?: string; source_id?: number | null; source_path?: string | null; device_id?: string | null; research_platform?: string; research_metrics?: { discussions?: number; growth?: number }; origin_source_id?: number | null; origin_text?: string; origin_material_name?: string | null; source_label?: string | null; extracted_fields?: { segments?: string[]; candidate_topics?: string[]; quotes?: string[]; collected?: Partial<Record<'quote' | 'hotspot', string[]>> }; imported_at?: string }
 const materialKindLabels: Record<MaterialKind, string> = { article: '文章', quote: '金句', hotspot: '热点', insight: '知识点', experience: '经历' }
 const atomKindKeys: MaterialKind[] = ['quote', 'hotspot', 'insight', 'experience']
 type TopicDimension = { score: number; evidence: string[]; suggestions: string[] }
@@ -1635,12 +1640,24 @@ function MaterialWorkspace() {
       {materialReviews.map(name => <button className={reviewStatus === name ? 'chip active' : 'chip'} onClick={() => setReviewStatus(reviewStatus === name ? '' : name)} key={name}>{name === 'pending' ? '待核验' : name === 'approved' ? '已核验' : '已驳回'}</button>)}
     </div>
     {error && <p className="structure-error" role="alert">{error}</p>}
-    {loading ? <p className="empty-state">正在加载素材库...</p> : materials.length ? <div className="asset-list">
-      {materials.map(item => <article className="asset-row" key={item.id}>
+    {loading ? <p className="empty-state">正在加载素材库...</p> : materials.length ? <div>{(() => {
+      const groups: { key: string; source: string; items: MaterialItem[] }[] = []
+      for (const item of materials) {
+        const source = materialSourceLabel(item)
+        const key = materialGroupKey(item)
+        let group = groups.find(current => current.key === key)
+        if (!group) groups.push(group = { key, source, items: [] })
+        group.items.push(item)
+      }
+      return groups.map(group => <details className="material-group" key={group.key} open>
+        <summary><strong>{group.key}</strong><span>{group.items.length} 条</span>{group.source && <em className="material-source dbs">来源：{group.source} · 对标素材，不是他的话，别直接抄</em>}</summary>
+        <div className="asset-list">
+          {group.items.map(item => <article className="asset-row" key={item.id}>
         <span className={item.material_kind && item.material_kind !== 'article' ? `kind-tag kind-${item.material_kind}` : 'platform-tag wechat'}>{item.material_kind && item.material_kind !== 'article' ? materialKindLabels[item.material_kind] : item.format}</span>
         <div>
           <h3>{item.name}</h3>
-          <p>{item.material_kind && item.material_kind !== 'article' ? <>来源：{item.origin_material_name || '手动创建'} · </> : null}状态：{item.status} · 核验：{item.review_status}{item.imported_at ? ` · 导入 ${new Date(item.imported_at).toLocaleDateString()}` : ''}</p>
+          {item.content && <p className="material-text" title={item.content}>{item.content}</p>}
+          <p className="material-meta">{materialPatternTag(item) && <span className="pattern-tag">{materialPatternTag(item)}</span>}{materialSourceLabel(item) ? <span className="material-source">来源：{materialSourceLabel(item)} · </span> : item.material_kind && item.material_kind !== 'article' ? <span className="material-source">来源：{item.origin_material_name || '手动创建'} · </span> : null}状态：{item.status} · 核验：{item.review_status}{item.imported_at ? ` · 导入 ${new Date(item.imported_at).toLocaleDateString()}` : ''}</p>
           {expandedId === item.id && <div className="research-detail">
             {item.source_type === 'research' && <><strong>热点来源</strong><small>{item.research_platform || '未知平台'} · 讨论 {item.research_metrics?.discussions || 0} · 增长 {item.research_metrics?.growth || 0}% · 研究记录 #{item.source_id}</small>{item.url && <a href={item.url} target="_blank" rel="noreferrer">打开原链接</a>}</>}
             {item.source_type === 'local_sync' && <><strong>桌面同步来源</strong><small>{item.device_id || '未知设备'} · 相对路径 {item.source_path || '未记录'} · 同步状态 {item.status}</small></>}
@@ -1656,7 +1673,8 @@ function MaterialWorkspace() {
           </div>}
         </div>
         <button className="row-arrow" onClick={() => setExpandedId(expandedId === item.id ? null : item.id)} aria-label={expandedId === item.id ? '收起详情' : '查看提取结果'}><ArrowUpRight size={17} /></button>
-      </article>)}
+      </article>)}</div>
+      </details>) })()}
     </div> : <div className="structure-empty">
       <p className="empty-state">暂无匹配的素材。尝试清除筛选，或上传一份文本、文档开始建立内容证据库。</p>
       <button className="outline-action" onClick={clearFilters}>清除搜索与筛选</button>
