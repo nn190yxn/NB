@@ -80,6 +80,7 @@ test('提示词禁止自我介绍与引导关注', () => {
   const prompt = draftBriefPrompt({})
   assert.match(prompt, /不要写自我介绍/)
   assert.match(prompt, /不要写引导关注、点赞一类话术/)
+  assert.match(prompt, /不要写 Markdown 标记/)
 })
 
 test('质量门把模型编造的自我介绍当成警告', () => {
@@ -100,6 +101,25 @@ test('质量门把模型编造的自我介绍当成警告', () => {
   assert.equal(normal.evidence.some(item => item.code === 'self_intro'), false)
   const clean = checkQuality({ ...baseDraft, body: '很多人以为这件事靠技巧，其实是先把过程讲清楚。' }, {})
   assert.equal(clean.evidence.some(item => item.code === 'self_intro'), false)
+})
+
+test('质量门拦下结构骨架与标记泄漏', () => {
+  // 实测四种真实泄漏：Markdown 标题、Markdown 加粗、「N 个」结构占位、其他平台建议。
+  const heading = checkQuality({ ...baseDraft, body: '# 赚到钱之后我才明白\n\n## 什么是原子化素材？\n\n正文从这里开始。' }, {})
+  assert.match(heading.evidence.find(item => item.code === 'format_leak').message, /Markdown 标题/)
+  const bold = checkQuality({ ...baseDraft, body: '先说结论：素材要拆开用。\n\n**1. 痛点场景**\n\n具体做法。' }, {})
+  assert.match(bold.evidence.find(item => item.code === 'format_leak').message, /Markdown 加粗/)
+  const placeholder = checkQuality({ ...baseDraft, body: '一条内容要含：\n\n- 1个痛点场景\n- 1个客户案例（名字+数据）\n' }, {})
+  assert.match(placeholder.evidence.find(item => item.code === 'format_leak').message, /结构占位/)
+  const crossPlatform = checkQuality({ ...baseDraft, body: '先给结论：定位不清就白干。\n\n- 抖音：开头直接冲突\n- 小红书：细节种草\n' }, {})
+  assert.match(crossPlatform.evidence.find(item => item.code === 'format_leak').message, /其他平台建议/)
+  assert.equal(crossPlatform.evidence.find(item => item.code === 'format_leak').severity, 'warning')
+
+  // 正常正文与普通列表不能误伤
+  const clean = checkQuality({ ...baseDraft, body: '很多人以为这件事靠技巧，其实是先把过程讲清楚。\n\n- 事实：80% 的账号失败在定位不清。\n- 案例：某本地老板转型三个月，流量归零。' }, {})
+  assert.equal(clean.evidence.some(item => item.code === 'format_leak'), false)
+  const numbers = checkQuality({ ...baseDraft, body: '1个反常识判断比十个技巧有用，这是我做了三年内容后的结论。' }, {})
+  assert.equal(numbers.evidence.some(item => item.code === 'format_leak'), false)
 })
 
 test('提示词里的字数与确定性检查用的是同一套数字', () => {

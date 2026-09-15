@@ -34,6 +34,22 @@ function selfIntroHits(body) {
   return [...new Set(patterns.map(pattern => value.match(pattern)).filter(Boolean).map(matched => matched[0]))]
 }
 
+// 结构骨架与标记泄漏：实测模型会把结构槽位的步骤、占位说明、甚至其他平台的标题建议写进正文。
+// 这些都不是给读者看的内容，只抓能确定判的行：Markdown 标题与加粗、「N 个…」占位、「（名字+数据）」类说明、其他平台的列表项。
+function formatLeakHits(body) {
+  const hits = []
+  for (const rawLine of String(body || '').split('\n')) {
+    const line = rawLine.trim()
+    if (!line) continue
+    if (/^#{1,6}\s/.test(line)) hits.push(`Markdown 标题「${line.slice(0, 18)}」`)
+    else if (/\*\*[^*]+\*\*/.test(line)) hits.push(`Markdown 加粗「${line.slice(0, 18)}」`)
+    else if (/^[-*]\s*\d+\s*个/.test(line) || /^\d+[.、]\s*(一个|1个)/.test(line)) hits.push(`结构占位「${line.slice(0, 18)}」`)
+    else if (/[（(](名字\+数据|数据或现象|具体的人或事|可执行的一步)[）)]/.test(line)) hits.push(`占位说明「${line.slice(0, 22)}」`)
+    else if (/^[-*]\s*(抖音|小红书|视频号|公众号)[:：]/.test(line)) hits.push(`其他平台建议「${line.slice(0, 18)}」`)
+  }
+  return [...new Set(hits)].slice(0, 4)
+}
+
 export function checkPersona(draft, profile = {}) {
   const body = text(draft?.body)
   const audiences = list(profile.audiences)
@@ -94,6 +110,12 @@ export function checkQuality(draft, profile = {}) {
   if (introHits.length) {
     evidence.push(evidenceItem('self_intro', `正文出现自我介绍或引导关注：${introHits.join('、')}`))
     suggestions.push('删掉自我介绍与引导关注，改成直给结论的开头')
+  }
+  // 结构骨架与标记：提示词要求纯文本、只写给读者看的内容，同样需要用可算的判据兑一遍。
+  const leakHits = formatLeakHits(draft?.body)
+  if (leakHits.length) {
+    evidence.push(evidenceItem('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`))
+    suggestions.push('删掉结构说明、占位符与其他平台建议，只留给读者看的正文')
   }
   // 判据要按行找：口播稿开头常是一行镜头提示（如「（镜头怼脸，语速快）」），那不是句子，要跳到下一行。
   const opening = openingSentence(draft?.body)
