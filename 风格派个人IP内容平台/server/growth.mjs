@@ -73,6 +73,8 @@ export function retrospectDeterministic(snapshot, draft, peers = []) {
     lessons: lessons.slice(0, 3),
     drivers,
     rate,
+    peer_average: average,
+    peer_count: rates.length,
     provider: 'builtin',
     created_at: new Date().toISOString(),
   }

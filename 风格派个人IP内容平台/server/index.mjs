@@ -919,6 +919,9 @@ const server = createServer(async (request, response) => {
       if (!snapshot.metrics || !Object.keys(snapshot.metrics).length) return send(response, 422, { error: '快照还没有指标数据，先上传表现截图或手动填写' })
       const draft = snapshot.draft_id != null ? owned('drafts', request).find(item => item.id === snapshot.draft_id) : null
       const peers = owned('performance_snapshots', request).filter(item => item.id !== snapshot.id && item.platform === snapshot.platform && Number.isFinite(Number(item.retrospect?.rate)))
+      // 基线（互动率均值）只算一次：模型路径用它做判断，也把 rate/peer_* 一起存下来，
+      // 否则模型路径的复盘没有 rate，永远进不了 peers，而 peers 正是「和往常比」的全部依据。
+      const deterministic = retrospectDeterministic(snapshot, draft, peers)
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       let retrospect = null
       let useRetrospectLlm = Boolean(configs.primary || configs.fallback)
@@ -929,14 +932,14 @@ const server = createServer(async (request, response) => {
       if (useRetrospectLlm) {
         try {
           const result = await callLlmWithFallback(configs, [
-            { role: 'system', content: '你是个人 IP 内容复盘助理。根据内容标题、平台、正文摘要和表现指标，输出 JSON 对象：{"verdict":"winner|ok|underperformed","summary":"一句话总结（不超过 60 字）","lessons":["可复用的经验，最多 3 条，每条不超过 40 字"],"drivers":["有效驱动因素，最多 3 个，每个不超过 8 字"]}。只输出 JSON。' },
-            { role: 'user', content: JSON.stringify({ title: draft?.title || '', platform: snapshot.platform, metrics: snapshot.metrics, body: String(draft?.body || '').slice(0, 800) }) },
+            { role: 'system', content: '你是个人 IP 内容复盘助理。根据内容标题、平台、正文摘要、表现指标和 baseline 基线，输出 JSON 对象：{"verdict":"winner|ok|underperformed","summary":"一句话总结（不超过 60 字）","lessons":["可复用的经验，最多 3 条，每条不超过 40 字"],"drivers":["有效驱动因素，最多 3 个，每个不超过 8 字"]}。判定口径：有 baseline.peer_average 时，互动率高于它 20% 记 winner、低于 20% 记 underperformed，其余 ok；没有基线时不要凭空声称「优于往常」，互动率 ≥5% 记 winner，否则 ok。只输出 JSON。' },
+            { role: 'user', content: JSON.stringify({ title: draft?.title || '', platform: snapshot.platform, metrics: snapshot.metrics, body: String(draft?.body || '').slice(0, 800), baseline: { rate: deterministic.rate, peer_average: deterministic.peer_average, peer_count: deterministic.peer_count } }) },
           ])
           const parsed = JSON.parse((result.content.match(/\{[\s\S]*\}/) || [result.content])[0])
-          retrospect = { verdict: ['winner', 'ok', 'underperformed'].includes(parsed.verdict) ? parsed.verdict : 'ok', summary: String(parsed.summary || '').slice(0, 120), lessons: (Array.isArray(parsed.lessons) ? parsed.lessons : []).slice(0, 3).map(item => String(item).slice(0, 60)), drivers: (Array.isArray(parsed.drivers) ? parsed.drivers : []).slice(0, 3).map(item => String(item).slice(0, 10)), provider: result.provider, created_at: new Date().toISOString() }
+          retrospect = { verdict: ['winner', 'ok', 'underperformed'].includes(parsed.verdict) ? parsed.verdict : 'ok', summary: String(parsed.summary || '').slice(0, 120), lessons: (Array.isArray(parsed.lessons) ? parsed.lessons : []).slice(0, 3).map(item => String(item).slice(0, 60)), drivers: (Array.isArray(parsed.drivers) ? parsed.drivers : []).slice(0, 3).map(item => String(item).slice(0, 10)), rate: deterministic.rate, peer_average: deterministic.peer_average, peer_count: deterministic.peer_count, provider: result.provider, created_at: new Date().toISOString() }
         } catch { retrospect = null }
       }
-      if (!retrospect) retrospect = retrospectDeterministic(snapshot, draft, peers)
+      if (!retrospect) retrospect = deterministic
       snapshot.retrospect = retrospect
       const addedMemories = []
       for (const lesson of retrospect.lessons.slice(0, 2)) {

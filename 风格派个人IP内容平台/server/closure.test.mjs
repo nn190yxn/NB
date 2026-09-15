@@ -64,6 +64,18 @@ test('复盘用界面真实指标键名时，收藏必须算进互动率与判�
   assert.ok(retrospect.rate > 0.06, `互动率应含收藏，实际 ${retrospect.rate}`)
   assert.equal(retrospect.verdict, 'winner')
   assert.ok(retrospect.lessons.some(lesson => lesson.includes('收藏占比突出')))
+  // 基线随结果返回：无历史时 peer_count 0、peer_average null；有历史时给出均值
+  assert.equal(retrospect.peer_count, 0)
+  assert.equal(retrospect.peer_average, null)
+  const withPeers = retrospectDeterministic({ platform: '抖音', metrics: { views: 1000, likes: 30 } }, { title: '第二条' }, [
+    { retrospect: { rate: 0.01 } },
+    { retrospect: { rate: 0.03 } },
+  ])
+  assert.equal(withPeers.peer_count, 2)
+  assert.equal(withPeers.peer_average, 0.02)
+  assert.equal(withPeers.verdict, 'winner', '3% 比 2% 的基线高 50%，按规则判 winner')
+  // 同一份数据，没有基线时按绝对口径（互动率 3% < 5%）判 ok —— 说明基线确实参与了判定
+  assert.equal(retrospectDeterministic({ platform: '抖音', metrics: { views: 1000, likes: 30 } }, { title: '第二条' }, []).verdict, 'ok')
   // 保留旧口径：中文键名的快照同样要能算对
   const chinese = retrospectDeterministic({ platform: '抖音', metrics: { 播放量: 1000, 点赞数: 80, 评论数: 40, 收藏数: 60, 转发数: 20 } }, { title: '测试内容' }, [])
   // 中文键同样要算对：点赞 80 / 收藏 60 / 评论 40 / 转发 20 / 播放 1000 → 互动率 20%，收藏排第二
@@ -97,6 +109,15 @@ test('闭环链路：适配、复盘入记忆、日历与匹配排序', async t 
   const snapshot = await (await post('/api/performance-snapshots', { draft_id: draft.id, platform: '抖音', metrics: { 播放量: 2000, 点赞数: 120, 评论数: 60, 收藏数: 90 }, status: 'confirmed' })).json()
   const retro = await (await post(`/api/performance-snapshots/${snapshot.id}/retrospect`, {})).json()
   assert.ok(['winner', 'ok', 'underperformed'].includes(retro.snapshot.retrospect.verdict))
+  // 走大模型的复盘也必须记下 rate：peers 只认有 rate 的快照，缺了就等于永远没有「往常」可比
+  assert.equal(retro.snapshot.retrospect.provider, 'primary')
+  assert.ok(Number.isFinite(retro.snapshot.retrospect.rate), `模型路径也要有 rate，实际 ${retro.snapshot.retrospect.rate}`)
+  assert.equal(retro.snapshot.retrospect.peer_count, 0)
+
+  const secondSnapshot = await (await post('/api/performance-snapshots', { draft_id: draft.id, platform: '抖音', metrics: { 播放量: 4000, 点赞数: 40 }, status: 'confirmed' })).json()
+  const secondRetro = await (await post(`/api/performance-snapshots/${secondSnapshot.id}/retrospect`, {})).json()
+  assert.equal(secondRetro.snapshot.retrospect.peer_count, 1, '第一条复盘应成为第二条的基线')
+  assert.equal(secondRetro.snapshot.retrospect.peer_average, retro.snapshot.retrospect.rate)
   assert.ok(retro.memories_added >= 1)
   const memories = await (await get('/api/memories')).json()
   assert.ok(memories.some(item => item.memory_type === 'feedback' && item.source === 'auto' && item.content.includes('复盘')))
