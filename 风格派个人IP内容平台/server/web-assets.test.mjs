@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join, dirname } from 'node:path'
+import { draftLengthTargets } from './draft-writing.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -214,6 +215,20 @@ test('素材库原子化与组合生成前端特征', () => {
   assert.match(styles, /\.kind-tag\s*\{/)
   assert.match(styles, /\.compose-panel\s*\{/)
   assert.match(styles, /\.atom-mini-form\s*\{/)
+})
+
+test('草稿列表的字数警告用同一套平台目标（前后端不漂移）', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /const draftLengthWarning = \(draft: DraftItem\)/)
+  assert.match(source, /'draft-rail-count warn' : 'draft-rail-count'/)
+  assert.match(source, /title=\{draftLengthWarning\(item\) \|\| undefined\}/)
+  // 客户端必须与服务端 draftLengthTargets 数字一致，否则「N 字」的告警会和质量门说法不一
+  for (const [platform, target] of Object.entries(draftLengthTargets)) {
+    const literal = `${platform}: { min: ${target.min}, max: ${target.max} }`
+    assert.ok(source.includes(literal), `客户端缺少平台目标：${literal}`)
+  }
+  const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
+  assert.match(styles, /\.draft-rail-count\.warn\s*\{/)
 })
 
 test('AI 记忆层前端特征', () => {

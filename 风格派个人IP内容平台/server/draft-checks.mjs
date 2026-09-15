@@ -15,6 +15,16 @@ function result(status, { score = null, dimensions = {}, evidence = [], suggesti
 }
 function sourceCount(draft) { return Array.isArray(draft?.source_refs) ? draft.source_refs.length : 0 }
 function currentVersion(draft) { return Number(draft?.version || 1) }
+// 取「开头第一句」：跳过镜头提示行与「标题：」「正文：」这类结构行，再去掉行首的（…）提示，按句末标点截断。
+function openingSentence(body) {
+  for (const rawLine of String(body || '').split('\n')) {
+    const line = rawLine.trim().replace(/^[（(][^）)]*[）)]\s*/, '')
+    if (!line || /^(#{1,6}\s*|标题[:：]|正文[:：])/.test(line) || /^[^，。！？；]{1,6}[:：]$/.test(line)) continue
+    const matched = line.match(/[^。！？；]*[。！？；]/)
+    if (matched && matched[0].trim()) return matched[0].trim()
+  }
+  return ''
+}
 
 export function checkPersona(draft, profile = {}) {
   const body = text(draft?.body)
@@ -70,6 +80,15 @@ export function checkQuality(draft, profile = {}) {
   if (lengthTarget && bodyLength && (bodyLength < lengthTarget.min || bodyLength > lengthTarget.max)) {
     evidence.push(evidenceItem('platform_length', `正文 ${bodyLength} 字，${draft.platform}目标${draftLengthRange(draft.platform)} 字`))
     suggestions.push(`把正文调整到 ${draftLengthRange(draft.platform)} 字`)
+  }
+  // 提示词要求「开头第一句直给冲突或结论」，模型实测仍会用设问开头，所以也用可算的判据检查。
+  // 判据要按行找：口播稿开头常是一行镜头提示（如「（镜头怼脸，语速快）」），那不是句子，要跳到下一行。
+  const opening = openingSentence(draft?.body)
+  if (opening) {
+    if (opening.endsWith('？') || opening.endsWith('?')) {
+      evidence.push(evidenceItem('opening_question', `开头第一句是问句：${opening.length > 26 ? `${opening.slice(0, 26)}…` : opening}`))
+      suggestions.push('把结论提到第一句，或点「开头句」槽位换一个开头范式')
+    }
   }
   const scoreBlocked = score < 60
   if (scoreBlocked) evidence.push(evidenceItem('score_low', '质量综合分低于 60 分', 'blocked'))

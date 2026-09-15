@@ -48,6 +48,34 @@ test('质量门把模型不遵守的平台字数不足当成警告而不是拦�
   assert.equal(fine.evidence.some(item => item.code === 'platform_length'), false)
 })
 
+test('质量门把设问开头当成警告：提示词要求第一句直给冲突或结论', () => {
+  const question = checkQuality({ ...baseDraft, body: '你是不是经常面对空白的文档，觉得没东西可写？\n\n我记录一次真实过程。' }, {})
+  const evidence = question.evidence.find(item => item.code === 'opening_question')
+  assert.ok(evidence, '首句是问句必须留下证据')
+  assert.equal(evidence.severity, 'warning')
+  assert.match(evidence.message, /你是不是经常面对空白的文档/)
+  assert.ok(question.suggestions.some(item => item.includes('开头句')))
+  assert.equal(question.status, 'passed', '设问开头不应直接拦停发布')
+
+  const statement = checkQuality({ ...baseDraft, body: '很多人以为这件事靠技巧，其实是先把过程讲清楚。' }, {})
+  assert.equal(statement.evidence.some(item => item.code === 'opening_question'), false)
+  // 问句出现在第二句不算开头问题
+  const later = checkQuality({ ...baseDraft, body: '先给结论：这件事靠过程。那为什么大家都做不到？' }, {})
+  assert.equal(later.evidence.some(item => item.code === 'opening_question'), false)
+  // 口播稿开头是镜头提示行时，要看下一行而不是把镜头提示当成句子
+  const afterDirection = checkQuality({ ...baseDraft, body: '（镜头怼脸，语速快）\n你以为灵感枯竭是因为没东西写？\n\n其实是因为没素材库。' }, {})
+  const directionEvidence = afterDirection.evidence.find(item => item.code === 'opening_question')
+  assert.ok(directionEvidence, '镜头提示行之后的问句仍要能被发现')
+  assert.match(directionEvidence.message, /你以为灵感枯竭是因为没东西写？$/)
+  assert.doesNotMatch(directionEvidence.message, /镜头怼脸/)
+  // 首行只有镜头提示、下一行是结论时不应误报
+  const clean = checkQuality({ ...baseDraft, body: '（镜头平稳，语速中等）\n别再做灵感奴隶了。\n\n具体怎么做。' }, {})
+  assert.equal(clean.evidence.some(item => item.code === 'opening_question'), false)
+  // 标题行与「正文：」结构标签不算开头第一句
+  const titled = checkQuality({ ...baseDraft, body: '标题：灵感枯竭？那是你没建素材库\n正文：\n别急着怪自己没灵感，先看你的素材库。' }, {})
+  assert.equal(titled.evidence.some(item => item.code === 'opening_question'), false)
+})
+
 test('提示词里的字数与确定性检查用的是同一套数字', () => {
   const prompt = draftBriefPrompt({})
   assert.match(prompt, new RegExp(`小红书 ${draftLengthTargets.小红书.min}-${draftLengthTargets.小红书.max} 字`))
