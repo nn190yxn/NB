@@ -81,6 +81,7 @@ test('提示词禁止自我介绍与引导关注', () => {
   assert.match(prompt, /不要写自我介绍/)
   assert.match(prompt, /不要写引导关注、点赞一类话术/)
   assert.match(prompt, /不要写 Markdown 标记/)
+  assert.match(prompt, /宁可少一个案例也不编造/)
 })
 
 test('质量门把模型编造的自我介绍当成警告', () => {
@@ -120,6 +121,31 @@ test('质量门拦下结构骨架与标记泄漏', () => {
   assert.equal(clean.evidence.some(item => item.code === 'format_leak'), false)
   const numbers = checkQuality({ ...baseDraft, body: '1个反常识判断比十个技巧有用，这是我做了三年内容后的结论。' }, {})
   assert.equal(numbers.evidence.some(item => item.code === 'format_leak'), false)
+})
+
+test('具体案例与数字必须有人确认', () => {
+  // 实测：素材库里只有对标样本，模型为了满足「用具体经历支撑」把客户案例编了 12 条。
+  const invented = checkQuality({ ...baseDraft, body: '我有个客户，换了5个定位，最后用「本地老板IP顾问」这个定位，3个月涨粉2万。' }, {})
+  const evidence = invented.evidence.find(item => item.code === 'case_claim')
+  assert.ok(evidence, '编造的客户案例必须留下证据')
+  assert.equal(evidence.severity, 'warning')
+  assert.match(evidence.message, /案例人物/)
+  assert.match(evidence.message, /结果数字/)
+  assert.match(evidence.message, /我有个客户/)
+  assert.ok(invented.suggestions.some(item => item.includes('确认案例与数字是否真实')))
+
+  const vendor = checkQuality({ ...baseDraft, body: '上个月，一位做本地家政的老板，提炼出一个核心观点：干净不是扫出来的，是收纳出来的。' }, {})
+  assert.match(vendor.evidence.find(item => item.code === 'case_claim').message, /案例人物/)
+  const numberOnly = checkQuality({ ...baseDraft, body: '- 案例：某本地老板转型三个月，因定位模糊，流量归零。' }, {})
+  assert.match(numberOnly.evidence.find(item => item.code === 'case_claim').message, /结果数字/)
+
+  // 不能误伤：通用判断、单纯反问客户、真实时间描述
+  const judgement = checkQuality({ ...baseDraft, body: '定位不清的内容都是无效自晒。先想清楚你卖给谁，再决定写什么。' }, {})
+  assert.equal(judgement.evidence.some(item => item.code === 'case_claim'), false)
+  const question = checkQuality({ ...baseDraft, body: '一个反问：你确定你的客户，真的知道你卖什么吗？' }, {})
+  assert.equal(question.evidence.some(item => item.code === 'case_claim'), false)
+  const timeline = checkQuality({ ...baseDraft, body: '上周把这个选题拆成了三条内容，具体怎么拆的下面说。' }, {})
+  assert.equal(timeline.evidence.some(item => item.code === 'case_claim'), false)
 })
 
 test('提示词里的字数与确定性检查用的是同一套数字', () => {

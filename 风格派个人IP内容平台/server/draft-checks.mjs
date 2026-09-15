@@ -50,6 +50,21 @@ function formatLeakHits(body) {
   return [...new Set(hits)].slice(0, 4)
 }
 
+// 具体案例与数字：提示词自相矛盾过——一条要求「用具体经历、数字支撑」，一条禁止编造成绩与客户，
+// 结果 12 条真实草稿 12 条都编出了客户案例（含「3个月涨粉2万」这类数字）。这里只把这类句子挑出来让人确认。
+// 只要求人物词紧跟数量词（「一位做家政的老板」「我有个客户」「某本地老板」），不匹配「一个反问：…客户」。
+function caseClaimHits(body) {
+  const hits = []
+  for (const rawLine of String(body || '').split(/[\n。！？]/)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const person = /(我有个|有一个|有一位|有位|某|某位|一位|一个)(做[^，。]{0,8}的)?(老板|客户|学员|同行|朋友|宝妈|店长|创始人|阿姨)/.test(line)
+    const number = /(涨粉|粉丝\d|翻了?\d|翻倍|多赚|省下|归零|成交额|复购率|\d+个月涨粉)/.test(line)
+    if (person || number) hits.push(`${person ? '案例人物' : ''}${person && number ? '+' : ''}${number ? '结果数字' : ''}｜${line.slice(0, 40)}`)
+  }
+  return [...new Set(hits)].slice(0, 3)
+}
+
 export function checkPersona(draft, profile = {}) {
   const body = text(draft?.body)
   const audiences = list(profile.audiences)
@@ -116,6 +131,12 @@ export function checkQuality(draft, profile = {}) {
   if (leakHits.length) {
     evidence.push(evidenceItem('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`))
     suggestions.push('删掉结构说明、占位符与其他平台建议，只留给读者看的正文')
+  }
+  // 具体案例与数字：素材库里只有对标样本、没有己方案例，这类句子很可能是模型编的，发布前必须有人确认。
+  const caseHits = caseClaimHits(draft?.body)
+  if (caseHits.length) {
+    evidence.push(evidenceItem('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`))
+    suggestions.push('确认案例与数字是否真实；不是真实经历就改成通用判断，或补一条真实素材')
   }
   // 判据要按行找：口播稿开头常是一行镜头提示（如「（镜头怼脸，语速快）」），那不是句子，要跳到下一行。
   const opening = openingSentence(draft?.body)
