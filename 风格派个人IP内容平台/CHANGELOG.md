@@ -1,5 +1,39 @@
 # 更新记录（CHANGELOG）
 
+## 2026-09-14 · 复盘的「往常」：模型路径拿不到基线，而且它的结论进不了基线池
+
+### 问题（两处互相加剧）
+
+**一、模型路径的复盘不记 `rate`。** 确定性复盘会算互动率并写入 `retrospect.rate`；走大模型那条分支只存 verdict/summary/lessons/drivers，没有 rate。而「和往常比」的基线完全依赖它：
+
+```js
+const peers = ...filter(item => Number.isFinite(Number(item.retrospect?.rate)))
+```
+
+`Number(undefined)` 是 NaN → **所有走模型的复盘都进不了 peers**。他配着 Key、默认走模型，所以基线池实际是空的：后面每条复盘都只能靠绝对口径（互动率 ≥5% 才算好）判断。
+
+**二、模型被要求判「优于/低于往常」，但请求里没有任何历史数据。** 用户消息只传 title / platform / metrics / body —— 没有基线，也没有同类内容的历史。模型只能凭空给一个 verdict，而这条 verdict 会被写进「AI 记忆」的 feedback，再注入之后的选题与草稿生成。也就是说：一个没有依据的「优于往常」会变成一条喂给未来内容的假经验。
+
+### 改动
+
+1. `retrospectDeterministic` 的结果里带上 `peer_average` 与 `peer_count`（基线只算一次，接口层复用）。
+2. 接口层先算一次确定性结果 `deterministic`，模型路径：
+   - 把 `baseline: { rate, peer_average, peer_count }` 传进请求；
+   - 存下的复盘补上 `rate` / `peer_average` / `peer_count`（于是模型路径的复盘也能当别人的基线）；
+   - 系统提示词给出判定口径：有基线就按「高于基线 20% 记 winner、低于 20% 记 underperformed」，**没有基线时不允许凭空说「优于往常」**，退到绝对口径（互动率 ≥5% 记 winner），与确定性路径一致。
+
+### 验证
+
+204/204 测试。新增断言：
+
+- 纯函数：无历史时 `peer_count 0 / peer_average null`；两条历史（1%/3%）→ `peer_count 2 / peer_average 0.02`；同一份 3% 的数据，**有基线判 winner（比 2% 高 50%）、无基线判 ok（3% < 5%）** —— 证明基线确实参与了判定
+- 接口层：走模型的复盘必须记下 `rate`（把新写法临时换回旧写法确认会红：`实际 undefined`），且第一条复盘成为第二条的基线（`peer_count 1`、`peer_average` 等于第一条的 rate）
+
+### 没验证的
+
+提示词里那条判定口径的实际效果 —— 需要一次真实生成，会花他自己的模型额度，等他同意。
+
+
 ## 2026-09-14 · 复盘里「收藏」永远是 0（键名错位）
 
 ### 问题
