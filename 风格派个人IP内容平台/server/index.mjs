@@ -205,6 +205,8 @@ function runtimeConfig(request, slot) {
 
 const redfoxDailyLimit = Number(process.env.REDFOX_DAILY_LIMIT || 10)
 const llmDailyLimit = Number(process.env.LLM_DAILY_LIMIT || 20)
+// benchmark = 对标机制：从对标账号拿来的可复制机制，必须带来源，不能当成创作者本人的表达习惯。
+const memoryTypes = ['style', 'topic', 'feedback', 'benchmark']
 const sharedLlm = { base_url: process.env.PROJECT_LLM_BASE_URL || '', api_key: process.env.PROJECT_LLM_API_KEY || '', model: process.env.PROJECT_LLM_MODEL || '' }
 const adminUsernames = String(process.env.ADMIN_USERNAMES || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean)
 
@@ -823,13 +825,14 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/api/memories' && request.method === 'POST') {
       const body = await readJson(request)
-      const memoryTypes = ['style', 'topic', 'feedback']
       const content = String(body.content || '').trim()
       if (!memoryTypes.includes(body.memory_type)) return send(response, 422, { error: '记忆类型无效' })
       if (!content) return send(response, 422, { error: '记忆内容不能为空' })
+      const sourceLabel = String(body.source_label || '').trim()
+      if (body.memory_type === 'benchmark' && !sourceLabel) return send(response, 422, { error: '对标机制要写清来源（例如「对标dbs」），否则会与创作者本人的表达习惯混在一起' })
       const duplicate = owned('memories', request).find(item => item.memory_type === body.memory_type && item.content === content && item.status === 'active')
       if (duplicate) return send(response, 200, { ...duplicate, duplicate: true })
-      const memory = { id: nextId(state.memories), owner_id: userId(request), memory_type: body.memory_type, content, source: 'manual', provider: 'builtin', status: 'active', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+      const memory = { id: nextId(state.memories), owner_id: userId(request), memory_type: body.memory_type, content, source: 'manual', provider: 'builtin', status: 'active', ...(body.memory_type === 'benchmark' ? { source_label: sourceLabel } : {}), created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
       state.memories.push(memory)
       await saveState('memories')
       return send(response, 201, memory)
@@ -848,6 +851,12 @@ const server = createServer(async (request, response) => {
         if (!['active', 'archived'].includes(body.status)) return send(response, 422, { error: '记忆状态无效' })
         memory.status = body.status
       }
+      if (body.memory_type !== undefined) {
+        if (!memoryTypes.includes(body.memory_type)) return send(response, 422, { error: '记忆类型无效' })
+        memory.memory_type = body.memory_type
+      }
+      if (body.source_label !== undefined) memory.source_label = String(body.source_label || '').trim()
+      if (memory.memory_type === 'benchmark' && !memory.source_label) return send(response, 422, { error: '对标机制要写清来源（例如「对标dbs」），否则会与创作者本人的表达习惯混在一起' })
       memory.updated_at = new Date().toISOString()
       await saveState('memories')
       return send(response, 200, memory)
@@ -1270,7 +1279,8 @@ const server = createServer(async (request, response) => {
       const hookValidation = requestedHook ? validateHookText(requestedHook) : null
       if (hookValidation?.status === 'blocked') return send(response, 422, { error: 'Hook 校验未通过', code: 'validation_failed', evidence: hookValidation.evidence })
       const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
-      const brief = buildDraftBrief({ topic, structure, quotes: quoteMaterials, experiences: experienceMaterials, memories, hookText: requestedHook })
+      const mechanisms = activeMemories(userId(request)).filter(item => item.memory_type === 'benchmark')
+      const brief = buildDraftBrief({ topic, structure, quotes: quoteMaterials, experiences: experienceMaterials, memories, mechanisms, hookText: requestedHook })
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       if (!configs.primary && !configs.fallback) return send(response, 422, { code: 'MISSING_CONFIG', reason: 'llm_not_configured', error: '草稿正文由大模型撰写，请先在 API 中心配置文本模型。' })
       if (usesSharedPrimaryLlm(request)) {
@@ -1318,9 +1328,10 @@ const server = createServer(async (request, response) => {
       if (useAdaptLlm) {
         try {
           const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
+          const mechanisms = activeMemories(userId(request)).filter(item => item.memory_type === 'benchmark')
           const result = await callLlmWithFallback(configs, [
-            { role: 'system', content: `你是多平台内容发布适配专家。把给定的母版文案改写为适合「${platform}」发布的版本：调整标题（符合平台字数习惯）、正文（符合平台格式、语气与长度）、并给出 3-6 个话题标签（公众号除外，标签可为空数组）。只输出 JSON：{"title":"...","body":"...","hashtags":["#标签"]}。` },
-            { role: 'user', content: JSON.stringify({ title: draft.title, body: String(draft.body || '').slice(0, 3000), style_memories: memories.map(item => item.content).slice(0, 5) }) },
+            { role: 'system', content: `你是多平台内容发布适配专家。把给定的母版文案改写为适合「${platform}」发布的版本：调整标题（符合平台字数习惯）、正文（符合平台格式、语气与长度）、并给出 3-6 个话题标签（公众号除外，标签可为空数组）。style_memories 是创作者本人的表达习惯，必须遵守；mechanism_memories 是对标账号的可复制机制，结构和节奏可以照用，但不能写成创作者本人的习惯。只输出 JSON：{"title":"...","body":"...","hashtags":["#标签"]}。` },
+            { role: 'user', content: JSON.stringify({ title: draft.title, body: String(draft.body || '').slice(0, 3000), style_memories: memories.map(item => item.content).slice(0, 5), mechanism_memories: mechanisms.map(item => ({ content: item.content, source: item.source_label || '对标账号' })).slice(0, 5) }) },
           ])
           const parsed = JSON.parse((result.content.match(/\{[\s\S]*\}/) || [result.content])[0])
           if (String(parsed.body || '').trim()) {

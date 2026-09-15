@@ -72,7 +72,10 @@ async function main() {
   ])
   const structureTitles = new Set(existingStructures.map(item => item.title))
   const atomTexts = new Set(existingMaterials.filter(item => item.material_kind).map(item => item.content))
-  const memoryKeys = new Set(existingMemories.filter(item => item.status !== 'archived').map(item => `${item.memory_type}:${item.content}`))
+  const memoryTexts = new Set(existingMemories.filter(item => item.status !== 'archived').map(item => item.content))
+  // 资料包里的记忆都是对标账号的机制，统一按 benchmark 导入，并带来源标记；
+  // 不沿用包里的 memory_type（旧包把它写成 style/topic，会把机制误当成创作者本人的表达习惯）。
+  const sourceLabel = String(pack.source_label || pack.name || '对标账号').trim()
 
   const summary = { structures: { created: 0, skipped: 0 }, atoms: { created: 0, skipped: 0 }, memories: { created: 0, skipped: 0 } }
   let errors = 0
@@ -93,9 +96,9 @@ async function main() {
     } catch (error) { console.error(`✖ 原子「${(item.text || '').slice(0, 20)}…」: ${error.message}`); errors++ }
   }
   for (const item of pack.memories || []) {
-    if (memoryKeys.has(`${item.memory_type}:${item.content}`)) { summary.memories.skipped++; continue }
+    if (memoryTexts.has(item.content)) { summary.memories.skipped++; continue }
     try {
-      await api('/api/memories', { method: 'POST', body: JSON.stringify({ memory_type: item.memory_type, content: item.content }) })
+      await api('/api/memories', { method: 'POST', body: JSON.stringify({ memory_type: 'benchmark', source_label: sourceLabel, content: item.content }) })
       summary.memories.created++
     } catch (error) { console.error(`✖ 记忆「${item.content.slice(0, 20)}…」: ${error.message}`); errors++ }
   }
@@ -103,7 +106,7 @@ async function main() {
   console.log(`\n资料包「${pack.name}」导入完成：`)
   console.log(`  结构库   新增 ${summary.structures.created}，跳过 ${summary.structures.skipped}（共 ${pack.structures?.length || 0} 条）`)
   console.log(`  素材原子 新增 ${summary.atoms.created}，跳过 ${summary.atoms.skipped}（共 ${pack.atoms?.length || 0} 条）`)
-  console.log(`  AI 记忆  新增 ${summary.memories.created}，跳过 ${summary.memories.skipped}（共 ${pack.memories?.length || 0} 条）`)
+  console.log(`  AI 记忆  新增 ${summary.memories.created}，跳过 ${summary.memories.skipped}（共 ${pack.memories?.length || 0} 条，类型均为对标机制，来源「${sourceLabel}」）`)
   if (errors) { console.error(`\n${errors} 条失败，修正后重跑即可（幂等，不会重复导入）`); process.exit(1) }
 }
 

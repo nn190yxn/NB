@@ -31,12 +31,22 @@ function startServer(extraEnv = {}) {
 const generate = () => fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers, body: JSON.stringify({ topic: { title: '真实正文测试', strategy_layer: 'trust', goal_refs: [] }, quote_ids: [], experience_ids: [] }) })
 
 test('写作简报与模型输出解析保持纯函数行为', () => {
-  const brief = buildDraftBrief({ topic: { title: '标题', strategy_layer: 'reach' }, structure: { steps: ['开场', '案例'] }, quotes: [{ content: '金句' }], experiences: [{ content: '经历' }], memories: [{ content: '偏好' }], hookText: 'Hook' })
+  const brief = buildDraftBrief({ topic: { title: '标题', strategy_layer: 'reach' }, structure: { steps: ['开场', '案例'] }, quotes: [{ content: '金句', name: '对标dbs·金句' }], experiences: [{ content: '经历' }], memories: [{ content: '偏好' }], mechanisms: [{ content: '结尾三选一', source_label: '对标dbs' }, { content: '缺来源的机制' }], hookText: 'Hook' })
   assert.equal(brief.title, '标题')
   assert.equal(brief.strategy_layer, 'reach')
   assert.deepEqual(brief.structure, ['开场', '案例'])
   assert.deepEqual(brief.platforms, draftPlatforms)
-  assert.match(draftBriefPrompt({ role: '顾问' }), /身份：顾问/)
+  assert.deepEqual(brief.quotes, [{ text: '金句', source: '对标dbs·金句' }])
+  assert.deepEqual(brief.style, ['偏好'])
+  assert.deepEqual(brief.mechanisms, [{ content: '结尾三选一', source: '对标dbs' }, { content: '缺来源的机制', source: '对标账号' }])
+  assert.ok(brief.style.every(item => !brief.mechanisms.some(mechanism => mechanism.content === item)), '对标机制不能混进 style')
+
+  const prompt = draftBriefPrompt({ role: '顾问' })
+  assert.match(prompt, /身份：顾问/)
+  assert.match(prompt, /style 是创作者本人的表达习惯，必须遵守/)
+  assert.match(prompt, /mechanisms 是对标账号的可复制机制/)
+  assert.match(prompt, /quotes 是对标账号的原话：只能当引用用/)
+  assert.match(prompt, /不要提对标、也不要虚构对标来源/)
 
   const bodies = parseDraftBodies('前言 {"master":"母版","小红书":"只给了小红书"} 结尾')
   assert.equal(bodies['小红书'], '只给了小红书')

@@ -1,5 +1,6 @@
 {
   "name": "dontbesilent 聊赚钱",
+  "source_label": "对标dbs",
   "description": "对标账号 dontbesilent 聊赚钱（225 条原文全量拆解）的可导入资料包：只含 A 级可复制机制（结构/范式/清单）与带对标标记的参考素材，不含其人设履历。来源文档：E:/知识库/内容运营知识库/IP打造/dontbesilent 聊赚钱/02_爆款结构拆解、09_开头钩子库、01_选题标准思路、05_IP定位、06_变现矩阵、07_SOP、08_可复制性分级、10_冷启动复现。",
   "defaults": { "platform": "通用" },
   "structures": [
