@@ -46,6 +46,23 @@ test('质量门不把序数「第一」当风险词阻断，真主张仍然阻�
   assert.equal(claim.status, 'blocked')
 })
 
+test('受众写成整句时，质量门直接把原因说出来', () => {
+  // 实测他现在的受众是 17 字整句（「想做个人IP却每天从零开始的创业者」），正文不会原样出现 → 32 条真实草稿只命中 1 条。
+  const longAudience = { audiences: ['想做个人IP却每天从零开始的创业者'], pillars: [], viewpoints: [], problems: [] }
+  const quality = checkQuality(baseDraft, longAudience)
+  const audience = quality.evidence.find(item => item.code === 'audience_weak')
+  assert.ok(audience)
+  assert.ok(quality.suggestions.some(line => line.includes('不会原样出现') && line.includes('2-8 字短词')))
+
+  // 换成短词、且正文里真的出现了这个词，就不再命中
+  const short = checkQuality({ ...baseDraft, body: `${baseDraft.body}写给创业者看的。` }, { audiences: ['创业者'], pillars: [], viewpoints: [], problems: [] })
+  assert.equal(short.evidence.some(item => item.code === 'audience_weak'), false)
+
+  // 档案里全都不超过 12 字时，不给那条“写太长”的提示
+  const noLong = checkQuality({ ...baseDraft, body: '正文与档案无关的一段话。'.repeat(8) }, { audiences: ['创业者'], pillars: ['素材原子化'], viewpoints: [], problems: [] })
+  assert.equal(noLong.suggestions.some(line => line.includes('不会原样出现')), false)
+})
+
 test('quality and publish checks block missing evidence, risk and fact verification', () => {
   const quality = checkQuality({ ...baseDraft, opening_ref: null, source_refs: [], body: '包赚' }, {})
   assert.equal(quality.status, 'blocked')

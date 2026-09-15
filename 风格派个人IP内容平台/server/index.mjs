@@ -466,7 +466,7 @@ const server = createServer(async (request, response) => {
       if (!Object.values(interviewInput(positioning).answers).some(Boolean)) return send(response, 422, { error: '请先填写访谈经历、能力或受众信息', retryable: true })
       try {
         const digest = interviewDigest(positioning)
-        const content = await generateStructured(request, '根据访谈生成三个待验证的定位建议，返回数组。answers 的 0=经历、1=能力、2=受众。每项为 {"name":"方向名称","positioning_statement":"定位表述","audiences":[],"problems":[],"pillars":[],"uncertainties":["待验证信息"],"answer_refs":["0"]}。answer_refs 只能引用非空回答编号。', interviewInput(positioning))
+        const content = await generateStructured(request, '根据访谈生成三个待验证的定位建议，返回数组。answers 的 0=经历、1=能力、2=受众。每项为 {"name":"方向名称","positioning_statement":"定位表述","audiences":[],"problems":[],"pillars":[],"uncertainties":["待验证信息"],"answer_refs":["0"]}。answer_refs 只能引用非空回答编号。audiences、problems、pillars 每项用 2-8 字的短词或短语（例如「个人IP创业者」「选题靠灵感」「素材原子化」），不要写成整句：质量门靠正文里出现这些原话来判断贴合度，写长了就永远匹配不上。', interviewInput(positioning))
         const candidates = parsePositioning(content, positioning).map(item => ({ ...item, id: randomUUID(), interview_digest: digest, source_refs: item.answer_refs.map(key => sourceRef('positioning_answer', `${userId(request)}-${key}`)), status: 'pending', created_at: new Date().toISOString() }))
         if (interviewDigest(userDocument('positioning', request)) !== digest) return send(response, 409, { error: '访谈内容已更新，请重新生成定位' })
         state.positioning_candidates_by_user ||= {}

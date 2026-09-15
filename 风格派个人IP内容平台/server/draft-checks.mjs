@@ -117,8 +117,12 @@ export function checkQuality(draft, profile = {}) {
   if (!sourceValid || sourceCount(draft) === 0) { evidence.push(evidenceItem('source_missing', '草稿缺少有效来源引用', 'blocked')); suggestions.push('补回选题、素材或方法来源') }
   if (riskHits.length) { evidence.push(evidenceItem('risk_words', `正文命中风险表达：${riskHits.join('、')}`, 'blocked')); suggestions.push('修改风险表达后重新检查') }
   if (body && structureScore < 100) { evidence.push(evidenceItem('structure_weak', '正文长度或段落结构仍需加强')); suggestions.push('补充真实过程、证据和可执行步骤') }
-  if (audienceScore < 100) { evidence.push(evidenceItem('audience_weak', '正文与当前受众问题的连接不够明确')); suggestions.push('明确读者是谁以及正在解决什么问题') }
-  if (pointScore < 100) { evidence.push(evidenceItem('point_weak', '核心观点或内容支柱不够明确')); suggestions.push('用一句话写出你的判断，再用过程或案例支撑') }
+  // 受众/支柱的命中靠「正文里出现档案里的原话」。档案里写成了整句时（实测他现在的受众是 17 字整句），
+  // 正文不可能原样出现，这条就永远命中（真实草稿 1/32）；把原因写进建议，别让人以为正文真有问题。
+  const overlongValue = [...audienceValues, ...pillarValues].map(value => text(value)).find(value => value.length > 12)
+  const shortValueHint = () => `档案里的「${overlongValue}」有 ${overlongValue.length} 字，正文不会原样出现这句，所以这条会一直命中；把它改成 2-8 字短词（例如「个人IP创业者」），或确认正文确实对上了之后忽略`
+  if (audienceScore < 100) { evidence.push(evidenceItem('audience_weak', '正文与当前受众问题的连接不够明确')); suggestions.push(overlongValue ? shortValueHint() : '在正文中写出受众正在面对的具体问题') }
+  if (pointScore < 100) { evidence.push(evidenceItem('point_weak', '核心观点或内容支柱不够明确')); suggestions.push(overlongValue ? shortValueHint() : '用一句话写出你的判断，再用过程或案例支撑') }
   // 模型并不遵守提示词里的字数要求（实测：提示词写抖音不超 250 字，模型给了 384 字），所以这里做确定性校验。
   const lengthTarget = draftLengthTargets[draft?.platform]
   const bodyLength = String(draft?.body || '').trim().length
