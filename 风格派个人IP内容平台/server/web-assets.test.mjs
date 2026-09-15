@@ -20,7 +20,7 @@ test('访谈保存等待响应并恢复账号进度，失败保留输入', () =>
 
 test('草稿覆盖动作受脏状态保护，保存失败不清除脏状态', () => {
   const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
-  for (const name of ['generateHooks', 'runDraftCheck', 'selectDraftHook', 'restoreDraft', 'deaiDraft']) {
+  for (const name of ['runDraftCheck', 'restoreDraft', 'deaiDraft', 'applySlot']) {
     const start = source.indexOf(`const ${name} =`)
     assert.ok(start > 0)
     assert.match(source.slice(start, source.indexOf('\n', start)), /draftActionBlocked\(draft\)/)
@@ -142,7 +142,52 @@ test('爆款方法库按四类方法组织并保留结构 API', () => {
   assert.match(source, /'选题方法', '标题方法', '开头方法', '内容结构'/)
   assert.match(source, /method_category/)
   assert.match(source, /爆款方法库/)
+  assert.match(source, /structure-group/)
+  assert.match(source, /calendar-more/)
   assert.doesNotMatch(source, /爆款结构库/)
+  const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
+  assert.match(styles, /\.structure-group\s*\{/)
+  assert.match(styles, /\.calendar-more\s*\{/)
+})
+
+test('发布能力并入内容创作，侧栏不再单独列出发布中心', () => {
+  const source = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8')
+  assert.match(source, /function DraftPublishPanel/)
+  assert.match(source, /\/api\/drafts\/\$\{draft\.id\}\/adapt/)
+  assert.match(source, /多平台发布/)
+  assert.doesNotMatch(source, /label: '发布中心'/)
+  assert.doesNotMatch(source, /function PublishCenter/)
+})
+
+test('选题评估与决策入口用主按钮，关键动作不被当成正文', () => {
+  const source = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8')
+  assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => evaluateTopicItem\(topic\)\}>七维评估<\/button>/)
+  assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => decideTopic\(topic, 'do'\)\}>确认做<\/button>/)
+  assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => openComposeFor\(topic\)\}>去组装草稿<\/button>/)
+  const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
+  assert.match(styles, /\.topic-actions \.primary-action\s*\{/)
+})
+
+test('草稿生成入口收敛到已确认选题，不再从面板手打标题', () => {
+  const source = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8')
+  // 面板只提供已确认选题，且 POST 携带 topic_id
+  assert.match(source, /apiJson<TopicItem\[\]>\('\/api\/topics'\)\.then\(items => setTopics\(items\.filter\(item => item\.workflow_status === 'approved'\)\)\)/)
+  assert.match(source, /topic_id: Number\(topicId\)/)
+  assert.match(source, /先选一条已确认的选题/)
+  assert.doesNotMatch(source, /anchorTitle/)
+  // 选题助手与爆款方法库都改为带参数跳转，不再各自直接生成
+  assert.doesNotMatch(source, /generateDrafts/)
+  assert.match(source, /const openComposeFor = \(topic: TopicItem\) => \{ setComposePreset\(\{ topicId: topic\.id, structureId: null \}\); onNavigate\('内容创作'\) \}/)
+  assert.match(source, /const useStructure = \(structure: StructureItem\) => \{ setComposePreset\(\{ topicId: null, structureId: structure\.id \}\); onNavigate\('内容创作'\) \}/)
+  // 生成成功后定位并高亮新草稿
+  assert.match(source, /const \[freshDraftIds, setFreshDraftIds\] = useState<number\[\]>\(\[\]\)/)
+  assert.match(source, /draftGridRef\.current\?\.scrollIntoView\(\{ behavior: 'smooth', block: 'start' \}\)/)
+  assert.match(source, /freshDraftIds\.includes\(draft\.id\) \? 'trend-card draft-card draft-row-focused' : 'trend-card draft-card'/)
+  // 生成期间有明确反馈，不再静默
+  assert.match(source, /生成中\.\.\.（约 30 秒）/)
+  const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
+  assert.match(styles, /\.primary-action:disabled\s*\{/)
+  assert.match(styles, /\.draft-row-focused\s*\{/)
 })
 
 test('素材库原子化与组合生成前端特征', () => {

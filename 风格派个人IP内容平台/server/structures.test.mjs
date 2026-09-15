@@ -4,6 +4,8 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { startSharedLlmMock } from './generation-test-helper.mjs'
+const llmMock = await startSharedLlmMock()
 
 const port = 3400 + Math.floor(Math.random() * 200)
 const baseUrl = `http://127.0.0.1:${port}`
@@ -14,7 +16,7 @@ function startServer() {
   writeFileSync(testDataFile, '{}')
   const child = spawn(process.execPath, ['server/index.mjs'], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: testDataFile },
+    env: { ...process.env, ...llmMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: testDataFile },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return new Promise((resolve, reject) => {
@@ -139,7 +141,8 @@ test('研究分析自动沉淀结构并幂等，草稿生成累计使用计数',
     body: JSON.stringify({ topic: { title: '测试选题', strategy_layer: 'trust', goal_refs: [] }, structure_id: second.items[0].id }),
   })).json()
   assert.equal(drafts.length, 4)
-  assert.ok(drafts[0].body.includes('结构：'))
+  assert.equal(drafts[0].body, '小红书正文：测试选题')
+  assert.deepEqual(drafts[0].generation_context.brief.structure, second.items[0].steps)
   assert.ok(drafts[0].source_refs.some(ref => ref.type === 'structure' && ref.id === second.items[0].id))
 
   const afterUsage = await (await fetch(`${baseUrl}/api/structures`, { headers })).json()

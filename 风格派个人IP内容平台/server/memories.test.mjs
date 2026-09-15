@@ -4,6 +4,8 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { startSharedLlmMock } from './generation-test-helper.mjs'
+const llmMock = await startSharedLlmMock()
 
 const port = 3800 + Math.floor(Math.random() * 150)
 const baseUrl = `http://127.0.0.1:${port}`
@@ -28,7 +30,7 @@ function startServer(extraEnv = {}) {
 const jsonPost = (path, body) => fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
 test('AI 记忆层：管理、去重与生成注入', async t => {
-  const server = await startServer()
+  const server = await startServer(llmMock.env)
   t.after(() => server.kill())
 
   const badType = await jsonPost('/api/memories', { memory_type: 'other', content: '文本' })
@@ -57,26 +59,26 @@ test('AI 记忆层：管理、去重与生成注入', async t => {
 
   const extractEmpty = await jsonPost('/api/memories/extract', {})
   assert.equal(extractEmpty.status, 422)
-  const extractNoLlm = await jsonPost('/api/memories/extract', { text: '一段没有配置大模型时的提炼文本' })
-  assert.equal(extractNoLlm.status, 422)
-  assert.equal((await extractNoLlm.json()).reason, 'llm_not_configured')
+  const extracted = await jsonPost('/api/memories/extract', { text: '一段交给模型提炼的对话文本' })
+  assert.equal(extracted.status, 200)
+  assert.equal((await extracted.json()).items[0].content, '共享模型提炼的记忆')
 
   const composed = await jsonPost('/api/drafts/generate', { topic: { title: '信任资产的三个证据', strategy_layer: 'trust', goal_refs: [] }, quote_ids: [], experience_ids: [] })
   assert.equal(composed.status, 201)
   const drafts = await composed.json()
-  assert.match(drafts[0].body, /创作风格要求/)
-  assert.match(drafts[0].body, /我的开头从不用问句/)
-  assert.match(drafts[0].body, /失败复盘类选题我数据更好/)
+  assert.equal(drafts[0].body, '小红书正文：信任资产的三个证据')
+  assert.ok(drafts[0].generation_context.brief.style.includes('我的开头从不用问句'))
+  assert.ok(drafts[0].generation_context.brief.style.includes('失败复盘类选题我数据更好'))
 
   const archived = await fetch(`${baseUrl}/api/memories/${memory.id}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'archived' }) })
   assert.equal(archived.status, 200)
   const afterArchive = await jsonPost('/api/drafts/generate', { topic: { title: '新标题', strategy_layer: 'trust', goal_refs: [] }, quote_ids: [], experience_ids: [] })
   const afterArchiveDrafts = await afterArchive.json()
-  assert.doesNotMatch(afterArchiveDrafts[0].body, /我的开头从不用问句/)
+  assert.ok(!afterArchiveDrafts[0].generation_context.brief.style.includes('我的开头从不用问句'))
 
   const removed = await fetch(`${baseUrl}/api/memories/${feedbackMemory.id}`, { method: 'DELETE' })
   assert.equal(removed.status, 204)
   const afterDelete = await (await fetch(`${baseUrl}/api/memories`)).json()
-  assert.equal(afterDelete.length, 1)
-  assert.equal(afterDelete[0].status, 'archived')
+  assert.ok(!afterDelete.some(item => item.id === feedbackMemory.id))
+  assert.equal(afterDelete.filter(item => item.status === 'archived').length, 1)
 })

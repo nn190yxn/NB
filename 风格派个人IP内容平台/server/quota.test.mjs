@@ -19,7 +19,15 @@ const mockServer = createServer((request, response) => {
   request.on('end', () => {
     const json = payload => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify(payload)) }
     if (request.url.startsWith('/story/api/xhsUser/searchArticle')) { upstreamHits.redfox += 1; return json({ code: 2000, msg: '成功', data: { list: [{ workId: 'w1', workTitle: `共享搜索结果 ${upstreamHits.redfox}`, workUrl: 'https://example.com/w', commentCount: 10 }] } }) }
-    if (request.url.includes('/chat/completions')) { upstreamHits.llm += 1; return json({ choices: [{ message: { content: '[{"memory_type":"style","content":"共享模型提炼的记忆"}]' } }] }) }
+    if (request.url.includes('/chat/completions')) {
+      upstreamHits.llm += 1
+      const messages = JSON.parse(body).messages || []
+      if (String(messages[0]?.content || '').includes('文案写手')) {
+        const brief = JSON.parse(messages.at(-1).content)
+        return json({ choices: [{ message: { content: JSON.stringify({ master: `母版：${brief.title}`, 小红书: `小红书正文：${brief.title}`, 抖音: `抖音口播：${brief.title}`, 视频号: `视频号口播：${brief.title}`, 公众号: `公众号正文：${brief.title}` }) } }] })
+      }
+      return json({ choices: [{ message: { content: '[{"memory_type":"style","content":"共享模型提炼的记忆"}]' } }] })
+    }
     response.writeHead(404); response.end('{}')
   })
 })
@@ -91,20 +99,27 @@ test('共享额度：默认走共享 Key，超额 429，自有 Key 豁免', asyn
   assert.match((await secondExtract.json()).error, /共享 AI 额度已用完/)
   assert.equal(usage.date, (await (await fetch(`${baseUrl}/api/usage/today`, { headers })).json()).date)
 
-  const generated = await (await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers, body: JSON.stringify({ topic: { title: '额度降级测试', strategy_layer: 'trust', goal_refs: [] } }) })).json()
+  const exhaustedDraft = await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers, body: JSON.stringify({ topic: { title: '额度耗尽', strategy_layer: 'trust', goal_refs: [] } }) })
+  assert.equal(exhaustedDraft.status, 429)
+
+  const draftSession = await fetch(`${baseUrl}/api/auth/session`, { method: 'POST', headers: { 'x-user-id': 'quota-draft-user' } })
+  const draftCookie = draftSession.headers.get('set-cookie').split(';', 1)[0]
+  const draftHeaders = { cookie: draftCookie, 'content-type': 'application/json' }
+  const generated = await (await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers: draftHeaders, body: JSON.stringify({ topic: { title: '额度降级测试', strategy_layer: 'trust', goal_refs: [] } }) })).json()
   const draft = generated[0]
+  assert.equal(draft.body, '小红书正文：额度降级测试')
   const redfoxHitsBeforeCompliance = upstreamHits.redfox
-  const compliance = await fetch(`${baseUrl}/api/drafts/${draft.id}/compliance`, { method: 'POST', headers, body: JSON.stringify({ text: '这是最好的测试内容' }) })
+  const compliance = await fetch(`${baseUrl}/api/drafts/${draft.id}/compliance`, { method: 'POST', headers: draftHeaders, body: JSON.stringify({ text: '这是最好的测试内容' }) })
   assert.equal(compliance.status, 200)
   assert.equal((await compliance.json()).source, 'builtin')
   assert.equal(upstreamHits.redfox, redfoxHitsBeforeCompliance)
   assert.equal((await (await fetch(`${baseUrl}/api/usage/today`, { headers })).json()).redfox.used, 2)
 
-  const adaptation = await fetch(`${baseUrl}/api/drafts/${draft.id}/adapt`, { method: 'POST', headers, body: JSON.stringify({ platform: '小红书' }) })
+  const adaptation = await fetch(`${baseUrl}/api/drafts/${draft.id}/adapt`, { method: 'POST', headers: draftHeaders, body: JSON.stringify({ platform: '小红书' }) })
   assert.equal(adaptation.status, 200)
   assert.ok((await adaptation.json()).adaptations['小红书'])
-  const snapshot = await (await fetch(`${baseUrl}/api/performance-snapshots`, { method: 'POST', headers, body: JSON.stringify({ draft_id: draft.id, platform: '抖音', metrics: { 播放量: 1000, 点赞数: 80 }, status: 'confirmed' }) })).json()
-  const retrospect = await fetch(`${baseUrl}/api/performance-snapshots/${snapshot.id}/retrospect`, { method: 'POST', headers, body: '{}' })
+  const snapshot = await (await fetch(`${baseUrl}/api/performance-snapshots`, { method: 'POST', headers: draftHeaders, body: JSON.stringify({ draft_id: draft.id, platform: '抖音', metrics: { 播放量: 1000, 点赞数: 80 }, status: 'confirmed' }) })).json()
+  const retrospect = await fetch(`${baseUrl}/api/performance-snapshots/${snapshot.id}/retrospect`, { method: 'POST', headers: draftHeaders, body: '{}' })
   assert.equal(retrospect.status, 200)
   assert.ok(['winner', 'ok', 'underperformed'].includes((await retrospect.json()).snapshot.retrospect.verdict))
 

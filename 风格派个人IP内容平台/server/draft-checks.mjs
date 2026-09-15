@@ -1,8 +1,9 @@
 import { prohibitedWordlist } from './redfox.mjs'
 import { validateSourceRefs } from './validation.mjs'
+import { openingReadiness } from './draft-workflow.mjs'
 
 const riskWords = prohibitedWordlist.map(item => item.word)
-const qualityKeys = ['hook_clarity', 'audience_fit', 'core_point', 'evidence', 'structure_and_risk']
+const qualityKeys = ['opening_clarity', 'audience_fit', 'core_point', 'evidence', 'structure_and_risk']
 
 function text(value) { return String(value || '').replace(/\s+/g, ' ').trim() }
 function list(value) { return Array.isArray(value) ? value.map(text).filter(Boolean) : [] }
@@ -37,8 +38,7 @@ export function checkPersona(draft, profile = {}) {
 
 export function checkQuality(draft, profile = {}) {
   const body = text(draft?.body)
-  const hook = draft?.selected_hook
-  const hookPassed = Boolean(hook && hook.validation?.status === 'passed' && text(hook.text))
+  const openingReady = openingReadiness(draft)
   const sourceValid = validateSourceRefs(draft?.source_refs)
   const riskHits = hitsFor(body, riskWords)
   const audienceValues = list(profile.audiences)
@@ -47,7 +47,7 @@ export function checkQuality(draft, profile = {}) {
   const pointScore = pillarValues.length && pillarValues.some(value => body.includes(value)) ? 100 : pillarValues.length ? 55 : 45
   const structureScore = body.length >= 120 && body.split(/\n\s*\n/).length >= 2 ? 100 : body.length >= 60 ? 65 : 20
   const dimensions = {
-    hook_clarity: hookPassed ? 100 : 0,
+    opening_clarity: openingReady ? 100 : 0,
     audience_fit: audienceScore,
     core_point: pointScore,
     evidence: sourceValid && sourceCount(draft) > 0 ? 100 : 0,
@@ -57,7 +57,7 @@ export function checkQuality(draft, profile = {}) {
   const evidence = []
   const suggestions = []
   if (!body) { evidence.push(evidenceItem('body_missing', '正文不能为空', 'blocked')); suggestions.push('补充正文内容') }
-  if (!hookPassed) { evidence.push(evidenceItem('hook_missing', '尚未选择通过校验的 Hook', 'blocked')); suggestions.push('先生成并选择一个有效 Hook') }
+  if (!openingReady) { evidence.push(evidenceItem('opening_missing', '尚未用「开头句」槽位确定开头范式', 'blocked')); suggestions.push('点草稿的「开头句」槽位，从方法库选一个开头范式') }
   if (!sourceValid || sourceCount(draft) === 0) { evidence.push(evidenceItem('source_missing', '草稿缺少有效来源引用', 'blocked')); suggestions.push('补回选题、素材或方法来源') }
   if (riskHits.length) { evidence.push(evidenceItem('risk_words', `正文命中风险表达：${riskHits.join('、')}`, 'blocked')); suggestions.push('修改风险表达后重新检查') }
   if (body && structureScore < 100) { evidence.push(evidenceItem('structure_weak', '正文长度或段落结构仍需加强')); suggestions.push('补充真实过程、证据和可执行步骤') }
@@ -71,7 +71,6 @@ export function checkQuality(draft, profile = {}) {
 
 export function checkPublishChecklist(draft) {
   const body = text(draft?.body)
-  const hookPassed = Boolean(draft?.selected_hook && draft.selected_hook.validation?.status === 'passed')
   const riskHits = hitsFor(body, riskWords)
   const checks = {
     title: Boolean(text(draft?.title)),
@@ -79,14 +78,14 @@ export function checkPublishChecklist(draft) {
     platform: Boolean(text(draft?.platform)),
     source_refs: validateSourceRefs(draft?.source_refs) && sourceCount(draft) > 0,
     fact_check: draft?.fact_check_status === 'verified',
-    selected_hook: hookPassed,
+    opening: openingReadiness(draft),
     risk_free: riskHits.length === 0,
     variant_group: Boolean(draft?.variant_group_id || draft?.variant_type === 'legacy'),
   }
   const evidence = Object.entries(checks).filter(([, passed]) => !passed).map(([key]) => evidenceItem(key, {
-    title: '缺少标题', body: '正文不能为空', platform: '未指定目标平台', source_refs: '缺少有效来源引用', fact_check: '发布前必须完成事实核验', selected_hook: '必须选择通过校验的 Hook', risk_free: `存在风险表达：${riskHits.join('、')}`, variant_group: '缺少有效的平台版本组',
+    title: '缺少标题', body: '正文不能为空', platform: '未指定目标平台', source_refs: '缺少有效来源引用', fact_check: '发布前必须完成事实核验', opening: '发布前必须用「开头句」槽位确定开头范式', risk_free: `存在风险表达：${riskHits.join('、')}`, variant_group: '缺少有效的平台版本组',
   }[key], 'blocked'))
-  const suggestions = evidence.map(item => ({ source_refs: '补回来源引用', fact_check: '完成事实核验', selected_hook: '选择有效 Hook', risk_free: '修改风险表达' }[item.code] || '补齐发布清单项'))
+  const suggestions = evidence.map(item => ({ source_refs: '补回来源引用', fact_check: '完成事实核验', opening: '用「开头句」槽位选一个开头范式', risk_free: '修改风险表达' }[item.code] || '补齐发布清单项'))
   const passed = Object.values(checks).filter(Boolean).length
   return result(evidence.length ? 'blocked' : 'passed', { score: Math.round(passed / Object.keys(checks).length * 100), dimensions: checks, evidence, suggestions, draftVersion: currentVersion(draft) })
 }

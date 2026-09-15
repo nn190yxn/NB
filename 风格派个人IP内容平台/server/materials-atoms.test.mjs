@@ -4,8 +4,10 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { startSharedLlmMock } from './generation-test-helper.mjs'
+const llmMock = await startSharedLlmMock()
 
-const port = 3800 + Math.floor(Math.random() * 150)
+const port = 3600 + Math.floor(Math.random() * 149)
 const baseUrl = `http://127.0.0.1:${port}`
 
 function startServer(extraEnv = {}) {
@@ -13,7 +15,7 @@ function startServer(extraEnv = {}) {
   writeFileSync(testDataFile, '{}')
   const child = spawn(process.execPath, ['server/index.mjs'], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: testDataFile, ...extraEnv },
+    env: { ...process.env, ...llmMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: testDataFile, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return new Promise((resolve, reject) => {
@@ -80,9 +82,9 @@ test('素材原子化：收录、去重、类型筛选与组合生成', async t 
   assert.equal(composed.status, 201)
   const drafts = await composed.json()
   assert.equal(drafts.length, 4)
-  assert.match(drafts[0].body, /金句参考/)
-  assert.match(drafts[0].body, /这是一个足够长的金句/)
-  assert.match(drafts[0].body, /公开复盘/)
+  assert.equal(drafts[0].body, '小红书正文：从失败账本讲信任资产')
+  assert.ok(drafts[0].generation_context.brief.quotes.some(text => text.includes('这是一个足够长的金句')))
+  assert.ok(drafts[0].generation_context.brief.experiences.some(text => text.includes('公开复盘')))
   const materialRefs = drafts[0].source_refs.filter(ref => ref.type === 'material')
   assert.deepEqual(materialRefs.map(ref => ref.id).sort((a, b) => a - b), [atom.id, expAtom.id].sort((a, b) => a - b))
 

@@ -4,6 +4,8 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { startSharedLlmMock } from './generation-test-helper.mjs'
+const llmMock = await startSharedLlmMock()
 import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterministic } from './growth.mjs'
 
 const port = 47000 + Math.floor(Math.random() * 200)
@@ -55,7 +57,7 @@ test('growth 纯函数：清单、适配、复盘与匹配评分', () => {
 })
 
 test('闭环链路：适配、复盘入记忆、日历与匹配排序', async t => {
-  const server = await startServer()
+  const server = await startServer(llmMock.env)
   t.after(() => server.kill())
 
   await put('/api/profile', { role: '帮本地生意老板做诊断', pillars: ['本地生意'], audiences: ['实体店老板'] })
@@ -63,15 +65,18 @@ test('闭环链路：适配、复盘入记忆、日历与匹配排序', async t 
   const drafts = await (await post('/api/drafts/generate', { topic: { title: '最好的一课', strategy_layer: 'trust', goal_refs: [] } })).json()
   const draft = drafts[0]
 
+  assert.equal(draft.body, '小红书正文：最好的一课')
+
   const adapted = await (await post(`/api/drafts/${draft.id}/adapt`, { platform: '小红书' })).json()
   const xhs = adapted.adaptations['小红书']
   assert.ok(xhs)
-  assert.ok(xhs.checklist.some(entry => entry.item === '无违禁词风险' && entry.status === '风险'))
+  assert.equal(xhs.provider, 'primary')
+  assert.ok(xhs.checklist.some(entry => entry.item === '无违禁词风险'))
   assert.ok(xhs.hashtags.some(tag => tag.startsWith('#')))
 
   const deai = await post(`/api/drafts/${draft.id}/deai`, {})
-  assert.equal(deai.status, 422)
-  assert.equal((await deai.json()).reason, 'llm_not_configured')
+  assert.equal(deai.status, 200)
+  assert.equal((await deai.json()).content, '去 AI 感之后的正文')
 
   const snapshot = await (await post('/api/performance-snapshots', { draft_id: draft.id, platform: '抖音', metrics: { 播放量: 2000, 点赞数: 120, 评论数: 60, 收藏数: 90 }, status: 'confirmed' })).json()
   const retro = await (await post(`/api/performance-snapshots/${snapshot.id}/retrospect`, {})).json()

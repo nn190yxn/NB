@@ -5,6 +5,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
+import { startSharedLlmMock } from './generation-test-helper.mjs'
+const llmMock = await startSharedLlmMock()
 
 const port = 3900 + Math.floor(Math.random() * 150)
 const mockPort = port + 500
@@ -34,7 +36,7 @@ function startServer(extraEnv = {}) {
   writeFileSync(testDataFile, '{}')
   const child = spawn(process.execPath, ['server/index.mjs'], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: testDataFile, ...extraEnv },
+    env: { ...process.env, ...llmMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: testDataFile, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return new Promise((resolve, reject) => {

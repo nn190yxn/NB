@@ -13,7 +13,9 @@ import { callLlmWithFallback, callVision, testApiCapability } from './llm.mjs'
 import { interviewInput, interviewDigest, parsePositioning, fillProfile, parseTopics } from './positioning-generation.mjs'
 import { buildContentContext } from './content-context.mjs'
 import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
-import { defaultDraftWorkflowFields, generateHookCandidates, selectHook, validateHookText } from './draft-workflow.mjs'
+import { buildDraftBrief, draftBriefPrompt, draftPlatforms, parseDraftBodies } from './draft-writing.mjs'
+import { defaultDraftWorkflowFields, validateHookText } from './draft-workflow.mjs'
+import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
 import { checkPersona, checkQuality, checkPublishChecklist } from './draft-checks.mjs'
 import { approveDraftRecord, defaultApproval, revokeDraftRecord, validateApprovalReadiness } from './draft-approval.mjs'
 
@@ -767,7 +769,10 @@ const server = createServer(async (request, response) => {
       const title = typeof body.title === 'string' ? body.title.trim() : ''
       const steps = Array.isArray(body.steps) ? body.steps.map(step => (typeof step === 'string' ? step.trim() : '')).filter(Boolean) : []
       if (!title || !steps.length) return send(response, 400, { error: '标题与步骤为必填项' })
-      const structure = { id: nextId(state.structures), owner_id: userId(request), title, steps, platform: typeof body.platform === 'string' && body.platform ? body.platform : '通用', content_type: typeof body.content_type === 'string' && body.content_type ? body.content_type : '观点', source_kind: 'manual', source_id: null, source_refs: [], method_category: steps[0]?.includes('开场') ? '开头方法' : '内容结构', favorite: false, usage_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+      const knownMethodCategories = ['选题方法', '标题方法', '开头方法', '内容结构']
+      const contentType = typeof body.content_type === 'string' && body.content_type ? body.content_type : '观点'
+      const methodCategory = knownMethodCategories.includes(contentType) ? contentType : (steps[0]?.includes('开场') ? '开头方法' : '内容结构')
+      const structure = { id: nextId(state.structures), owner_id: userId(request), title, steps, platform: typeof body.platform === 'string' && body.platform ? body.platform : '通用', content_type: contentType, source_kind: 'manual', source_id: null, source_refs: [], method_category: methodCategory, favorite: false, usage_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
       state.structures.push(structure)
       await saveState('structures')
       return send(response, 201, structure)
@@ -791,7 +796,10 @@ const server = createServer(async (request, response) => {
           structure.steps = steps
         }
         if (typeof body.platform === 'string' && body.platform) structure.platform = body.platform
-        if (typeof body.content_type === 'string' && body.content_type) structure.content_type = body.content_type
+        if (typeof body.content_type === 'string' && body.content_type) {
+          structure.content_type = body.content_type
+          if (['选题方法', '标题方法', '开头方法', '内容结构'].includes(body.content_type)) structure.method_category = body.content_type
+        }
         if (typeof body.favorite === 'boolean') structure.favorite = body.favorite
         structure.updated_at = new Date().toISOString()
       }
@@ -971,12 +979,12 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/calendar' && request.method === 'GET') {
       const monthParam = url.searchParams.get('month') || ''
       const month = /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : new Date().toISOString().slice(0, 7)
-      const dateOf = item => String(item.planned_date || item.published_at || item.captured_at || item.created_at || '').slice(0, 10)
+      const dateOf = item => String(item.planned_date || (item.status === 'published' ? item.published_at : '') || '').slice(0, 10)
       const entries = []
-      for (const draft of owned('drafts', request)) entries.push({ type: 'draft', id: draft.id, title: draft.title, platform: draft.platform, status: draft.status === 'published' ? 'published' : draft.workflow_status === 'ready_to_shoot' ? 'ready' : 'draft', date: dateOf(draft) })
+      for (const draft of owned('drafts', request)) entries.push({ type: draft.status === 'published' ? 'published' : 'draft', id: draft.id, title: draft.title, platform: draft.platform, status: draft.status === 'published' ? 'published' : draft.workflow_status === 'ready_to_shoot' ? 'ready' : 'draft', date: dateOf(draft) })
       for (const item of owned('shooting', request)) entries.push({ type: 'shooting', id: item.id, title: item.title, platform: item.platform, status: item.status, date: dateOf(item) })
       for (const topic of owned('topics', request)) if (topic.workflow_status === 'approved') entries.push({ type: 'topic', id: topic.id, title: topic.title, platform: '', status: 'approved', date: dateOf(topic) })
-      return send(response, 200, { month, entries: entries.filter(entry => entry.date.startsWith(month)).sort((a, b) => a.date.localeCompare(b.date)) })
+      return send(response, 200, { month, entries: entries.filter(entry => /^\d{4}-\d{2}-\d{2}$/.test(entry.date) && entry.date.startsWith(month)).sort((a, b) => a.date.localeCompare(b.date)) })
     }
     if (url.pathname === '/api/research' && request.method === 'GET') {
       const params = url.searchParams
@@ -1261,25 +1269,35 @@ const server = createServer(async (request, response) => {
       const requestedHook = String(body.hook_text || '').trim()
       const hookValidation = requestedHook ? validateHookText(requestedHook) : null
       if (hookValidation?.status === 'blocked') return send(response, 422, { error: 'Hook 校验未通过', code: 'validation_failed', evidence: hookValidation.evidence })
-      const variantGroupId = randomUUID()
-      const composeBody = (platform) => {
-        const parts = [topic.title, `平台：${platform}`]
-        if (requestedHook) parts.push(`Hook：${requestedHook}`)
-        if (structure) parts.push(`结构：${structure.steps.join(' → ')}`)
-        if (quoteMaterials.length) parts.push(`金句参考：\n${quoteMaterials.map((item, index) => `${index + 1}. ${item.content}`).join('\n')}`)
-        if (experienceMaterials.length) parts.push(`我的经历素材：\n${experienceMaterials.map(item => `- ${item.content}`).join('\n')}`)
-        const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
-        if (memories.length) parts.push(`创作风格要求：\n${memories.map(item => `- ${item.content}`).join('\n')}`)
-        parts.push('从一个真实场景开始，讲清楚过程、证据和可执行的一步。')
-        return parts.filter(Boolean).join('\n\n')
+      const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
+      const brief = buildDraftBrief({ topic, structure, quotes: quoteMaterials, experiences: experienceMaterials, memories, hookText: requestedHook })
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      if (!configs.primary && !configs.fallback) return send(response, 422, { code: 'MISSING_CONFIG', reason: 'llm_not_configured', error: '草稿正文由大模型撰写，请先在 API 中心配置文本模型。' })
+      if (usesSharedPrimaryLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) return send(response, 429, { code: 'QUOTA_EXCEEDED', error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false })
       }
+      let bodies
+      let provider
+      try {
+        const result = await callLlmWithFallback(configs, [
+          { role: 'system', content: draftBriefPrompt(userDocument('profile', request)) },
+          { role: 'user', content: JSON.stringify(brief) },
+        ])
+        bodies = parseDraftBodies(result.content)
+        provider = result.provider
+      } catch (error) {
+        return send(response, 502, { code: 'GENERATION_FAILED', error: '草稿生成失败，请检查模型配置后重试；本次未生成草稿。', retryable: true, detail: error instanceof Error ? error.message : undefined })
+      }
+      const variantGroupId = randomUUID()
       const atomRefs = [...quoteMaterials, ...experienceMaterials].map(item => sourceRef('material', item.id))
       const sourceRefs = [...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs]
-      const drafts = ['小红书', '抖音', '视频号', '公众号'].map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, title: topic.title, body: composeBody(platform), version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null }, created_at: new Date().toISOString() }))
+      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider }, created_at: new Date().toISOString() }))
       state.drafts.push(...drafts)
        await saveState('drafts')
       return send(response, 201, drafts)
     }
+    if (url.pathname === '/api/draft-slots' && request.method === 'GET') { const platform = String(url.searchParams.get('platform') || ''); return send(response, 200, { labels: slotLabels, group_scoped: groupScopedSlots, options: buildSlotOptions({ structures: owned('structures', request), platform }) }) }
     if (url.pathname === '/api/drafts' && request.method === 'GET') return send(response, 200, owned('drafts', request))
     const draftAdaptMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/adapt$/)
     if (draftAdaptMatch && request.method === 'POST') {
@@ -1339,19 +1357,28 @@ const server = createServer(async (request, response) => {
         return send(response, 502, { error: error?.message || '改写失败，请稍后重试', retryable: true })
       }
     }
-    const draftHooksMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/hooks$/)
-    if (draftHooksMatch && request.method === 'POST') {
-      const draft = owned('drafts', request).find(item => item.id === Number(draftHooksMatch[1]))
-      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
-      const body = await readJson(request)
-      if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撤回人工确认，再重新生成 Hook', code: 'invalid_transition' })
-      if (draft.hooks?.length && !body.force) return send(response, 200, draft)
-      draft.hooks = generateHookCandidates(draft, { sourceRefs: draft.source_refs || [] })
-      draft.workflow_status = 'hooks_ready'
-      draft.updated_at = new Date().toISOString()
-      await saveState('drafts')
-      return send(response, 200, draft)
+    const draftSlotMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/slots\/(title|opening|structure|ending)$/)
+    if (draftSlotMatch && request.method === 'POST') { const body = await readJson(request); const draft = owned('drafts', request).find(item => item.id === Number(draftSlotMatch[1])); if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' }); const slot = draftSlotMatch[2]; if (!slotIds.includes(slot)) return send(response, 422, { error: '不支持的槽位', code: 'validation_failed' }); if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撕回人工确认，再修改草稿', code: 'invalid_transition' }); const option = findSlotOption(buildSlotOptions({ structures: owned('structures', request), platform: draft.platform }), slot, body.option_id); if (!option) return send(response, 422, { error: '槽位选项不存在', code: 'validation_failed' }); const slotConfigs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }; if (!slotConfigs.primary && !slotConfigs.fallback) return send(response, 422, { error: '槽位改写需要先在 API 中心配置大模型', reason: 'llm_not_configured' }); if (usesSharedPrimaryLlm(request)) { const quota = await consumeQuota(request, 'llm', llmDailyLimit); if (!quota.allowed) return send(response, 429, { error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false }) }
+      try {
+        const styleMemories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
+        const result = await callLlmWithFallback(slotConfigs, slotRewriteMessages({ slot, option, draft, styleMemories }))
+        const now = new Date().toISOString()
+        const patch = applySlotRewrite({ slot, option, draft, rewritten: result.content })
+        // 开头句槽位是开头的唯一入口，发布前检查以这条记录为准。
+        if (slot === 'opening') patch.opening_ref = { option_id: option.id, name: option.name, source: option.source, steps: Array.isArray(option.steps) ? option.steps : [], applied_at: now }
+        const targets = groupScopedSlots.includes(slot) && draft.variant_group_id ? owned('drafts', request).filter(item => item.variant_group_id === draft.variant_group_id) : [draft]
+        for (const target of targets) {
+          target.history ||= []
+          target.history.push({ ...structuredClone(target), history: undefined, version: target.version, snapshot_at: now })
+          Object.assign(target, patch, { version: (target.version || 1) + 1, workflow_status: 'content_ready', checks: { ...(target.checks || {}), quality: null, publish_checklist: null }, approval: { ...defaultApproval(target.approval), status: 'pending', user_id: null, draft_version: null }, updated_at: now })
+        }
+        await saveState('drafts')
+        return send(response, 200, { slot, label: slotLabels[slot], option: { id: option.id, name: option.name, source: option.source }, updated_count: targets.length, drafts: targets.map(item => ({ id: item.id, platform: item.platform, title: item.title, body: item.body, version: item.version })), provider: result.provider })
+      } catch (error) {
+        return send(response, 502, { error: error?.message || `${slotLabels[slot]}改写失败，请稍后重试`, retryable: true })
+      }
     }
+
     const draftApprovalMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/(approve|revoke-approval)$/)
     if (draftApprovalMatch && request.method === 'POST') {
       const draft = owned('drafts', request).find(item => item.id === Number(draftApprovalMatch[1]))
@@ -1406,11 +1433,13 @@ const server = createServer(async (request, response) => {
     if (draftCopyMatch && request.method === 'POST') {
       const original = owned('drafts', request).find(item => item.id === Number(draftCopyMatch[1]))
       if (!original) return send(response, 404, { error: '草稿不存在' })
-       const copy = { ...structuredClone(original), id: nextId(state.drafts), title: `${original.title}（副本）`, status: 'draft', workflow_status: original.selected_hook_id ? 'content_ready' : 'draft', checks: { persona: null, quality: null, publish_checklist: null }, approval: defaultApproval(), version: 1, history: [], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+       const copy = { ...structuredClone(original), id: nextId(state.drafts), title: `${original.title}（变体）`, status: 'draft', workflow_status: original.selected_hook_id ? 'content_ready' : 'draft', checks: { persona: null, quality: null, publish_checklist: null }, approval: defaultApproval(), version: 1, history: [], variant_type: 'manual', variant_of: original.id, archived_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
       state.drafts.push(copy)
        await saveState('drafts')
       return send(response, 201, copy)
     }
+    const draftArchiveMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/archive$/)
+    if (draftArchiveMatch && request.method === 'POST') { const body = await readJson(request); const draft = owned('drafts', request).find(item => item.id === Number(draftArchiveMatch[1])); if (!draft) return send(response, 404, { error: '草稿不存在' }); if (body.archived !== undefined && typeof body.archived !== 'boolean') return send(response, 422, { error: 'archived 应为布尔值' }); draft.archived_at = body.archived === false ? null : new Date().toISOString(); draft.updated_at = new Date().toISOString(); await saveState('drafts'); return send(response, 200, draft) }
     const draftHistoryMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/history$/)
     if (draftHistoryMatch && request.method === 'GET') {
       const draft = owned('drafts', request).find(item => item.id === Number(draftHistoryMatch[1]))
@@ -1468,16 +1497,13 @@ const server = createServer(async (request, response) => {
       if (draft.approval?.status === 'approved' && body.status !== undefined && body.status !== draft.status) return send(response, 409, { error: '请先撤回人工确认，再修改草稿状态', code: 'invalid_transition' })
        if (body.version !== undefined && body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', current: draft, conflict: createConflict(request, 'draft', draft.id, body.version, body, draft) })
       const draftValidationError = validateDraftUpdate(body, draft)
-      let selectedHook = null
-      if (body.selected_hook_id !== undefined) {
-        try { selectedHook = selectHook(draft, body.selected_hook_id) } catch (error) { return send(response, 422, { error: error.message, code: error.code || 'validation_failed' }) }
-      }
+
       if (draftValidationError) return send(response, 422, { error: draftValidationError })
       const updates = { ...body }
       delete updates.owner_id
       delete updates.version
       delete updates.workflow_status
-      const contentChanged = ['title', 'body', 'platform', 'source_refs', 'selected_hook_id', 'fact_check_status'].some(key => body[key] !== undefined)
+      const contentChanged = ['title', 'body', 'platform', 'source_refs', 'fact_check_status'].some(key => body[key] !== undefined)
       if (contentChanged) {
         updates.workflow_status = 'content_ready'
         updates.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
@@ -1485,12 +1511,7 @@ const server = createServer(async (request, response) => {
       } else {
         delete updates.checks
       }
-      if (selectedHook) {
-        updates.selected_hook = structuredClone(selectedHook)
-        updates.selected_hook_id = selectedHook.id
-        updates.workflow_status = 'content_ready'
-        if (!String(updates.body || '').includes(selectedHook.text)) updates.body = `${selectedHook.text}\n\n${updates.body || draft.body}`
-      }
+
        draft.history ||= []
        draft.history.push({ ...structuredClone(draft), history: undefined, version: draft.version, snapshot_at: new Date().toISOString() })
        Object.assign(draft, updates, { version: draft.version + 1, updated_at: new Date().toISOString() })

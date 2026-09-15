@@ -4,6 +4,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { startSharedLlmMock } from './generation-test-helper.mjs'
+const llmMock = await startSharedLlmMock()
 
 const port = 44000 + Math.floor(Math.random() * 1000)
 const baseUrl = `http://127.0.0.1:${port}`
@@ -11,7 +13,7 @@ const dataFile = join(mkdtempSync(join(tmpdir(), 'draft-checks-test-')), 'data.j
 writeFileSync(dataFile, '{}')
 
 function startServer() {
-  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...llmMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 5000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve(child) } })
@@ -30,10 +32,12 @@ test('draft checks enforce order, preserve isolation and block shooting after pu
   const generatedResponse = await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ topic: { title: '一次真实复盘', strategy_layer: 'trust', goal_refs: [], source_refs: [{ type: 'topic', id: 11 }] } }) })
   const drafts = await json(generatedResponse)
   const draft = drafts[0]
-  const hooksResponse = await fetch(`${baseUrl}/api/drafts/${draft.id}/hooks`, { method: 'POST', headers: headers(owner), body: '{}' })
-  const hooked = await json(hooksResponse)
-  const selectedResponse = await fetch(`${baseUrl}/api/drafts/${draft.id}`, { method: 'PUT', headers: headers(owner), body: JSON.stringify({ selected_hook_id: hooked.hooks[0].id, version: hooked.version }) })
-  const selected = await json(selectedResponse)
+  await fetch(`${baseUrl}/api/structures`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ title: '对标dbs·开头范式一：预测攻击式', steps: ['公式：反常识断言 + 能力反转'], content_type: '开头钩子' }) })
+  const catalogResponse = await fetch(`${baseUrl}/api/draft-slots?platform=${encodeURIComponent(draft.platform)}`, { headers: headers(owner) })
+  const catalog = await json(catalogResponse)
+  const openedResponse = await fetch(`${baseUrl}/api/drafts/${draft.id}/slots/opening`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ option_id: catalog.options.opening[0].id }) })
+  assert.equal(openedResponse.status, 200)
+  const selected = (await json(await fetch(`${baseUrl}/api/drafts`, { headers: headers(owner) }))).find(item => item.id === draft.id)
 
   const outOfOrder = await fetch(`${baseUrl}/api/drafts/${draft.id}/checks/quality`, { method: 'POST', headers: headers(owner), body: '{}' })
   assert.equal(outOfOrder.status, 409)
@@ -77,5 +81,5 @@ test('draft checks enforce order, preserve isolation and block shooting after pu
   assert.equal(changed.checks.quality, null)
   assert.equal(changed.checks.publish_checklist, null)
   assert.equal(changed.source_refs[0].id, 11)
-  assert.equal(selected.selected_hook_id, hooked.hooks[0].id)
+  assert.equal(selected.opening_ref.option_id, catalog.options.opening[0].id)
 })

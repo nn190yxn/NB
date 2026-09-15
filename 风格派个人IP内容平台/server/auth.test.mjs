@@ -324,7 +324,9 @@ test('session 支持创建、复用和注销', async t => {
 
   const copiedDraftResponse = await fetch(`${baseUrl}/api/drafts/${drafts[0].id}/copy`, { method: 'POST', headers: { cookie } })
   assert.equal(copiedDraftResponse.status, 201)
-  assert.match((await copiedDraftResponse.json()).title, /（副本）$/)
+  const copiedDraft = await copiedDraftResponse.json()
+  assert.match(copiedDraft.title, /（变体）$/)
+  assert.equal(copiedDraft.variant_type, 'manual')
 
   const inconsistentDraft = await fetch(`${baseUrl}/api/drafts/${drafts[0].id}`, {
     method: 'PUT',
@@ -392,15 +394,13 @@ test('session 支持创建、复用和注销', async t => {
   })
   assert.equal(invalidDraftStatus.status, 422)
 
-  let shootingDraft = await fetch(`${baseUrl}/api/drafts/${drafts[1].id}/hooks`, {
-    headers: { cookie, 'content-type': 'application/json' },
-    method: 'POST',
-    body: '{}',
-  })
-  assert.equal(shootingDraft.status, 200)
   const jsonHeaders = { cookie, 'content-type': 'application/json' }
-  shootingDraft = await shootingDraft.json()
-  shootingDraft = await (await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ selected_hook_id: shootingDraft.hooks[0].id, version: shootingDraft.version }) })).json()
+  let shootingDraft = drafts[1]
+  // 开头句槽位是开头的唯一入口，发布前检查要求它有记录。
+  await fetch(`${baseUrl}/api/structures`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ title: '对标dbs·开头范式一：预测攻击式', steps: ['公式：反常识断言 + 能力反转'], content_type: '开头钩子' }) })
+  const openingCatalog = await (await fetch(`${baseUrl}/api/draft-slots?platform=${encodeURIComponent(shootingDraft.platform)}`, { headers: jsonHeaders })).json()
+  await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}/slots/opening`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ option_id: openingCatalog.options.opening[0].id }) })
+  shootingDraft = (await (await fetch(`${baseUrl}/api/drafts`, { headers: jsonHeaders })).json()).find(item => item.id === shootingDraft.id)
   shootingDraft = await (await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ fact_check_status: 'verified', version: shootingDraft.version }) })).json()
   shootingDraft = await (await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}/checks/persona`, { method: 'POST', headers: jsonHeaders, body: '{}' })).json()
   shootingDraft = await (await fetch(`${baseUrl}/api/drafts/${shootingDraft.id}/checks/quality`, { method: 'POST', headers: jsonHeaders, body: '{}' })).json()

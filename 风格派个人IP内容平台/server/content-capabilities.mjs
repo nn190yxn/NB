@@ -1,8 +1,8 @@
 const CAPABILITIES = Object.freeze([
   Object.freeze({ id: 'topic_matrix', label: '选题矩阵', stage: 'planning', requires: ['profile', 'strategy'], writes: ['topics'], human_confirmation: true }),
   Object.freeze({ id: 'topic_evaluate', label: '选题评估', stage: 'planning', requires: ['profile', 'topic'], writes: ['topics.evaluation'], human_confirmation: true }),
-  Object.freeze({ id: 'hook_generate', label: 'Hook 生成', stage: 'production', requires: ['profile', 'topic'], writes: ['drafts.hooks'], human_confirmation: false }),
-  Object.freeze({ id: 'draft_generate', label: '草稿生成', stage: 'production', requires: ['profile', 'topic', 'hook'], writes: ['drafts'], human_confirmation: true }),
+  Object.freeze({ id: 'opening_choose', label: '开头句选择', stage: 'production', requires: ['profile', 'topic', 'draft'], writes: ['drafts.opening_ref'], human_confirmation: true }),
+  Object.freeze({ id: 'draft_generate', label: '草稿生成', stage: 'production', requires: ['profile', 'topic'], writes: ['drafts'], human_confirmation: true }),
   Object.freeze({ id: 'platform_adapt', label: '平台适配', stage: 'production', requires: ['draft', 'platform'], writes: ['drafts.platform_variants'], human_confirmation: true }),
   Object.freeze({ id: 'persona_check', label: '人设检查', stage: 'review', requires: ['profile', 'draft'], writes: ['drafts.checks.persona'], human_confirmation: false }),
   Object.freeze({ id: 'quality_gate', label: '质量与合规检查', stage: 'review', requires: ['draft', 'platform'], writes: ['drafts.checks.quality'], human_confirmation: false }),

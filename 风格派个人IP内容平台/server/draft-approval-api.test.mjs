@@ -4,6 +4,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { startSharedLlmMock } from './generation-test-helper.mjs'
+const llmMock = await startSharedLlmMock()
 
 const port = 45000 + Math.floor(Math.random() * 1000)
 const baseUrl = `http://127.0.0.1:${port}`
@@ -12,7 +14,7 @@ writeFileSync(dataFile, '{}')
 const headers = owner => ({ 'x-user-id': owner, 'content-type': 'application/json' })
 
 function startServer() {
-  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...llmMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('人工确认 API 启动超时')), 5000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve(child) } })
@@ -26,8 +28,11 @@ async function body(response) { return response.json() }
 async function createCheckedDraft(owner, title = '真实创业复盘') {
   const generated = await body(await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ topic: { title, strategy_layer: 'trust', goal_refs: ['trust'], source_refs: [{ type: 'topic', id: title }] } }) }))
   let draft = generated[0]
-  draft = await body(await fetch(`${baseUrl}/api/drafts/${draft.id}/hooks`, { method: 'POST', headers: headers(owner), body: '{}' }))
-  draft = await body(await fetch(`${baseUrl}/api/drafts/${draft.id}`, { method: 'PUT', headers: headers(owner), body: JSON.stringify({ selected_hook_id: draft.hooks[0].id, version: draft.version }) }))
+  // 开头句槽位是开头的唯一入口，发布前检查要求它有记录。
+  await fetch(`${baseUrl}/api/structures`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ title: '对标dbs·开头范式一：预测攻击式', steps: ['公式：反常识断言 + 能力反转'], content_type: '开头钩子' }) })
+  const catalog = await body(await fetch(`${baseUrl}/api/draft-slots?platform=${encodeURIComponent(draft.platform)}`, { headers: headers(owner) }))
+  await fetch(`${baseUrl}/api/drafts/${draft.id}/slots/opening`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ option_id: catalog.options.opening[0].id }) })
+  draft = (await body(await fetch(`${baseUrl}/api/drafts`, { headers: headers(owner) }))).find(item => item.id === draft.id)
   draft = await body(await fetch(`${baseUrl}/api/drafts/${draft.id}`, { method: 'PUT', headers: headers(owner), body: JSON.stringify({ fact_check_status: 'verified', version: draft.version }) }))
   draft = await body(await fetch(`${baseUrl}/api/drafts/${draft.id}/checks/persona`, { method: 'POST', headers: headers(owner), body: '{}' }))
   draft = await body(await fetch(`${baseUrl}/api/drafts/${draft.id}/checks/quality`, { method: 'POST', headers: headers(owner), body: '{}' }))
