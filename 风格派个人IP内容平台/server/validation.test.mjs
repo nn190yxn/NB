@@ -31,6 +31,28 @@ test('表格和文档内容使用可审计的文本归一化', () => {
   assert.equal(parseMaterialContent({ format: 'word', content: '<p>真实过程</p>' }).content, '真实过程')
 })
 
+test('二进制文件不能被当成已解析正文静默入库', () => {
+  // 浏览器用 readAsText 上传 DOCX/PDF 时，服务端拿到的就是这些二进制乱码。
+  const zip = `PK\u0003\u0004${'\uFFFD'.repeat(200)}`
+  assert.equal(parseMaterialContent({ format: 'word', content: zip }).status, 'failed')
+  assert.match(parseMaterialContent({ format: 'word', content: zip }).error, /另存为 \.txt 或 \.md/)
+  assert.equal(parseMaterialContent({ format: 'excel', content: zip }).status, 'failed')
+  const pdf = `%PDF-1.4\u0000${'\uFFFD'.repeat(200)}`
+  assert.match(parseMaterialContent({ format: 'pdf', content: pdf }).error, /PDF 文件的二进制内容/)
+  const ole = `\u0000\u0001\uFFFD\uFFFD${'\uFFFD'.repeat(200)}`
+  assert.equal(parseMaterialContent({ format: 'word', content: ole }).status, 'failed')
+  // 乱码入库的内容仍保留在 content 里，便于排查与重试
+  assert.equal(parseMaterialContent({ format: 'word', content: zip }).content, zip)
+})
+
+test('正常文本不会被二进制判据误伤', () => {
+  assert.equal(parseMaterialContent({ format: 'markdown', content: 'PK 对决复盘：记录一次真实的对手分析过程。' }).status, 'ready')
+  assert.equal(parseMaterialContent({ format: 'txt', content: '这是一段正常的中文复盘内容。' }).status, 'ready')
+  // 少量坏字节不算乱码
+  assert.equal(parseMaterialContent({ format: 'txt', content: `${'复盘内容。'.repeat(30)}\uFFFD\uFFFD` }).status, 'ready')
+  assert.equal(parseMaterialContent({ format: 'word', content: '<p>真实过程</p>' }).status, 'ready')
+})
+
 test('IP 档案缺口检测返回生成所需字段', () => {
   assert.deepEqual(profileGaps({ role: '', audiences: [], pillars: [] }), ['role', 'audiences', 'pillars'])
   assert.deepEqual(profileGaps({ role: '顾问', audiences: ['创业者'], pillars: ['复盘'] }), [])

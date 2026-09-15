@@ -231,6 +231,13 @@ test('草稿列表的字数警告用同一套平台目标（前后端不漂移�
   assert.match(styles, /\.draft-rail-count\.warn\s*\{/)
 })
 
+test('上传入口不把二进制文件当纯文本读', () => {
+  // 浏览器 readAsText 送 PDF/DOCX 只会得到乱码，客户端给提示、服务端再拦一道。
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.ok(source.includes('if (/\\.(pdf|docx?|xlsx?|pptx?)$/i.test(file.name))'), '上传前必须拦下二进制文档')
+  assert.ok(source.includes('PDF 和 Office 文件需要先另存为 .txt 或 .md 再上传'))
+})
+
 test('AI 记忆层前端特征', () => {
   const source = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8')
   assert.match(source, /function MemoryPanel/)

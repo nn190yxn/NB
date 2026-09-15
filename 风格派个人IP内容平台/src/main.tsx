@@ -1582,6 +1582,8 @@ function MaterialWorkspace() {
   const upload = (file: File) => {
     setBusy(true)
     const reader = new FileReader()
+    // 浏览器只能把文件读成文本，PDF/DOCX 这类二进制文件会上传成一堆乱码；服务端也会拦，这里先给出能看懂的原因。
+    if (/\.(pdf|docx?|xlsx?|pptx?)$/i.test(file.name)) { setError('PDF 和 Office 文件需要先另存为 .txt 或 .md 再上传，浏览器只能读取文件的纯文本内容。'); setBusy(false); return }
     reader.onload = () => void apiJson<MaterialItem>('/api/materials/upload', { method: 'POST', body: JSON.stringify({ name: file.name, content: String(reader.result || '') }) }).then(item => { setMaterials(current => [item, ...current]); setTotal(current => current + 1); setError('') }).catch(() => setError('上传失败，请稍后重试。')).finally(() => setBusy(false))
     reader.onerror = () => setBusy(false)
     reader.readAsText(file)
