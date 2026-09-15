@@ -54,6 +54,22 @@ test('growth 纯函数：清单、适配、复盘与匹配评分', () => {
   const fit = fitScore({ title: '本地生意的副业复盘', platform: '小红书', captured_at: new Date().toISOString() }, { pillars: ['本地生意'], audiences: [], problems: [] }, { platform_preferences: ['小红书'] })
   assert.ok(fit.score >= 4)
   assert.ok(fit.matched.includes('本地生意'))
+
+test('复盘用界面真实指标键名时，收藏必须算进互动率与判定', () => {
+  // 界面（metricLabels）写入的键是 views/likes/comments/favorites/shares；
+  // 旧写法只认 collect/收藏，收藏被当成 0：这条 600 收藏的笔记会被判成「表现持平」而不是「优于往常」。
+  const snapshot = { platform: '小红书', metrics: { views: 10000, likes: 30, comments: 20, favorites: 600, shares: 10, followers: 12 } }
+  const retrospect = retrospectDeterministic(snapshot, { title: '一条干货笔记' }, [])
+  assert.equal(retrospect.drivers[0], '收藏', `收藏应成为首要驱动，实际 ${JSON.stringify(retrospect.drivers)}`)
+  assert.ok(retrospect.rate > 0.06, `互动率应含收藏，实际 ${retrospect.rate}`)
+  assert.equal(retrospect.verdict, 'winner')
+  assert.ok(retrospect.lessons.some(lesson => lesson.includes('收藏占比突出')))
+  // 保留旧口径：中文键名的快照同样要能算对
+  const chinese = retrospectDeterministic({ platform: '抖音', metrics: { 播放量: 1000, 点赞数: 80, 评论数: 40, 收藏数: 60, 转发数: 20 } }, { title: '测试内容' }, [])
+  // 中文键同样要算对：点赞 80 / 收藏 60 / 评论 40 / 转发 20 / 播放 1000 → 互动率 20%，收藏排第二
+  assert.equal(chinese.rate, 0.2)
+  assert.ok(chinese.drivers.includes('收藏'), `中文键下收藏应进驱动，实际 ${JSON.stringify(chinese.drivers)}`)
+})
 })
 
 test('闭环链路：适配、复盘入记忆、日历与匹配排序', async t => {

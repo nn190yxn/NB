@@ -46,7 +46,9 @@ export function retrospectDeterministic(snapshot, draft, peers = []) {
   const views = metricValue(metrics, ['play', 'view', '播放', '阅读'])
   const likes = metricValue(metrics, ['like', '点赞'])
   const comments = metricValue(metrics, ['comment', '评论'])
-  const collects = metricValue(metrics, ['collect', '收藏'])
+  // 界面写入快照的键是 favorites（见 metricLabels），只认 collect/收藏 会让收藏永远是 0：
+  // 互动率少算一截、判定可能反转，而且「收藏占比突出」这条经验永远不触发。
+  const collects = metricValue(metrics, ['collect', 'favorite', '收藏'])
   const shares = metricValue(metrics, ['share', '转发', '分享'])
   const interactions = likes + comments + collects + shares
   const rate = views > 0 ? interactions / views : null
