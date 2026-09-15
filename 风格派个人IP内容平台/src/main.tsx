@@ -682,7 +682,7 @@ function StrategyReview({ ratios, onClose }: { ratios: number[]; onClose: () => 
 }
 type WorkspaceSection = '热点研究' | '素材库' | '爆款方法库' | '选题助手' | '内容创作' | '内容日历' | 'IP 档案'
 type ResearchItem = { id: number; platform: string; title: string; author?: string; url?: string | null; metrics?: { discussions?: number; growth?: number }; analysis?: { structure: string[]; summary?: string }; source_refs?: unknown[]; captured_at?: string; collected?: boolean; fit?: { score: number; matched: string[] } }
-type DraftAdaptation = { title: string; body: string; hashtags: string[]; provider: string; checklist: { item: string; status: string; detail: string }[]; updated_at: string }
+type DraftAdaptation = { title: string; body: string; hashtags: string[]; provider: string; checklist: { item: string; status: string; detail: string }[]; updated_at: string; draft_version?: number }
 
 type ResearchListResponse = { items: ResearchItem[]; total: number }
 
@@ -1844,6 +1844,7 @@ function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: 
     </div>
     {adaptation ? <div className="publish-version">
       <div className="publish-version-head"><strong>{platform} 版本</strong><small>{adaptation.provider === 'builtin' ? '规则适配' : '大模型适配'} · {new Date(adaptation.updated_at).toLocaleString('zh-CN')}</small></div>
+      {adaptation.draft_version !== undefined && draft.version !== undefined && adaptation.draft_version !== draft.version && <p className="skill-message" role="status">正文已改到第 {draft.version} 版，这个「{platform}」版本是基于第 {adaptation.draft_version} 版的，复制出去的是旧文案，建议重新生成本平台版本。</p>}
       <div className="publish-title">{adaptation.title}</div>
       <textarea className="publish-body" value={adaptation.body} readOnly rows={8} aria-label="平台正文" />
       {adaptation.hashtags.length > 0 && <div className="publish-tags">{adaptation.hashtags.map(tag => <span className="chip" key={tag}>{tag}</span>)}</div>}

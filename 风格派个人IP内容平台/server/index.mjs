@@ -1317,7 +1317,6 @@ const server = createServer(async (request, response) => {
       const platform = researchPlatforms.includes(body.platform) && body.platform !== '全平台' ? body.platform : draft.platform
       if (!platform || platform === '全平台') return send(response, 422, { error: '请选择一个发布平台' })
       const profile = userDocument('profile', request)
-      const hits = prohibitedHits(String(draft.body || ''))
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       let adaptation = null
       let useAdaptLlm = Boolean(configs.primary || configs.fallback)
@@ -1340,7 +1339,10 @@ const server = createServer(async (request, response) => {
         } catch { adaptation = null }
       }
       if (!adaptation) adaptation = deterministicAdaptation(draft, platform, profile)
-      const adapted = { ...adaptation, checklist: buildChecklist(platform, adaptation.body, hits), updated_at: new Date().toISOString() }
+      // 检查清单针对的是要发出去的那份文本，不是草稿母版：适配是大模型重写的，可能自己新增或去掉了风险词。
+      // 实测：适配正文里带「最好」而草稿母版没有时，旧写法报「无违禁词风险」。
+      const adaptedHits = prohibitedHits(adaptation.body)
+      const adapted = { ...adaptation, draft_version: draft.version, checklist: buildChecklist(platform, adaptation.body, adaptedHits), updated_at: new Date().toISOString() }
       draft.adaptations = { ...(draft.adaptations || {}), [platform]: adapted }
       await saveState('drafts')
       return send(response, 200, draft)

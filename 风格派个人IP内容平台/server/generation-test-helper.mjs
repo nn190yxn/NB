@@ -2,7 +2,7 @@ import { createServer } from 'node:http'
 import { after } from 'node:test'
 
 // 测试用上游大模型：按系统提示词分派，覆盖定位、选题、草稿正文、适配、去 AI 感、记忆提炼与复盘。
-export async function startGenerationMock() {
+export async function startGenerationMock({ adaptBody } = {}) {
   let mode = 'success'
   const server = createServer(async (req, res) => {
     if (mode === 'failed') { res.writeHead(503); res.end('test failure'); return }
@@ -23,7 +23,7 @@ export async function startGenerationMock() {
         公众号: `公众号正文：${brief.title}`,
       }))
     }
-    if (system.includes('多平台内容发布适配')) return reply(JSON.stringify({ title: '适配标题', body: `适配正文：${JSON.parse(last).title}`, hashtags: ['#测试标签'] }))
+    if (system.includes('多平台内容发布适配')) return reply(JSON.stringify({ title: '适配标题', body: typeof adaptBody === 'function' ? adaptBody(last) : `适配正文：${JSON.parse(last).title}`, hashtags: ['#测试标签'] }))
     if (system.includes('改稿助手')) {
       const payload = JSON.parse(last)
       if (payload.slot === 'title') return reply('对标改法之后的新标题')
@@ -51,8 +51,8 @@ export async function startGenerationMock() {
 }
 
 // 进程级共享 mock：测试文件顶部 await 一次即可，配合 after() 自动关闭。
-export async function startSharedLlmMock() {
-  const mock = await startGenerationMock()
+export async function startSharedLlmMock(options) {
+  const mock = await startGenerationMock(options)
   after(() => mock.close())
   return mock
 }
