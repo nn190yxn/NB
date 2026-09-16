@@ -16,3 +16,14 @@ export function testPort(base, span) {
   }
   return base
 }
+
+// 一个文件里要起多个服务时用它：起点同样避开禁用端口，之后每次递增也跳过，
+// 否则「起点安全 + 一路 ++」仍可能一步步走进 3659 这类端口。
+export function testPortSequence(base, span) {
+  let current = testPort(base, span)
+  return () => {
+    const port = current
+    do { current += 1 } while (blockedPorts.has(current))
+    return port
+  }
+}

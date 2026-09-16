@@ -4,11 +4,11 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { testPort } from './test-port.mjs'
+import { testPortSequence } from './test-port.mjs'
 
-let nextPort = testPort(3700, 120)
+const allocatePort = testPortSequence(3700, 120)
 function startServer() {
-  const port = nextPort++
+  const port = allocatePort()
   const baseUrl = `http://127.0.0.1:${port}`
   const directory = mkdtempSync(join(tmpdir(), 'private-api-'))
   const dataFile = join(directory, 'data.json')

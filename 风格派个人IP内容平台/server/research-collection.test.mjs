@@ -4,11 +4,11 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { testPort } from './test-port.mjs'
+import { testPortSequence } from './test-port.mjs'
 
-let nextPort = testPort(3850, 80)
+const allocatePort = testPortSequence(3850, 80)
 async function start() {
-  const port = nextPort++
+  const port = allocatePort()
   const dir = mkdtempSync(join(tmpdir(), 'research-collect-'))
   const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: join(dir, 'data.json') }, stdio: ['ignore', 'pipe', 'pipe'] })
   const base = `http://127.0.0.1:${port}`

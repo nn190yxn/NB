@@ -5,11 +5,11 @@ import { createServer } from 'node:http'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { testPort } from './test-port.mjs'
+import { testPortSequence } from './test-port.mjs'
 
-let nextPort = testPort(3500, 150)
+const allocatePort = testPortSequence(3500, 150)
 function startServer() {
-  const port = nextPort++
+  const port = allocatePort()
   const baseUrl = `http://127.0.0.1:${port}`
   const logs = []
   const dataFile = join(mkdtempSync(join(tmpdir(), 'api-settings-test-')), 'data.json')
