@@ -1743,9 +1743,17 @@ function ProfileReviewPanel() {
       .catch(() => setSaveError('保存失败，请稍后重试。'))
       .finally(() => setBusy(false))
   }
+// 档案的列表字段（服务对象/主要问题/内容支柱/核心观点/变现目标/获客路径）是「短标签」：正文检查、话题标签、
+// 选题评分都按短词工作。写成整句时这几处会静默失效，所以在编辑器里直接给出长度信号。
+// 12 字阈值与 server/draft-checks.mjs 的 overlongValue 保持同一口径。
+const profileEntryMaxLength = 12
+const overlongProfileEntry = (value: string) => value.split(/\r?\n/).map(item => item.trim()).filter(Boolean).find(item => item.length > profileEntryMaxLength) || ''
   const fieldEditor = (field: EditableProfileField, value: unknown, prominent = false) => {
     const id = `${field.source}:${field.key}`
-    if (editingField === id) return <div className={`profile-field-editor${prominent ? ' prominent' : ''}`}>{field.list ? <textarea value={editValue} onChange={event => setEditValue(event.target.value)} aria-label={`编辑${field.label}`} /> : <input value={editValue} onChange={event => setEditValue(event.target.value)} aria-label={`编辑${field.label}`} />}<small>列表字段可每行填写一项。</small>{saveError && <span className="profile-save-error">{saveError}</span>}<div className="profile-edit-actions"><button className="skip-action" disabled={busy} onClick={() => { setEditingField(''); setSaveError('') }}>取消</button><button className="primary-action" disabled={busy} onClick={() => saveField(field)}>{busy ? '保存中...' : '保存'}</button></div></div>
+    if (editingField === id) {
+    const longEntry = field.list ? overlongProfileEntry(editValue) : ''
+    return <div className={`profile-field-editor${prominent ? ' prominent' : ''}`}>{field.list ? <textarea value={editValue} onChange={event => setEditValue(event.target.value)} aria-label={`编辑${field.label}`} /> : <input value={editValue} onChange={event => setEditValue(event.target.value)} aria-label={`编辑${field.label}`} />}<small>列表字段可每行填写一项；建议每项 2-8 字短词（如「个人IP创业者」）。</small>{longEntry && <span className="profile-save-error" role="status">{`「${longEntry}」有 ${longEntry.length} 字，过长：按短词匹配的正文检查、话题标签与选题评分都会失效，建议改成 2-8 字。`}</span>}{saveError && <span className="profile-save-error">{saveError}</span>}<div className="profile-edit-actions"><button className="skip-action" disabled={busy} onClick={() => { setEditingField(''); setSaveError('') }}>取消</button><button className="primary-action" disabled={busy} onClick={() => saveField(field)}>{busy ? '保存中...' : '保存'}</button></div></div>
+  }
     return <div className={`profile-field-value${prominent ? ' prominent' : ''}`}><div>{prominent ? <strong>{profileValues(value)}</strong> : <p>{profileValues(value)}</p>}</div><button className="profile-edit-button" aria-label={`编辑${field.label}`} onClick={() => startEdit(field.source, field.key, value)}><Pencil size={13} /> 编辑</button></div>
   }
   const pendingReviews = reviews.filter(item => item.status === 'pending')
