@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
+import { testPort } from './test-port.mjs'
 const llmMock = await startSharedLlmMock()
 
-const port = 43000 + Math.floor(Math.random() * 1000)
+const port = testPort(43000, 1000)
 const baseUrl = `http://127.0.0.1:${port}`
 const dataFile = join(mkdtempSync(join(tmpdir(), 'draft-workflow-test-')), 'data.json')
 writeFileSync(dataFile, '{}')

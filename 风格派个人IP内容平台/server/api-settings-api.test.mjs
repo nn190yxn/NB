@@ -5,8 +5,9 @@ import { createServer } from 'node:http'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testPort } from './test-port.mjs'
 
-let nextPort = 3500 + Math.floor(Math.random() * 150)
+let nextPort = testPort(3500, 150)
 function startServer() {
   const port = nextPort++
   const baseUrl = `http://127.0.0.1:${port}`

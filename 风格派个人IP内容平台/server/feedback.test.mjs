@@ -4,8 +4,9 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testPort } from './test-port.mjs'
 
-const port = 47600 + Math.floor(Math.random() * 150)
+const port = testPort(47600, 150)
 const baseUrl = `http://127.0.0.1:${port}`
 const headers = { 'content-type': 'application/json', 'x-user-id': 'beta-user' }
 

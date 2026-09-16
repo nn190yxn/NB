@@ -6,9 +6,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
+import { testPort } from './test-port.mjs'
 const llmMock = await startSharedLlmMock()
 
-const port = 3900 + Math.floor(Math.random() * 150)
+const port = testPort(3900, 150)
 const mockPort = port + 500
 const baseUrl = `http://127.0.0.1:${port}`
 const mockUrl = `http://127.0.0.1:${mockPort}`

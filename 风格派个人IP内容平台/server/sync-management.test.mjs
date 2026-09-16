@@ -4,8 +4,9 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testPort } from './test-port.mjs'
 
-const port = 4100 + Math.floor(Math.random() * 150)
+const port = testPort(4100, 150)
 const baseUrl = `http://127.0.0.1:${port}`
 const dataFile = join(mkdtempSync(join(tmpdir(), 'content-ip-sync-ui-')), 'data.json')
 writeFileSync(dataFile, '{}')

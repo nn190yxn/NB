@@ -5,9 +5,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
+import { testPort } from './test-port.mjs'
 const llmMock = await startSharedLlmMock()
 
-const port = 3800 + Math.floor(Math.random() * 150)
+const port = testPort(3800, 150)
 const baseUrl = `http://127.0.0.1:${port}`
 
 function startServer(extraEnv = {}) {

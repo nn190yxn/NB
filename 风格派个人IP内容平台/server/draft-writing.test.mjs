@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildDraftBrief, draftBriefPrompt, draftPlatforms, parseDraftBodies } from './draft-writing.mjs'
 import { startGenerationMock } from './generation-test-helper.mjs'
+import { testPort } from './test-port.mjs'
 
-const port = 46000 + Math.floor(Math.random() * 500)
+const port = testPort(46000, 500)
 const baseUrl = `http://127.0.0.1:${port}`
 const headers = { 'content-type': 'application/json', 'x-user-id': 'draft-writing-user' }
 const noModelEnv = { PROJECT_LLM_BASE_URL: '', PROJECT_LLM_API_KEY: '', PROJECT_LLM_MODEL: '' }

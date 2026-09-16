@@ -5,9 +5,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
+import { testPort } from './test-port.mjs'
 const llmMock = await startSharedLlmMock()
 
-const port = 3400 + Math.floor(Math.random() * 200)
+const port = testPort(3400, 200)
 const baseUrl = `http://127.0.0.1:${port}`
 const headers = { 'content-type': 'application/json', 'x-user-id': 'structures-user' }
 

@@ -5,11 +5,12 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
+import { testPort } from './test-port.mjs'
 
 // 适配返回的正文里带「最好」，草稿母版里没有 —— 检查清单必须针对要发出去的那份文本。
 const llmMock = await startSharedLlmMock({ adaptBody: () => '适配正文：最好的一课，包赚不赔。' })
 
-const port = 47300 + Math.floor(Math.random() * 200)
+const port = testPort(47300, 200)
 const baseUrl = `http://127.0.0.1:${port}`
 const headers = { 'content-type': 'application/json', 'x-user-id': 'adapt-user' }
 

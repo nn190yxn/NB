@@ -4,8 +4,9 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testPort } from './test-port.mjs'
 
-let nextPort = 3700 + Math.floor(Math.random() * 120)
+let nextPort = testPort(3700, 120)
 function startServer() {
   const port = nextPort++
   const baseUrl = `http://127.0.0.1:${port}`

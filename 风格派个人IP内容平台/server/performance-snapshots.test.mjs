@@ -4,8 +4,9 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testPort } from './test-port.mjs'
 
-const port = 4300 + Math.floor(Math.random() * 100)
+const port = testPort(4300, 100)
 const baseUrl = `http://127.0.0.1:${port}`
 const dataFile = join(mkdtempSync(join(tmpdir(), 'content-ip-performance-')), 'data.json')
 writeFileSync(dataFile, JSON.stringify({ drafts: [{ id: 7, owner_id: 'demo-user', title: '表现测试', platform: '抖音' }] }))

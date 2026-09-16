@@ -5,8 +5,9 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
+import { testPort } from './test-port.mjs'
 
-const port = 3800 + Math.floor(Math.random() * 150)
+const port = testPort(3800, 150)
 const mockPort = port + 500
 const baseUrl = `http://127.0.0.1:${port}`
 const mockUrl = `http://127.0.0.1:${mockPort}`

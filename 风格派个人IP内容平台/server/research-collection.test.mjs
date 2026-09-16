@@ -4,8 +4,9 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testPort } from './test-port.mjs'
 
-let nextPort = 3850 + Math.floor(Math.random() * 80)
+let nextPort = testPort(3850, 80)
 async function start() {
   const port = nextPort++
   const dir = mkdtempSync(join(tmpdir(), 'research-collect-'))

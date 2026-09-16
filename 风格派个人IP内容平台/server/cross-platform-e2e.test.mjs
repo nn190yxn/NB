@@ -8,8 +8,9 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testPort } from './test-port.mjs'
 
-const port = 4550 + Math.floor(Math.random() * 80)
+const port = testPort(4550, 80)
 const base = `http://127.0.0.1:${port}`
 const dataFile = join(mkdtempSync(join(tmpdir(), 'content-ip-cross-platform-')), 'data.json')
 

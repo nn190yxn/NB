@@ -7,8 +7,9 @@ import { join } from 'node:path'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
 const llmMock = await startSharedLlmMock()
 import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterministic } from './growth.mjs'
+import { testPort } from './test-port.mjs'
 
-const port = 47000 + Math.floor(Math.random() * 200)
+const port = testPort(47000, 200)
 const baseUrl = `http://127.0.0.1:${port}`
 const headers = { 'content-type': 'application/json', 'x-user-id': 'closure-user' }
 
