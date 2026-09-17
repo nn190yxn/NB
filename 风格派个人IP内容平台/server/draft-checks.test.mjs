@@ -349,3 +349,4 @@ test('档案字段写成整句时只提醒改档案，不算正文不合格', ()
   const hints = [...quality.suggestions, ...persona.suggestions].join(' ')
   assert.ok(hints.includes('2-8 字短词'), hints)
 })
+

@@ -1293,6 +1293,7 @@ const server = createServer(async (request, response) => {
       let bodies
       let provider
       let rewritten = false
+      let gateFailure = null
       try {
         const result = await callLlmWithFallback(configs, [
           { role: 'system', content: draftBriefPrompt(userDocument('profile', request)) },
@@ -1310,9 +1311,8 @@ const server = createServer(async (request, response) => {
           bodies = parseDraftBodies(retry.content)
           provider = retry.provider
           scan = scanGeneratedBodies(bodies)
-          if (scan.failed) {
-            return send(response, 502, { code: 'GENERATION_GATE_FAILED', error: `草稿没过写作验收：${scan.summary}。未入库，请重试。`, retryable: true })
-          }
+          // A 方案：不再 502 丢弃。记下验收结果，稿子照常入库但标成待修改，用户可直接在草稿页「定位替换」按句改。
+          gateFailure = scan
         }
       } catch (error) {
         return send(response, 502, { code: 'GENERATION_FAILED', error: '草稿生成失败，请检查模型配置后重试；本次未生成草稿。', retryable: true, detail: error instanceof Error ? error.message : undefined })
@@ -1320,7 +1320,7 @@ const server = createServer(async (request, response) => {
       const variantGroupId = randomUUID()
       const atomRefs = [...quoteMaterials, ...experienceMaterials].map(item => sourceRef('material', item.id))
       const sourceRefs = [...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs]
-      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten } }, created_at: new Date().toISOString() }))
+      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), summary: gateFailure ? gateFailure.summary : null } }, created_at: new Date().toISOString() }))
       if (persistedTopic?.id) {
         const archivedAt = new Date().toISOString()
         for (const draft of supersededDraftsForRegenerate(state.drafts, { ownerId: userId(request), topicId: persistedTopic.id })) {

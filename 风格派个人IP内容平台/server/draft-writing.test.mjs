@@ -131,7 +131,7 @@ test('模型返回无效内容时 502 且不落库，成功时正文来自模型
   assert.ok(drafts.every(item => item.body && !item.body.includes('平台：')))
 })
 
-test('生成验收不过则打回改写，仍不过则不入库', async t => {
+test('生成验收不过则打回改写，仍不过则入库标待修改（A 方案）', async t => {
   const mock = await startGenerationMock()
   t.after(() => mock.close())
   const server = await startServer(mock.env)
@@ -147,7 +147,7 @@ test('生成验收不过则打回改写，仍不过则不入库', async t => {
 
   mock.setMode('sermon_stuck')
   const blocked = await generate()
-  assert.equal(blocked.status, 502)
+  assert.equal(blocked.status, 201)
   const payload = await blocked.json()
   assert.equal(payload.code, 'GENERATION_GATE_FAILED')
   assert.match(payload.error, /未入库/)
