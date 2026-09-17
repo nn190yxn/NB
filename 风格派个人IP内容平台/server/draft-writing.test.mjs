@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildDraftBrief, consultingToneWords, defaultDraftStructure, draftBriefPrompt, draftDeaiPrompt, draftGateRewritePrompt, draftLengthTargets, draftPlatformForms, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, parseDraftBodies, parseReviseBody } from './draft-writing.mjs'
+import { buildDraftBrief, consultingToneWords, defaultDraftStructure, draftBriefPrompt, draftDeaiPrompt, draftGateRewritePrompt, draftLengthTargets, draftPlatformForms, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, parseDraftBodies, parseReviseBody, parseReplacePairs, validateReplacePairs, applyReplacePairs, draftReplacePrompt } from './draft-writing.mjs'
 import { startGenerationMock } from './generation-test-helper.mjs'
 import { testPort } from './test-port.mjs'
 
@@ -210,4 +210,47 @@ test('只重写一个平台，带修改意见，不动其他平台', async t => 
   assert.equal(fromChecks.status, 200)
   const rewritten = await fromChecks.json()
   assert.match(rewritten.generation_context.revise.note, /把字数改到/)
+})
+
+test('替换对只认原文里唯一存在的句子，越改越短和没变化都丢掉', () => {
+  const body = '我上周改了三版。其实高频迭代才是长期主义。观众不欠你注意力。'
+  const parsed = parseReplacePairs(JSON.stringify({ pairs: [
+    { old: '其实高频迭代才是长期主义。', new: '上周那版改到第四遍才有人来问价。' },
+    { old: '我上周改了三版。', new: '改了三版。' },
+    { old: '这句原文里没有。', new: '随便写一句。' },
+    { old: '观众不欠你注意力。', new: '观众不欠你注意力。' },
+  ] }))
+  assert.equal(parsed.length, 4)
+  const { accepted, dropped } = validateReplacePairs({ body, pairs: parsed })
+  assert.equal(accepted.length, 1)
+  assert.match(accepted[0].new, /第四遍/)
+  assert.equal(dropped.length, 3)
+  assert.equal(applyReplacePairs(body, accepted), '我上周改了三版。上周那版改到第四遍才有人来问价。观众不欠你注意力。')
+  assert.equal(parseReplacePairs('不是 JSON').length, 0)
+  assert.match(draftReplacePrompt({ platform: '抖音', format: '短视频', body, issues: ['ai_tone_phrase'] }), /逐字复制/)
+})
+
+test('定点替换只返回能落地的替换对，对不上的原样退回', async t => {
+  const mock = await startGenerationMock()
+  t.after(() => mock.close())
+  const server = await startServer(mock.env)
+  t.after(() => server.kill())
+
+  const created = await generate()
+  const drafts = await created.json()
+  const douyin = drafts.find(item => item.platform === '抖音')
+  assert.ok(douyin)
+  const body = '改稿这事我上周做了三版。其实高频迭代才是长期主义。观众不欠你注意力。'
+  const saved = await fetch(`${baseUrl}/api/drafts/${douyin.id}`, { method: 'PUT', headers, body: JSON.stringify({ body, version: douyin.version }) })
+  assert.equal(saved.status, 200)
+  const target = await saved.json()
+
+  const replaced = await fetch(`${baseUrl}/api/drafts/${douyin.id}/replacements`, { method: 'POST', headers, body: JSON.stringify({ version: target.version }) })
+  assert.equal(replaced.status, 200)
+  const result = await replaced.json()
+  assert.equal(result.pairs.length, 1, '只有原文里唯一存在的那句能进来')
+  assert.equal(result.dropped.length, 1, '原文里没有的句子要退回')
+  assert.match(result.pairs[0].new, /第四遍/)
+  assert.equal(result.remaining, 0, '替换完这条不该再有命中')
+  assert.equal(target.body, body, '预览不该改动草稿')
 })

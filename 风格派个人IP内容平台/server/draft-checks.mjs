@@ -153,6 +153,7 @@ export function checkQuality(draft, profile = {}) {
   const vagueWords = vagueCaseHits(draft?.body)
   if (vagueWords.length) { evidence.push(evidenceItem('vague_case', `正文出现没有主体的案例：${vagueWords.join('、')}`)); suggestions.push('不要用「某某人」举例，换成具体的人和事') }
   if (lacksConcreteSupport(draft?.body)) { evidence.push(evidenceItem('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断')); suggestions.push('补一个具体场景或数字') }
+  for (const [code, hit] of templateSentenceHits(draft?.body)) { evidence.push(evidenceItem(code, `正文出现模板句：${hit}`)); suggestions.push(templateSentenceHints[code]) }
   const lengthTarget = draftLengthTargetOf(draft)
   const lengthRange = draftLengthRangeFrom(lengthTarget)
   const bodyLength = String(draft?.body || '').trim().length
@@ -213,6 +214,13 @@ const checkRewriteHints = {
   vague_case: '把「某某人」这种没有主体的例子换成你自己经历过的具体事，或直接删掉',
   no_concrete_support: '补一个具体场景、数字或时间，让整篇有一个能落地的地方',
 
+  triple_list: '把「A、B、C」这种凑数三连换成一件具体的事，需要几个说几个',
+  golden_tail: '删掉段尾那句总结，把最后一个具体事实留着当结尾',
+  generic_ending: '删掉万能收尾，直接停在最后一个事实上',
+  ing_tail: '把「象征着 / 反映了 / 体现了」换成一句直说的事实',
+  avoid_copula: '口语里直接说「是 / 有」，不要用「作为…的角色」「标志着」',
+  fake_rebuttal: '删掉没人提出的反驳和假选项，直接讲你的判断',
+  connector_abuse: '删掉「首先 / 其次 / 此外 / 综上所述」这类书面连接词，用口语顺序讲',
   method_talk: '把「拆成几块 / 裂变 / 多平台分发」换成一件具体的经历或判断，字数不要因此变少',
   opening_question: '第一句直给冲突或结论，不要问句',
 }
@@ -308,6 +316,54 @@ function vagueCaseHits(body) {
   return vagueCasePatterns.map(pattern => text.match(pattern)?.[0]).filter(Boolean)
 }
 
+// 句子级 AI 模板句：每条只认一眼能确认的形态，宁可漏也不误伤正常口语。
+// 三连只认「两项以上是抽象词」的凑数式列举，「选题、拍摄、剪辑」这种具体清单不在此列。
+const abstractTailChars = '力感性度化局系法观量'
+const abstractWords = ['灵感', '洞察', '认知', '格局', '势能', '价值', '效率', '体验', '思维', '逻辑', '视野', '本质', '底层', '生态', '闭环']
+const isAbstractItem = item => abstractTailChars.includes(item.at(-1)) || abstractWords.includes(item)
+
+function tripleListHit(text) {
+  const match = text.match(/([^。！？\n、，]{2,3})、([^。！？\n、，]{2,3})、([^。！？\n、，]{2,3})/)
+  if (!match) return ''
+  if (/[0-9０-９]/.test(match[0])) return ''
+  const items = match.slice(1)
+  return items.filter(isAbstractItem).length >= 2 ? match[0] : ''
+}
+
+const templateSentencePatterns = [
+  ['golden_tail', /(?:其实|本质上|说到底|归根到底|归根结底)[^。！？\n]{0,12}(?:才是|就是)/],
+  ['generic_ending', /未来可期|拭目以待|任重道远|前景广阔|前景光明|迈出了重要一步|值得期待/],
+  ['ing_tail', /象征着|反映了|彰显了|体现了|折射出|印证了/],
+  ['avoid_copula', /作为[^。！？\n]{0,10}(?:角色|身份)|拥有[^。！？\n]{0,8}(?:功能|能力|特质)|发挥了[^。！？\n]{0,8}作用|标志着/],
+  ['fake_rebuttal', /有人可能会说|也许有人会说|可能会有人问|难道不是吗|一个诱人的做法/],
+]
+const connectorAbuseWords = ['首先', '其次', '此外', '综上所述', '值得注意的是', '换句话说', '更重要的是', '总而言之']
+
+function templateSentenceHits(body) {
+  const text = String(body || '')
+  const hits = []
+  const triple = tripleListHit(text)
+  if (triple) hits.push(['triple_list', triple])
+  for (const [code, pattern] of templateSentencePatterns) {
+    const found = text.match(pattern)
+    if (found) hits.push([code, found[0].slice(0, 14)])
+  }
+  // 单次「首先」不算滥用，口播里偶尔用一次是正常的。
+  const connectors = connectorAbuseWords.filter(word => text.includes(word))
+  const connectorCount = connectorAbuseWords.reduce((total, word) => total + text.split(word).length - 1, 0)
+  if (connectors.length >= 2 || connectorCount >= 3) hits.push(['connector_abuse', connectors.join('、')])
+  return hits
+}
+
+const templateSentenceHints = {
+  triple_list: '把「A、B、C」这种凑数三连换成一件具体的事，需要几个说几个',
+  golden_tail: '删掉段尾那句总结，把最后一个具体事实留着当结尾',
+  generic_ending: '删掉万能收尾，直接停在最后一个事实上',
+  ing_tail: '把「象征着 / 反映了 / 体现了」换成一句直说的事实',
+  avoid_copula: '口语里直接说「是 / 有」，不要用「作为…的角色」「标志着」',
+  fake_rebuttal: '删掉没人提出的反驳和假选项，直接讲你的判断',
+  connector_abuse: '删掉「首先 / 其次 / 此外 / 综上所述」这类书面连接词，用口语顺序讲',
+}
 function lacksConcreteSupport(body) {
   const text = String(body || '')
   return text.length >= 120 && !concreteSignalPatterns.some(pattern => pattern.test(text))
@@ -339,6 +395,10 @@ function writingIssues(draft) {
     if (lacksConcreteSupport(draft?.body)) {
       evidence.push(evidenceItem('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断'))
       suggestions.push('补一个具体场景或数字，哪怕是「上周三改了三遍选题」这种小事')
+    }
+    for (const [code, hit] of templateSentenceHits(draft?.body)) {
+      evidence.push(evidenceItem(code, `正文出现模板句：${hit}`))
+      suggestions.push(templateSentenceHints[code])
     }
     const mixupHits = platformMixupHits(draft?.body, draft?.platform)
     if (mixupHits.length) {

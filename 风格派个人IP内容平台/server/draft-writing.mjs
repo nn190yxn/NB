@@ -250,3 +250,59 @@ export function parseDraftBodies(content) {
   for (const platform of draftPlatforms) bodies[platform] = String(parsed[platform] || '').trim() || master
   return bodies
 }
+
+// 定点替换：不让模型重写整篇，只让它给出「原文这句 → 改成这句」的对照表，系统校验后原位替换。
+export function draftReplacePrompt({ platform, format, body, issues }) {
+  const label = format ? `${platform}（${format}）` : platform
+  return [
+    `你在改一条${label}口播稿，只做定点替换，不重写整篇。`,
+    '只输出 JSON，格式：{"pairs":[{"old":"原文里的一句","new":"改后的一句"}]}，不要任何解释。',
+    'old 必须从原文里逐字复制，是一句完整的句子，不许改写、缩写、加省略号；原文里找不到的句子不要出现在结果里。',
+    'new 要保持原意和原来的信息量，字数不能比 old 少，用口语，像跟熟人说话。',
+    'new 里不要再出现升华句、总结句和书面连接词。',
+    `最多给 ${Math.min((issues || []).length, 8)} 对替换，一条意见对应一对；改不了的那条就跳过，不要硬改。`,
+    '原文：',
+    body,
+  ].join('\n')
+}
+
+export function parseReplacePairs(content) {
+  const text = String(content || '').replace(/```[a-z]*/gi, '').replace(/```/g, '')
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start < 0 || end <= start) return []
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1))
+    const list = Array.isArray(parsed?.pairs) ? parsed.pairs : []
+    return list
+      .filter(item => item && typeof item === 'object')
+      .map(item => ({ old: String(item.old || '').trim(), new: String(item.new || '').trim() }))
+      .filter(item => item.old && item.new)
+  } catch { return [] }
+}
+
+// 只认能确定落地的替换：原文里唯一存在、不是原样、不越改越短。
+export function validateReplacePairs({ body, pairs }) {
+  const text = String(body || '')
+  const accepted = []
+  const dropped = []
+  for (const pair of Array.isArray(pairs) ? pairs : []) {
+    const old = String(pair?.old || '').trim()
+    const next = String(pair?.new || '').trim()
+    if (!old || !next) continue
+    if (text.split(old).length - 1 !== 1) { dropped.push({ ...pair, reason: '原文里找不到这一句，或不止一处' }); continue }
+    if (next === old) { dropped.push({ ...pair, reason: '改完和原文一样' }); continue }
+    if (next.length < Math.round(old.length * 0.8)) { dropped.push({ ...pair, reason: '改完比原文短太多' }); continue }
+    if (accepted.some(item => item.old === old)) { dropped.push({ ...pair, reason: '同一句给了两条替换' }); continue }
+    accepted.push({ old, new: next })
+  }
+  return { accepted, dropped }
+}
+
+export function applyReplacePairs(body, pairs) {
+  return (Array.isArray(pairs) ? pairs : []).reduce((text, pair) => {
+    const old = String(pair?.old || '')
+    if (!old || !text.includes(old)) return text
+    return text.split(old).join(String(pair.new || ''))
+  }, String(body || ''))
+}

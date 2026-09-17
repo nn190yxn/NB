@@ -308,3 +308,24 @@ test('去 AI 化判据拦住升华句、无主体案例和全篇通用判断', (
   const codes = ['ai_tone_phrase', 'vague_case', 'no_concrete_support']
   assert.equal(clean.evidence.some(item => codes.includes(item.code)), false)
 })
+
+test('句子级模板句判据拦得住，具体清单不误伤', () => {
+  const cases = [
+    ['triple_list', '把内容拆成创新、灵感、洞察，然后往下讲。'],
+    ['golden_tail', '我改了三次选题。其实高频迭代才是长期主义。'],
+    ['generic_ending', '这条路还很长，未来可期。'],
+    ['ing_tail', '他每天更新，象征着一种坚持。'],
+    ['avoid_copula', '这次改版标志着内容体系的升级。'],
+    ['fake_rebuttal', '有人可能会说这不现实。'],
+    ['connector_abuse', '首先讲选题。其次讲拍摄。此外还要剪辑。'],
+  ]
+  for (const [code, body] of cases) {
+    const quality = checkQuality({ ...baseDraft, platform: '抖音', body: body.repeat(6) }, {})
+    assert.ok(quality.evidence.some(item => item.code === code), `${code} 没命中：${body}`)
+    const gate = scanGeneratedBodies({ 抖音: body.repeat(6) })
+    assert.ok(gate.issues.抖音.some(item => item.code === code), `${code} 没进生成验收：${body}`)
+  }
+  const concreteList = '选题、拍摄、剪辑这三件事我各花了一周。上周三改到第四版才发出去。'.repeat(5)
+  const clean = checkQuality({ ...baseDraft, platform: '抖音', body: concreteList }, {})
+  assert.equal(clean.evidence.some(item => ['triple_list', 'connector_abuse'].includes(item.code)), false)
+})

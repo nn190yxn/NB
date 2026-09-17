@@ -13,7 +13,7 @@ import { callLlmWithFallback, callVision, testApiCapability } from './llm.mjs'
 import { interviewInput, interviewDigest, parsePositioning, fillProfile, parseTopics } from './positioning-generation.mjs'
 import { buildContentContext } from './content-context.mjs'
 import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
-import { buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody } from './draft-writing.mjs'
+import { buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs } from './draft-writing.mjs'
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
 import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, draftCheckRewriteNote, scanGeneratedBodies, scanGeneratedBody } from './draft-checks.mjs'
@@ -1393,6 +1393,36 @@ const server = createServer(async (request, response) => {
         return send(response, 200, { content, provider: result.provider })
       } catch (error) {
         return send(response, 502, { error: error?.message || '改写失败，请稍后重试', retryable: true })
+      }
+    }
+    // 定点替换：模型只给「原文这句 → 改成这句」的对照表，改不改由用户点，服务端不拦。
+    const draftReplaceMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/replacements$/)
+    if (draftReplaceMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftReplaceMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在' })
+      const body = await readJson(request)
+      if (body.version !== undefined && body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', code: 'version_conflict', current: draft })
+      const scan = scanGeneratedBody(draft.body, draft.platform)
+      const live = [...new Set(scan.evidence.map(item => item.code))]
+      if (!scan.failed || live.length === 0) return send(response, 200, { pairs: [], dropped: [], remaining: 0, message: '这条正文当前没有能定点替换的问题。' })
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      if (!configs.primary && !configs.fallback) return send(response, 422, { error: '定点替换需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      if (usesSharedPrimaryLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) return send(response, 429, { error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false })
+      }
+      try {
+        const result = await callLlmWithFallback(configs, [
+          { role: 'system', content: draftReplacePrompt({ platform: draft.platform, format: draftFormatOf(draft), body: draft.body, issues: live }) },
+          { role: 'user', content: scan.summary },
+        ])
+        const { accepted, dropped } = validateReplacePairs({ body: draft.body, pairs: parseReplacePairs(result.content) })
+        if (!accepted.length) return send(response, 502, { code: 'REPLACE_EMPTY', error: '模型没给出能落地的替换：要么原句对不上，要么改完更短。再试一次，或在「修改意见」里写清要保留哪几句。', retryable: true })
+        const nextBody = applyReplacePairs(draft.body, accepted)
+        const remaining = scanGeneratedBody(nextBody, draft.platform).evidence.length
+        return send(response, 200, { pairs: accepted, dropped, remaining, provider: result.provider })
+      } catch (error) {
+        return send(response, 502, { code: error?.code || 'REPLACE_FAILED', error: error?.message || '定点替换失败，请稍后重试', retryable: true })
       }
     }
     const draftReviseMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/revise$/)

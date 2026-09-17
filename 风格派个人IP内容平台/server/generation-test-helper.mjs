@@ -22,6 +22,13 @@ export async function startGenerationMock({ adaptBody } = {}) {
       视频号: `视频号口播：${title}。上周我翻了后台，泛泛而谈找路人，讲具体场面才找得着人。`,
       公众号: `公众号正文：${title}。上周我翻了后台，把内容当作品会自嗨。把内容当一次实验，看有没有人来问怎么买。没有就换角度，有就放大。`,
     })
+    // 定点替换：给一对能落地的、一对原文里不存在的，测试必须把后者丢掉。
+    if (system.includes('只做定点替换')) {
+      return reply(JSON.stringify({ pairs: [
+        { old: '其实高频迭代才是长期主义。', new: '上周那版改到第四遍才有人来问价。' },
+        { old: '这句原文里不存在。', new: '随便一句。' },
+      ] }))
+    }
     if (system.includes('只重写这一条')) {
       const fromLine = last.match(/^必须按修改意见改：(.+)$/m)
       const note = fromLine?.[1] || '按检查意见改'
