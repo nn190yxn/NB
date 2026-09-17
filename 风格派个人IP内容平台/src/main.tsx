@@ -1714,6 +1714,7 @@ function MaterialWorkspace() {
     if (format) params.set('format', format)
     if (status) params.set('status', status)
     if (reviewStatus) params.set('review_status', reviewStatus)
+    if (kind) params.set('kind', kind)
     if (trust) params.set('trust', trust)
     if (unit) params.set('unit_type', unit)
     params.set('sort', sort)
