@@ -94,7 +94,7 @@ test('闭环链路：适配、复盘入记忆、日历与匹配排序', async t 
   const drafts = await (await post('/api/drafts/generate', { topic: { title: '最好的一课', strategy_layer: 'trust', goal_refs: [] } })).json()
   const draft = drafts[0]
 
-  assert.equal(draft.body, '小红书正文：最好的一课')
+  assert.ok(draft.body.startsWith('小红书正文：最好的一课'))
 
   const adapted = await (await post(`/api/drafts/${draft.id}/adapt`, { platform: '小红书' })).json()
   const xhs = adapted.adaptations['小红书']

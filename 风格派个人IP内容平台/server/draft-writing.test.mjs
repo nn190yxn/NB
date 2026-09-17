@@ -123,8 +123,8 @@ test('模型返回无效内容时 502 且不落库，成功时正文来自模型
   assert.equal(created.status, 201)
   const drafts = await created.json()
   assert.equal(drafts.length, 4)
-  assert.equal(drafts[0].body, '小红书正文：真实正文测试')
-  assert.equal(drafts.find(item => item.platform === '抖音').body, '抖音口播：真实正文测试')
+  assert.ok(drafts[0].body.startsWith('小红书正文：真实正文测试'))
+  assert.ok(drafts.find(item => item.platform === '抖音').body.startsWith('抖音口播：真实正文测试'))
   assert.equal(drafts[0].generation_context.provider, 'primary')
   assert.equal(drafts[0].generation_context.brief.title, '真实正文测试')
   assert.equal(drafts[0].generation_context.gate.rewritten, false)
@@ -245,7 +245,9 @@ test('定点替换只返回能落地的替换对，对不上的原样退回', as
   const drafts = await created.json()
   const douyin = drafts.find(item => item.platform === '抖音')
   assert.ok(douyin)
-  const body = '改稿这事我上周做了三版。其实高频迭代才是长期主义。观众不欠你注意力。'
+  // 定点替换的正文也要写够：生成闸门有「字数严重不足（低于目标下限六成）」一条，
+  // 正文太短会让扫描结果多出 length_severe，remaining 就不是 0 了。
+  const body = `改稿这事我上周做了三版。其实高频迭代才是长期主义。${'上周三改到第三版，第四条才有人来问价。'.repeat(10)}`
   const saved = await fetch(`${baseUrl}/api/drafts/${douyin.id}`, { method: 'PUT', headers, body: JSON.stringify({ body, version: douyin.version }) })
   assert.equal(saved.status, 200)
   const target = await saved.json()

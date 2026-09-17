@@ -3,6 +3,16 @@ import test from 'node:test'
 import { checkPersona, checkPublishChecklist, checkQuality, draftCheckRewriteNote, hasBlockedCheck, scanGeneratedBodies } from './draft-checks.mjs'
 import { draftBriefPrompt, draftLengthTargets } from './draft-writing.mjs'
 
+// 语言层命中已从 evidence 移到 reminders（按 7 类分组），同一个问题不会在面板上出现两次。
+// 这里把两部分摊平成同一种条目，断言只关心「有没有命中」，不绑死它在哪个字段里呈现。
+const issueItems = checked => [
+  ...(checked?.evidence || []),
+  ...(checked?.reminders || []).flatMap(group => group.codes.map(code => ({ code, category: group.category, message: group.message, hint: group.hint, severity: 'warning' }))),
+]
+// 生成闸门有「字数严重不足（低于目标下限六成）」一条，健康正文要写够平台下限的字数，
+// 否则 failed 会被字数而不是内容决定。
+const fillTo = (seed, min) => { let out = ''; while (out.length < min) out += seed; return out }
+
 const opening = { option_id: 'structure-2', name: '开头范式一：预测攻击式', source: '对标dbs', applied_at: '2026-09-14T00:00:00.000Z' }
 const baseDraft = { id: 4, version: 2, title: '真实创业复盘', body: '很多人以为这件事靠技巧，其实关键是先把真实过程讲清楚。\n\n我记录一次真实过程，说明问题、证据和可执行步骤。\n\n最后给出方法和复盘建议，帮助读者完成下一步行动。', platform: '抖音', opening_ref: opening, source_refs: [{ type: 'topic', id: 4 }], fact_check_status: 'needs_review', variant_group_id: 'group-1', checks: {} }
 
@@ -119,30 +129,30 @@ test('检查意见只抽出能改正文的指令，槽位和档案短词不管',
 
 test('质量门把设问开头当成警告：提示词要求第一句直给冲突或结论', () => {
   const question = checkQuality({ ...baseDraft, body: '你是不是经常面对空白的文档，觉得没东西可写？\n\n我记录一次真实过程。' }, {})
-  const evidence = question.evidence.find(item => item.code === 'opening_question')
+  const evidence = issueItems(question).find(item => item.code === 'opening_question')
   assert.ok(evidence, '首句是问句必须留下证据')
   assert.equal(evidence.severity, 'warning')
   assert.match(evidence.message, /你是不是经常面对空白的文档/)
-  assert.ok(question.suggestions.some(item => item.includes('开头句')))
+  assert.match(evidence.hint, /第一句/)
   assert.equal(question.status, 'passed', '设问开头不应直接拦停发布')
 
   const statement = checkQuality({ ...baseDraft, body: '很多人以为这件事靠技巧，其实是先把过程讲清楚。' }, {})
-  assert.equal(statement.evidence.some(item => item.code === 'opening_question'), false)
+  assert.equal(issueItems(statement).some(item => item.code === 'opening_question'), false)
   // 问句出现在第二句不算开头问题
   const later = checkQuality({ ...baseDraft, body: '先给结论：这件事靠过程。那为什么大家都做不到？' }, {})
-  assert.equal(later.evidence.some(item => item.code === 'opening_question'), false)
+  assert.equal(issueItems(later).some(item => item.code === 'opening_question'), false)
   // 口播稿开头是镜头提示行时，要看下一行而不是把镜头提示当成句子
   const afterDirection = checkQuality({ ...baseDraft, body: '（镜头怼脸，语速快）\n你以为灵感枯竭是因为没东西写？\n\n其实是因为没素材库。' }, {})
-  const directionEvidence = afterDirection.evidence.find(item => item.code === 'opening_question')
+  const directionEvidence = issueItems(afterDirection).find(item => item.code === 'opening_question')
   assert.ok(directionEvidence, '镜头提示行之后的问句仍要能被发现')
   assert.match(directionEvidence.message, /你以为灵感枯竭是因为没东西写？$/)
   assert.doesNotMatch(directionEvidence.message, /镜头怼脸/)
   // 首行只有镜头提示、下一行是结论时不应误报
   const clean = checkQuality({ ...baseDraft, body: '（镜头平稳，语速中等）\n别再做灵感奴隶了。\n\n具体怎么做。' }, {})
-  assert.equal(clean.evidence.some(item => item.code === 'opening_question'), false)
+  assert.equal(issueItems(clean).some(item => item.code === 'opening_question'), false)
   // 标题行与「正文：」结构标签不算开头第一句
   const titled = checkQuality({ ...baseDraft, body: '标题：灵感枯竭？那是你没建素材库\n正文：\n别急着怪自己没灵感，先看你的素材库。' }, {})
-  assert.equal(titled.evidence.some(item => item.code === 'opening_question'), false)
+  assert.equal(issueItems(titled).some(item => item.code === 'opening_question'), false)
 })
 
 test('提示词禁止自我介绍与引导关注', () => {
@@ -198,42 +208,43 @@ test('质量门拦下结构骨架与标记泄漏', () => {
 test('具体案例与数字必须有人确认', () => {
   // 实测：素材库里只有对标样本，模型为了满足「用具体经历支撑」把客户案例编了 12 条。
   const invented = checkQuality({ ...baseDraft, body: '我有个客户，换了5个定位，最后用「本地老板IP顾问」这个定位，3个月涨粉2万。' }, {})
-  const evidence = invented.evidence.find(item => item.code === 'case_claim')
+  const evidence = issueItems(invented).find(item => item.code === 'case_claim')
   assert.ok(evidence, '编造的客户案例必须留下证据')
   assert.equal(evidence.severity, 'warning')
   assert.match(evidence.message, /案例人物/)
   assert.match(evidence.message, /结果数字/)
   assert.match(evidence.message, /我有个客户/)
-  assert.ok(invented.suggestions.some(item => item.includes('确认案例与数字是否真实')))
+  // 「确认案例与数字是否真实」这句改法已按类归并到 unsourced_case 的提醒里。
+  assert.match(evidence.hint, /你自己经历过/)
 
   const vendor = checkQuality({ ...baseDraft, body: '上个月，一位做本地家政的老板，提炼出一个核心观点：干净不是扫出来的，是收纳出来的。' }, {})
-  assert.match(vendor.evidence.find(item => item.code === 'case_claim').message, /案例人物/)
+  assert.match(issueItems(vendor).find(item => item.code === 'case_claim').message, /案例人物/)
   const numberOnly = checkQuality({ ...baseDraft, body: '- 案例：某本地老板转型三个月，因定位模糊，流量归零。' }, {})
-  assert.match(numberOnly.evidence.find(item => item.code === 'case_claim').message, /结果数字/)
+  assert.match(issueItems(numberOnly).find(item => item.code === 'case_claim').message, /结果数字/)
 
   // 不能误伤：通用判断、单纯反问客户、真实时间描述
   const judgement = checkQuality({ ...baseDraft, body: '定位不清的内容都是无效自晒。先想清楚你卖给谁，再决定写什么。' }, {})
-  assert.equal(judgement.evidence.some(item => item.code === 'case_claim'), false)
+  assert.equal(issueItems(judgement).some(item => item.code === 'case_claim'), false)
   const question = checkQuality({ ...baseDraft, body: '一个反问：你确定你的客户，真的知道你卖什么吗？' }, {})
-  assert.equal(question.evidence.some(item => item.code === 'case_claim'), false)
+  assert.equal(issueItems(question).some(item => item.code === 'case_claim'), false)
   const timeline = checkQuality({ ...baseDraft, body: '上周把这个选题拆成了三条内容，具体怎么拆的下面说。' }, {})
-  assert.equal(timeline.evidence.some(item => item.code === 'case_claim'), false)
+  assert.equal(issueItems(timeline).some(item => item.code === 'case_claim'), false)
 })
 
 test('质量门把咨询腔和工程词标出来', () => {
   const jargon = checkQuality({ ...baseDraft, body: '把复杂概念拆解成小白能听懂的颗粒度。先用钩子抓住注意力，这就是可复制机制。' }, {})
-  const evidence = jargon.evidence.find(item => item.code === 'consulting_tone')
+  const evidence = issueItems(jargon).find(item => item.code === 'consulting_tone')
   assert.ok(evidence, '工程词必须留下证据')
   assert.equal(evidence.severity, 'warning')
   assert.match(evidence.message, /颗粒度/)
   assert.match(evidence.message, /钩子/)
-  assert.ok(jargon.suggestions.some(item => item.includes('去 AI 感改写')))
+  assert.match(evidence.hint, /删掉咨询腔/)
 
   const lecture = checkQuality({ ...baseDraft, body: '首先，灵感不重要。其次，系统才重要。总而言之，你要沉淀资产。' }, {})
-  assert.match(lecture.evidence.find(item => item.code === 'consulting_tone').message, /首先/)
+  assert.match(issueItems(lecture).find(item => item.code === 'consulting_tone').message, /首先/)
 
   const normal = checkQuality({ ...baseDraft, body: '很多人以为这件事靠技巧，其实是先把过程讲清楚。定位不清就先别拍。' }, {})
-  assert.equal(normal.evidence.some(item => item.code === 'consulting_tone'), false)
+  assert.equal(issueItems(normal).some(item => item.code === 'consulting_tone'), false)
 })
 
 test('提示词里的字数与确定性检查用的是同一套数字', () => {
@@ -253,10 +264,10 @@ test('生成验收扫咨询腔、编客户、设问开头和四平台同一篇',
   assert.ok(bad.issues['抖音'].some(item => item.code === 'opening_question'))
 
   const clean = scanGeneratedBodies({
-    小红书: '昨天改选题，发现发完就等数据的人最多。先看这条解决哪个场面。你现在看的是点赞还是询盘。'.repeat(3),
-    抖音: '点赞会撒谎，询盘不会。别再为流量写，为成交写。问怎么买才算有效。'.repeat(3),
-    视频号: '泛泛而谈找路人。讲具体场面才找得着人。私域不是朋友圈展示柜。'.repeat(3),
-    公众号: '上周我把内容当了一次实验，看有没有人来问下一步。没有就换角度，有就放大。'.repeat(3),
+    小红书: fillTo('昨天改选题，发现发完就等数据的人最多。先看这条解决哪个场面。你现在看的是点赞还是询盘。', draftLengthTargets.小红书.min),
+    抖音: fillTo('点赞会撒谎，询盘不会。别再为流量写，为成交写。问怎么买才算有效。', draftLengthTargets.抖音.min),
+    视频号: fillTo('泛泛而谈找路人。讲具体场面才找得着人。私域不是朋友圈展示柜。', draftLengthTargets.视频号.min),
+    公众号: fillTo('上周我把内容当了一次实验，看有没有人来问下一步。没有就换角度，有就放大。', draftLengthTargets.公众号.min),
   })
   assert.equal(clean.failed, false)
 
@@ -274,20 +285,20 @@ test('正文出现方法骨架或其他平台名都算问题', () => {
   // 实测模型原话：「同一内核，抖音发 15 秒快节奏，小红书发带细节图文，视频号发深度对话。一条内容，裂变成三条爆款。」
   const mixup = checkQuality({ ...baseDraft, platform: '视频号', body: '我把观点拆成三块：踩过的坑、反常识判断、具体数据。同一内核，抖音发15秒快节奏，小红书发带细节图文。一条内容，裂变成三条爆款。' }, {})
   assert.ok(mixup.evidence.some(item => item.code === 'platform_mixup'))
-  assert.ok(mixup.evidence.some(item => item.code === 'method_talk'))
+  assert.ok(issueItems(mixup).some(item => item.code === 'method_talk'))
   assert.equal(mixup.status, 'passed', '写作问题只给警告，不拦停质量门')
 
   // 自己平台的名字不算串台；「分三步走」这类正常叙事不算方法骨架。
   const clean = checkQuality({ ...baseDraft, platform: '抖音', body: '这条只在抖音发。改选题分三步走：先看数据，再找场面，最后给判断。' }, {})
   assert.equal(clean.evidence.some(item => item.code === 'platform_mixup'), false)
-  assert.equal(clean.evidence.some(item => item.code === 'method_talk'), false)
+  assert.equal(issueItems(clean).some(item => item.code === 'method_talk'), false)
 })
 
 test('去 AI 化判据拦住升华句、无主体案例和全篇通用判断', () => {
   const vague = '第一，踩过的坑。第二，反常识的判断。第三，具体案例。素材原子化，不是让你变成流水线工人，而是让你从重复劳动中解放出来。某某人每天只做一件小事，五年后复利极高。真正的长期主义其实是高频迭代。把内容当作品会自嗨，当成能力展示会没人看。讲得越清楚转发的人越多，观众不欠你注意力。'
   const quality = checkQuality({ ...baseDraft, platform: '抖音', body: vague }, {})
   for (const code of ['ai_tone_phrase', 'vague_case', 'no_concrete_support']) {
-    assert.ok(quality.evidence.some(item => item.code === code), `质量门缺 ${code}`)
+    assert.ok(issueItems(quality).some(item => item.code === code), `质量门缺 ${code}`)
   }
   const gate = scanGeneratedBodies({ 抖音: vague })
   assert.ok(gate.issues.抖音.some(item => item.code === 'ai_tone_phrase'))
@@ -297,7 +308,7 @@ test('去 AI 化判据拦住升华句、无主体案例和全篇通用判断', (
   const concrete = '上周三改选题，我把最近一条数据好的稿子摊开看，评论区问价的人里同行不少。所以这一拍我直接讲报价怎么算，不讲怎么涨粉。'
   const clean = checkQuality({ ...baseDraft, platform: '抖音', body: concrete }, {})
   const codes = ['ai_tone_phrase', 'vague_case', 'no_concrete_support']
-  assert.equal(clean.evidence.some(item => codes.includes(item.code)), false)
+  assert.equal(issueItems(clean).some(item => codes.includes(item.code)), false)
 })
 
 test('句子级模板句判据拦得住，具体清单不误伤', () => {
@@ -312,28 +323,30 @@ test('句子级模板句判据拦得住，具体清单不误伤', () => {
   ]
   for (const [code, body] of cases) {
     const quality = checkQuality({ ...baseDraft, platform: '抖音', body: body.repeat(6) }, {})
-    assert.ok(quality.evidence.some(item => item.code === code), `${code} 没命中：${body}`)
+    assert.ok(issueItems(quality).some(item => item.code === code), `${code} 没命中：${body}`)
     const gate = scanGeneratedBodies({ 抖音: body.repeat(6) })
     assert.ok(gate.issues.抖音.some(item => item.code === code), `${code} 没进生成验收：${body}`)
   }
   const concreteList = '选题、拍摄、剪辑这三件事我各花了一周。上周三改到第四版才发出去。'.repeat(5)
   const clean = checkQuality({ ...baseDraft, platform: '抖音', body: concreteList }, {})
-  assert.equal(clean.evidence.some(item => ['triple_list', 'connector_abuse'].includes(item.code)), false)
+  assert.equal(issueItems(clean).some(item => ['triple_list', 'connector_abuse'].includes(item.code)), false)
 })
 
 test('同一问题只给一条建议：人设检查和质量门都报升华句也只写一遍', () => {
+  // 语言层命中现在按类别分组放在 reminders 里，改写指令也按类别各出一份。
+  const toneHint = '把升华句、段尾金句和万能收尾换成具体的人和事：谁、在什么场合、发生了什么'
   const draft = {
     ...baseDraft,
     platform: '抖音',
     body: '正文内容足够长。'.repeat(20),
     version: 3,
     checks: {
-      persona: { draft_version: 3, status: 'failed', evidence: [{ code: 'ai_tone_phrase', message: '正文出现升华式句式：不是A而是B' }] },
-      quality: { draft_version: 3, status: 'failed', evidence: [{ code: 'ai_tone_phrase', message: '正文出现升华式句式：不是A而是B' }, { code: 'vague_case', message: '正文出现没有主体的案例：某某人' }] },
+      persona: { draft_version: 3, status: 'failed', reminders: [{ category: 'tone_elevation', label: '升华句与金句收束', codes: ['ai_tone_phrase'], message: '正文出现升华式句式：不是A而是B', hint: toneHint }] },
+      quality: { draft_version: 3, status: 'failed', reminders: [{ category: 'tone_elevation', label: '升华句与金句收束', codes: ['ai_tone_phrase'], message: '正文出现升华式句式：不是A而是B', hint: toneHint }, { category: 'unsourced_case', label: '没主体的案例、来路不明的数字', codes: ['vague_case'], message: '正文出现没有主体的案例：某某人', hint: '把没有主体的例子和来路不明的数字换成你自己经历过的具体事，或直接删掉' }] },
     },
   }
   const note = draftCheckRewriteNote(draft)
-  assert.equal(note.split('不要只换个说法').length - 1, 1, '升华句只该出现一次')
+  assert.equal(note.split(toneHint).length - 1, 1, '升华句只该出现一次')
   assert.equal(note.split('你自己经历过的具体事').length - 1, 1, '某某人只该出现一次')
   assert.ok(note.includes('某某人'))
 })

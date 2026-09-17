@@ -67,7 +67,7 @@ test('AI 记忆层：管理、去重与生成注入', async t => {
   const composed = await jsonPost('/api/drafts/generate', { topic: { title: '信任资产的三个证据', strategy_layer: 'trust', goal_refs: [] }, quote_ids: [], experience_ids: [] })
   assert.equal(composed.status, 201)
   const drafts = await composed.json()
-  assert.equal(drafts[0].body, '小红书正文：信任资产的三个证据')
+  assert.ok(drafts[0].body.startsWith('小红书正文：信任资产的三个证据'))
   assert.ok(drafts[0].generation_context.brief.style.includes('我的开头从不用问句'))
   assert.ok(drafts[0].generation_context.brief.style.includes('失败复盘类选题我数据更好'))
 

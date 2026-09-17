@@ -2,6 +2,19 @@ import { createServer } from 'node:http'
 import { after } from 'node:test'
 
 // 测试用上游大模型：按系统提示词分派，覆盖定位、选题、草稿正文、适配、去 AI 感、记忆提炼与复盘。
+
+// 首轮正文按真实模型的量级给足字数。生成闸门里有「字数严重不足（低于目标下限六成）」一条，
+// 正文只写十几个字的话生成会直接走重写路径，测试就看不到首轮正文了。
+const fillTo = (seed, min) => { let out = ''; while (out.length < min) out += seed; return out }
+
+export const mockBodies = title => ({
+  master: fillTo(`母版正文：${title}。先给判断，再拆常见做法，最后给一步能做的动作。`, 320),
+  小红书: fillTo(`小红书正文：${title}。昨天有个做家政的老板来问，账号发了半年还是没人咨询。我让她把最近十条翻出来，发现全在讲行业趋势，没有一条讲她怎么解决客户的具体问题。`, 300),
+  抖音: fillTo(`抖音口播：${title}。上周我翻了后台，点赞会撒谎，询盘不会。别再为流量写，为成交写。`, 220),
+  视频号: fillTo(`视频号口播：${title}。上周我翻了后台，泛泛而谈找路人，讲具体场面才找得着人。`, 220),
+  公众号: fillTo(`公众号正文：${title}。上周我翻了后台，把内容当作品会自嗨。把内容当一次实验，看有没有人来问怎么买。没有就换角度，有就放大。`, 660),
+})
+
 export async function startGenerationMock({ adaptBody } = {}) {
   let mode = 'success'
   const server = createServer(async (req, res) => {
@@ -47,13 +60,7 @@ export async function startGenerationMock({ adaptBody } = {}) {
     if (system.includes('文案写手')) {
       const brief = JSON.parse(last)
       if (mode === 'sermon' || mode === 'sermon_stuck') return reply(JSON.stringify(sermonBodies))
-      return reply(JSON.stringify({
-        master: `母版正文：${brief.title}`,
-        小红书: `小红书正文：${brief.title}`,
-        抖音: `抖音口播：${brief.title}`,
-        视频号: `视频号口播：${brief.title}`,
-        公众号: `公众号正文：${brief.title}`,
-      }))
+      return reply(JSON.stringify(mockBodies(brief.title)))
     }
     if (system.includes('多平台内容发布适配')) return reply(JSON.stringify({ title: '适配标题', body: typeof adaptBody === 'function' ? adaptBody(last) : `适配正文：${JSON.parse(last).title}`, hashtags: ['#测试标签'] }))
     if (system.includes('改稿助手')) {

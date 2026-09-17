@@ -13,6 +13,16 @@ let mockUrl = ''
 const headers = { 'content-type': 'application/json', 'x-user-id': 'quota-user' }
 
 const upstreamHits = { redfox: 0, llm: 0 }
+// 生成闸门有「字数严重不足（低于目标下限六成）」一条，假模型回的长短必须写够平台下限，
+// 否则生成会走重写路径，额度测试拿不到首轮草稿。四个平台的措辞彼此不同，避免被判成「四平台同一篇」。
+const fillTo = (seed, min) => { let out = ''; while (out.length < min) out += seed; return out }
+const mockBodies = title => ({
+  master: fillTo(`母版：${title}。先给判断，再拆常见做法，最后给一步能做的动作。`, 320),
+  小红书: fillTo(`小红书正文：${title}。昨天有个做家政的老板来问，账号发了半年还是没人咨询。我让她把最近十条翻出来，发现全在讲行业趋势。`, 400),
+  抖音: fillTo(`抖音口播：${title}。上周我翻了后台，点赞会撒谎，询盘不会。别再为流量写，为成交写。`, 300),
+  视频号: fillTo(`视频号口播：${title}。上周我翻了后台，泛泛而谈找路人，讲具体场面才找得着人。`, 300),
+  公众号: fillTo(`公众号正文：${title}。上周我翻了后台，把内容当作品会自嗨。把内容当一次实验，看有没有人来问怎么买。`, 1000),
+})
 const mockServer = createServer((request, response) => {
   let body = ''
   request.on('data', chunk => { body += chunk })
@@ -24,7 +34,7 @@ const mockServer = createServer((request, response) => {
       const messages = JSON.parse(body).messages || []
       if (String(messages[0]?.content || '').includes('文案写手')) {
         const brief = JSON.parse(messages.at(-1).content)
-        return json({ choices: [{ message: { content: JSON.stringify({ master: `母版：${brief.title}`, 小红书: `小红书正文：${brief.title}`, 抖音: `抖音口播：${brief.title}`, 视频号: `视频号口播：${brief.title}`, 公众号: `公众号正文：${brief.title}` }) } }] })
+        return json({ choices: [{ message: { content: JSON.stringify(mockBodies(brief.title)) } }] })
       }
       return json({ choices: [{ message: { content: '[{"memory_type":"style","content":"共享模型提炼的记忆"}]' } }] })
     }
@@ -107,7 +117,7 @@ test('共享额度：默认走共享 Key，超额 429，自有 Key 豁免', asyn
   const draftHeaders = { cookie: draftCookie, 'content-type': 'application/json' }
   const generated = await (await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers: draftHeaders, body: JSON.stringify({ topic: { title: '额度降级测试', strategy_layer: 'trust', goal_refs: [] } }) })).json()
   const draft = generated[0]
-  assert.equal(draft.body, '小红书正文：额度降级测试')
+  assert.ok(draft.body.startsWith('小红书正文：额度降级测试'))
   const redfoxHitsBeforeCompliance = upstreamHits.redfox
   const compliance = await fetch(`${baseUrl}/api/drafts/${draft.id}/compliance`, { method: 'POST', headers: draftHeaders, body: JSON.stringify({ text: '这是最好的测试内容' }) })
   assert.equal(compliance.status, 200)

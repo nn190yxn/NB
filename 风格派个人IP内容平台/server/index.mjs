@@ -1404,7 +1404,9 @@ const server = createServer(async (request, response) => {
       if (body.version !== undefined && body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', code: 'version_conflict', current: draft })
       const scan = scanGeneratedBody(draft.body, draft.platform)
       const live = [...new Set(scan.evidence.map(item => item.code))]
-      if (!scan.failed || live.length === 0) return send(response, 200, { pairs: [], dropped: [], remaining: 0, message: '这条正文当前没有能定点替换的问题。' })
+      // 定点替换管的是语言层提醒（审美），不再看 scan.failed：闸门收窄后，只有升调/咨询腔、不踩闸门的正文
+      // 会被判成「没问题」，而那正是最需要定点替换的稿子。
+      if (live.length === 0) return send(response, 200, { pairs: [], dropped: [], remaining: 0, message: '这条正文当前没有能定点替换的问题。' })
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       if (!configs.primary && !configs.fallback) return send(response, 422, { error: '定点替换需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
       if (usesSharedPrimaryLlm(request)) {
@@ -1414,7 +1416,7 @@ const server = createServer(async (request, response) => {
       try {
         const result = await callLlmWithFallback(configs, [
           { role: 'system', content: draftReplacePrompt({ platform: draft.platform, format: draftFormatOf(draft), body: draft.body, issues: live }) },
-          { role: 'user', content: scan.summary },
+          { role: 'user', content: scan.evidence.map(item => item.message).join('；') },
         ])
         const { accepted, dropped } = validateReplacePairs({ body: draft.body, pairs: parseReplacePairs(result.content) })
         if (!accepted.length) return send(response, 502, { code: 'REPLACE_EMPTY', error: '模型没给出能落地的替换：要么原句对不上，要么改完更短。再试一次，或在「修改意见」里写清要保留哪几句。', retryable: true })

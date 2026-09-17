@@ -83,7 +83,7 @@ test('素材原子化：收录、去重、类型筛选与组合生成', async t 
   assert.equal(composed.status, 201)
   const drafts = await composed.json()
   assert.equal(drafts.length, 4)
-  assert.equal(drafts[0].body, '小红书正文：从失败账本讲信任资产')
+  assert.ok(drafts[0].body.startsWith('小红书正文：从失败账本讲信任资产'))
   assert.ok(drafts[0].generation_context.brief.quotes.some(item => item.text.includes('这是一个足够长的金句')))
   assert.ok(drafts[0].generation_context.brief.quotes.every(item => typeof item.source === 'string'))
   assert.ok(drafts[0].generation_context.brief.experiences.some(text => text.includes('公开复盘')))

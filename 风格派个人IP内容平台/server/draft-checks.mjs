@@ -10,8 +10,8 @@ function text(value) { return String(value || '').replace(/\s+/g, ' ').trim() }
 function list(value) { return Array.isArray(value) ? value.map(text).filter(Boolean) : [] }
 function hitsFor(value, words) { const body = text(value); return words.filter(word => body.includes(word)) }
 function evidenceItem(code, message, severity = 'warning') { return { code, message, severity } }
-function result(status, { score = null, dimensions = {}, evidence = [], suggestions = [], draftVersion = 1 } = {}) {
-  return { status, score, dimensions, evidence, suggestions, draft_version: draftVersion, checked_at: new Date().toISOString() }
+function result(status, { score = null, dimensions = {}, evidence = [], suggestions = [], reminders = [], draftVersion = 1 } = {}) {
+  return { status, score, dimensions, evidence, suggestions, reminders, draft_version: draftVersion, checked_at: new Date().toISOString() }
 }
 function sourceCount(draft) { return Array.isArray(draft?.source_refs) ? draft.source_refs.length : 0 }
 function currentVersion(draft) { return Number(draft?.version || 1) }
@@ -139,6 +139,8 @@ export function checkQuality(draft, profile = {}) {
   const score = Math.round(qualityKeys.reduce((sum, key) => sum + dimensions[key], 0) / qualityKeys.length)
   const evidence = []
   const suggestions = []
+  // 语言层提醒单独放：一次一条展示，不混进 evidence。
+  let reminders = []
   if (!body) { evidence.push(evidenceItem('body_missing', '正文不能为空', 'blocked')); suggestions.push('补充正文内容') }
   if (!openingReady) { evidence.push(evidenceItem('opening_missing', '尚未用「开头句」槽位确定开头范式', 'blocked')); suggestions.push('点草稿的「开头句」槽位，从方法库选一个开头范式') }
   if (!sourceValid || sourceCount(draft) === 0) { evidence.push(evidenceItem('source_missing', '草稿缺少有效来源引用', 'blocked')); suggestions.push('补回选题、素材或方法来源') }
@@ -151,16 +153,6 @@ export function checkQuality(draft, profile = {}) {
   if (audienceScore < 100) { if (profileMatchable(audienceValues)) { evidence.push(evidenceItem('audience_weak', '正文与当前受众问题的连接不够明确')); suggestions.push('在正文中写出受众正在面对的具体问题') } else if (audienceOverlong) suggestions.push(profileOverlongHint(audienceOverlong)) }
   if (pointScore < 100) { if (profileMatchable(pillarValues)) { evidence.push(evidenceItem('point_weak', '核心观点或内容支柱不够明确')); suggestions.push('用一句话写出你的判断，再用过程或案例支撑') } else if (pillarOverlong) suggestions.push(profileOverlongHint(pillarOverlong)) }
   // 模型并不遵守提示词里的字数要求（实测：提示词写抖音不超 250 字，模型给了 384 字），所以这里做确定性校验。
-  const mixupWords = platformMixupHits(draft?.body, draft?.platform)
-      suggestions.push('把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
-  const methodWords = methodTalkHits(draft?.body)
-      suggestions.push(checkRewriteHints.method_talk)
-  const toneWords = aiToneHits(draft?.body)
-  if (toneWords.length) { evidence.push(evidenceItem('ai_tone_phrase', `正文出现升华式句式：${toneWords.join('、')}`)); suggestions.push(checkRewriteHints.ai_tone_phrase) }
-  const vagueWords = vagueCaseHits(draft?.body)
-  if (vagueWords.length) { evidence.push(evidenceItem('vague_case', `正文出现没有主体的案例：${vagueWords.join('、')}`)); suggestions.push(checkRewriteHints.vague_case) }
-  if (lacksConcreteSupport(draft?.body)) { evidence.push(evidenceItem('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断')); suggestions.push(checkRewriteHints.no_concrete_support) }
-  for (const [code, hit] of templateSentenceHits(draft?.body)) { evidence.push(evidenceItem(code, `正文出现模板句：${hit}`)); suggestions.push(templateSentenceHints[code]) }
   const lengthTarget = draftLengthTargetOf(draft)
   const lengthRange = draftLengthRangeFrom(lengthTarget)
   const bodyLength = String(draft?.body || '').trim().length
@@ -169,13 +161,16 @@ export function checkQuality(draft, profile = {}) {
     evidence.push(evidenceItem('platform_length', `正文 ${bodyLength} 字，${draft.platform}${format ? format : ''}目标${lengthRange} 字`))
     suggestions.push(`把正文调整到 ${lengthRange} 字`)
   }
+  // 闸门项（自介 / 格式泄漏 / 串台 / 字数严重不足）留在 evidence 里，它们是客观项；
+  // 语言层命中走 reminders，不混进 evidence——否则同一个问题会在面板上出现两次。
   const writing = writingIssues(draft)
-  evidence.push(...writing.evidence)
+  evidence.push(...writing.gate)
   suggestions.push(...writing.suggestions)
+  reminders = writing.reminders
   const scoreBlocked = score < 60
   if (scoreBlocked) evidence.push(evidenceItem('score_low', '质量综合分低于 60 分', 'blocked'))
   const blocked = evidence.some(item => item.severity === 'blocked') || scoreBlocked
-  return result(blocked ? 'blocked' : 'passed', { score, dimensions, evidence, suggestions, draftVersion: currentVersion(draft) })
+  return result(blocked ? 'blocked' : 'passed', { score, dimensions, evidence, suggestions, reminders, draftVersion: currentVersion(draft) })
 }
 
 export function checkPublishChecklist(draft) {
@@ -218,22 +213,9 @@ const checkRewriteHints = {
   point_weak: '第一句给出判断，再用场面支撑',
   self_intro: '删掉自我介绍和引导关注',
   format_leak: '删掉结构说明和其他平台建议',
-  case_claim: '不要编客户和数字，改成通用判断',
-  consulting_tone: '改成跟熟人说话，删掉咨询腔和工程词',
   platform_mixup: '把其他平台名和分发说明换成这一条自己的具体内容，不要删掉就完事',
-  ai_tone_phrase: '把「不是A而是B」「真正的X是Y」这类升华句换成具体的人和事，不要只换个说法',
-  vague_case: '把「某某人」这种没有主体的例子换成你自己经历过的具体事，或直接删掉',
-  no_concrete_support: '补一个具体场景、数字或时间，让整篇有一个能落地的地方',
-
-  triple_list: '把「A、B、C」这种凑数三连换成一件具体的事，需要几个说几个',
-  golden_tail: '删掉段尾那句总结，把最后一个具体事实留着当结尾',
-  generic_ending: '删掉万能收尾，直接停在最后一个事实上',
-  ing_tail: '把「象征着 / 反映了 / 体现了」换成一句直说的事实',
-  avoid_copula: '口语里直接说「是 / 有」，不要用「作为…的角色」「标志着」',
-  fake_rebuttal: '删掉没人提出的反驳和假选项，直接讲你的判断',
-  connector_abuse: '删掉「首先 / 其次 / 此外 / 综上所述」这类书面连接词，用口语顺序讲',
-  method_talk: '把「拆成几块 / 裂变 / 多平台分发」换成一件具体的经历或判断，字数不要因此变少',
-  opening_question: '第一句直给冲突或结论，不要问句',
+  length_severe: '把正文补到目标字数，保留已有判断和可执行的一步，不要另写一篇',
+  // 语言层（14 个 code）的改写指令统一在 reminderHints 里按 7 类各写一份，这里不再按 code 重复。
 }
 
 export function draftCheckRewriteNote(draft) {
@@ -260,6 +242,15 @@ export function draftCheckRewriteNote(draft) {
       else if (evidence.code === 'case_claim' && detail) hints.push(`${hint}。原文里的：${detail}`)
       else hints.push(hint)
     }
+    // 语言层提醒也要进改写指令，否则「按检查意见改写」修不了升调、咨询腔这类问题。
+    for (const reminder of item.reminders || []) {
+      const key = `reminder:${reminder.category}`
+      if (seen.has(key) || !reminder.hint) continue
+      seen.add(key)
+      const detail = String(reminder.message || '').split('：').slice(1).join('：').trim()
+      if ((reminder.category === 'consulting_tone' || reminder.category === 'unsourced_case') && detail) hints.push(`${reminder.hint}。点名原文：${detail}`)
+      else hints.push(reminder.hint)
+    }
   }
   return [...new Set(hints)].join('；')
 }
@@ -278,7 +269,10 @@ export function rewriteAsksForShorter(note) {
 // 改正文能管的问题：与 draftCheckRewriteNote 可改的范围同口径，加上超平台上限。
 // 开头句槽位、来源引用、档案短词不在此列——那几项改写改不了，要用户自己点。
 function actionableIssueCodes({ body, platform }) {
-  const codes = writingIssues({ body, platform }).evidence.map(item => item.code)
+  // 闸门 code 与提醒类别都要算进来：语言问题不拦生成，但用户点「按检查意见改写」时它们仍是可改项，
+  // 少算会让 checkReviseOutcome 的「被点名的问题没减少」护栏失效。
+  const issues = writingIssues({ body, platform })
+  const codes = [...issues.gate.map(item => item.code), ...issues.reminders.map(item => item.category)]
   const max = Number(draftLengthTargetOf({ platform })?.max || 0)
   if (max && String(body || '').trim().length > max) codes.push('platform_length')
   return codes
@@ -369,77 +363,82 @@ function templateSentenceHits(body) {
   return hits
 }
 
-const templateSentenceHints = {
-  triple_list: '把「A、B、C」这种凑数三连换成一件具体的事，需要几个说几个',
-  golden_tail: '删掉段尾那句总结，把最后一个具体事实留着当结尾',
-  generic_ending: '删掉万能收尾，直接停在最后一个事实上',
-  ing_tail: '把「象征着 / 反映了 / 体现了」换成一句直说的事实',
-  avoid_copula: '口语里直接说「是 / 有」，不要用「作为…的角色」「标志着」',
-  fake_rebuttal: '删掉没人提出的反驳和假选项，直接讲你的判断',
-  connector_abuse: '删掉「首先 / 其次 / 此外 / 综上所述」这类书面连接词，用口语顺序讲',
-}
 function lacksConcreteSupport(body) {
   const text = String(body || '')
   return text.length >= 120 && !concreteSignalPatterns.some(pattern => pattern.test(text))
 }
 
+// ── 判据分层 ────────────────────────────────────────────────────────────────
+// 闸门：客观可判定，命中即拦停生成结果。封顶 5 条，加一条必须先删一条。
+// 第 5 条 same_essay 在 scanGeneratedBodies 里判——它要看四篇正文，单篇判不了。
+// 内容层（案例、数字是否真实）不在闸门里：系统没有事实来源，没资格判。
+export const gateCodes = ['format_leak', 'platform_mixup', 'self_intro', 'length_severe']
+
+// 语言层提醒：审美类，不拦停、不触发自动重写、不影响 workflow_status。
+// 原 14 个 code 归并为 7 类，封顶 7 条，加一条必须先合并或删一条；
+// 上限由 server/draft-checks.test.mjs 的一条断言盯着。
+export const reminderCategories = [
+  { category: 'tone_elevation', label: '升华句与金句收束', codes: ['ai_tone_phrase', 'golden_tail', 'ing_tail', 'avoid_copula', 'generic_ending'] },
+  { category: 'template_filler', label: '凑数三连、假反驳、书面连接词', codes: ['triple_list', 'fake_rebuttal', 'connector_abuse'] },
+  { category: 'unsourced_case', label: '没主体的案例、来路不明的数字', codes: ['vague_case', 'case_claim'] },
+  { category: 'no_concrete_support', label: '整篇通用判断、没有落地', codes: ['no_concrete_support'] },
+  { category: 'method_talk', label: '方法骨架 / 分发说明', codes: ['method_talk'] },
+  { category: 'consulting_tone', label: '咨询腔与工程词', codes: ['consulting_tone'] },
+  { category: 'opening_question', label: '开头第一句是问句', codes: ['opening_question'] },
+]
+
+const reminderCategoryOf = Object.fromEntries(reminderCategories.flatMap(group => group.codes.map(code => [code, group.category])))
+
+// 每类只留一份措辞，给「按检查意见改写」当指令；不再按原 code 各写一句，避免同一个问题两种说法。
+const reminderHints = {
+  tone_elevation: '把升华句、段尾金句和万能收尾换成具体的人和事：谁、在什么场合、发生了什么',
+  template_filler: '删掉凑数三连、没人提出的反驳和「首先 / 其次 / 此外」这类书面连接词，用口语顺序讲',
+  unsourced_case: '把没有主体的例子和来路不明的数字换成你自己经历过的具体事，或直接删掉',
+  no_concrete_support: '补一个具体场景、数字或时间，让整篇有一个能落地的地方',
+  method_talk: '把「拆成几块 / 裂变 / 多平台分发」换成一件具体的经历或判断，字数不要因此变少',
+  consulting_tone: '改成跟熟人说话，删掉咨询腔和工程词',
+  opening_question: '第一句直给冲突或结论，不要问句',
+}
+
 function writingIssues(draft) {
-  const evidence = []
-  const suggestions = []
+  const hits = []
+  const add = (code, message, suggestion = '') => hits.push({ code, category: reminderCategoryOf[code] || null, message, suggestion, severity: 'warning' })
+
   const introHits = selfIntroHits(draft?.body)
-  if (introHits.length) {
-    evidence.push(evidenceItem('self_intro', `正文出现自我介绍或引导关注：${introHits.join('、')}`))
-    suggestions.push('删掉自我介绍与引导关注，改成直给结论的开头')
-  }
+  if (introHits.length) add('self_intro', `正文出现自我介绍或引导关注：${introHits.join('、')}`, '删掉自我介绍与引导关注，改成直给结论的开头')
   const leakHits = formatLeakHits(draft?.body)
-  if (leakHits.length) {
-    evidence.push(evidenceItem('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`))
-    suggestions.push('删掉结构说明、占位符与其他平台建议，只留给读者看的正文')
-  }
-    const aiToneList = aiToneHits(draft?.body)
-    if (aiToneList.length) {
-      evidence.push(evidenceItem('ai_tone_phrase', `正文出现升华式句式：${aiToneList.join('、')}`))
-      suggestions.push(checkRewriteHints.ai_tone_phrase)
-    }
-    const vagueList = vagueCaseHits(draft?.body)
-    if (vagueList.length) {
-      evidence.push(evidenceItem('vague_case', `正文出现没有主体的案例：${vagueList.join('、')}`))
-      suggestions.push('不要用「某某人」举例，换成你自己经历过的具体人、事、数字，或删掉这个例子')
-    }
-    if (lacksConcreteSupport(draft?.body)) {
-      evidence.push(evidenceItem('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断'))
-      suggestions.push('补一个具体场景或数字，哪怕是「上周三改了三遍选题」这种小事')
-    }
-    for (const [code, hit] of templateSentenceHits(draft?.body)) {
-      evidence.push(evidenceItem(code, `正文出现模板句：${hit}`))
-      suggestions.push(templateSentenceHints[code])
-    }
-    const mixupHits = platformMixupHits(draft?.body, draft?.platform)
-    if (mixupHits.length) {
-      evidence.push(evidenceItem('platform_mixup', `正文提到别的平台：${mixupHits.join('、')}`))
-      suggestions.push('把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
-    }
-    const methodHits = methodTalkHits(draft?.body)
-    if (methodHits.length) {
-      evidence.push(evidenceItem('method_talk', `正文在讲方法或分发骨架：${methodHits.join('、')}`))
-      suggestions.push(checkRewriteHints.method_talk)
-    }
+  if (leakHits.length) add('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`, '删掉结构说明、占位符与其他平台建议，只留给读者看的正文')
+  const aiToneList = aiToneHits(draft?.body)
+  if (aiToneList.length) add('ai_tone_phrase', `正文出现升华式句式：${aiToneList.join('、')}`)
+  const vagueList = vagueCaseHits(draft?.body)
+  if (vagueList.length) add('vague_case', `正文出现没有主体的案例：${vagueList.join('、')}`)
+  if (lacksConcreteSupport(draft?.body)) add('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断')
+  for (const [code, hit] of templateSentenceHits(draft?.body)) add(code, `正文出现模板句：${hit}`)
+  const mixupHits = platformMixupHits(draft?.body, draft?.platform)
+  if (mixupHits.length) add('platform_mixup', `正文提到别的平台：${mixupHits.join('、')}`, '把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
+  const methodHits = methodTalkHits(draft?.body)
+  if (methodHits.length) add('method_talk', `正文在讲方法或分发骨架：${methodHits.join('、')}`)
   const caseHits = caseClaimHits(draft?.body)
-  if (caseHits.length) {
-    evidence.push(evidenceItem('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`))
-    suggestions.push('确认案例与数字是否真实；不是真实经历就改成通用判断，或补一条真实素材')
-  }
+  if (caseHits.length) add('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`)
   const toneHits = consultingToneWords.filter(word => String(draft?.body || '').includes(word)).slice(0, 6)
-  if (toneHits.length) {
-    evidence.push(evidenceItem('consulting_tone', `正文出现咨询腔或工程词：${toneHits.join('、')}`))
-    suggestions.push('改成跟熟人说话的口吻，或先用「去 AI 感改写」再人工过一遍')
-  }
+  if (toneHits.length) add('consulting_tone', `正文出现咨询腔或工程词：${toneHits.join('、')}`)
   const opening = openingSentence(draft?.body)
-  if (opening && (opening.endsWith('？') || opening.endsWith('?'))) {
-    evidence.push(evidenceItem('opening_question', `开头第一句是问句：${opening.length > 26 ? `${opening.slice(0, 26)}…` : opening}`))
-    suggestions.push('把结论提到第一句，或点「开头句」槽位换一个开头范式')
-  }
-  return { evidence, suggestions }
+  if (opening && (opening.endsWith('？') || opening.endsWith('?'))) add('opening_question', `开头第一句是问句：${opening.length > 26 ? `${opening.slice(0, 26)}…` : opening}`)
+  // 字数严重不足：低于目标下限的六成。没有下限的目标不判。
+  const target = draftLengthTargetOf(draft)
+  const min = Number(target?.min || 0)
+  const bodyLength = String(draft?.body || '').trim().length
+  if (min && bodyLength && bodyLength < Math.round(min * 0.6)) add('length_severe', `正文只有 ${bodyLength} 字，${draft?.platform || ''}目标下限 ${min} 字，不到六成`, `把正文补到 ${draftLengthRangeFrom(target)} 字，保留已有判断`)
+
+  const gate = hits.filter(item => gateCodes.includes(item.code))
+  const reminders = reminderCategories
+    .map(group => {
+      const items = hits.filter(item => item.category === group.category)
+      if (!items.length) return null
+      return { category: group.category, label: group.label, codes: items.map(item => item.code), message: items.map(item => item.message).join('；'), hint: reminderHints[group.category] }
+    })
+    .filter(Boolean)
+  return { hits, gate, reminders, suggestions: gate.map(item => item.suggestion).filter(Boolean) }
 }
 
 function shingles(text, n = 3) {
@@ -491,21 +490,38 @@ function sameEssayHits(bodies) {
   return hits
 }
 
+// 生成阶段的拦停只看闸门：闸门 5 类（这里 4 类，same_essay 要看四篇）+ 四平台同一篇。
+// 语言层命中（审美）不拦停，进 reminders 等用户点「检查」或「重写」时再说。
 export function scanGeneratedBody(body, platform) {
-  const evidence = writingIssues({ body, platform }).evidence
-  return { failed: evidence.length > 0, evidence, summary: evidence.map(item => item.message).join('；') }
+  const issues = writingIssues({ body, platform })
+  return {
+    failed: issues.gate.length > 0,
+    gate: issues.gate,
+    reminders: issues.reminders,
+    // evidence 是全部命中（含语言层），定点替换要按它找可改的句子。
+    evidence: issues.hits,
+    summary: issues.gate.map(item => item.message).join('；'),
+  }
 }
 
 export function scanGeneratedBodies(bodies) {
   const issues = {}
-  for (const platform of draftPlatforms) issues[platform] = writingIssues({ body: bodies?.[platform], platform }).evidence
+  const reminders = {}
+  for (const platform of draftPlatforms) {
+    const result = writingIssues({ body: bodies?.[platform], platform })
+    issues[platform] = result.hits
+    reminders[platform] = result.reminders
+  }
   const same_essay = sameEssayHits(bodies)
-  const failed = same_essay.length > 0 || Object.values(issues).some(list => list.length > 0)
+  const gateHits = draftPlatforms.flatMap(platform => (issues[platform] || [])
+    .filter(item => gateCodes.includes(item.code))
+    .map(item => `${platform}：${item.message}`))
+  const failed = same_essay.length > 0 || gateHits.length > 0
   const summary = [
     ...same_essay.map(item => `四平台同一篇（${item.a}≈${item.b}）`),
-    ...draftPlatforms.flatMap(platform => (issues[platform] || []).map(item => `${platform}：${item.message}`)),
+    ...gateHits,
   ].slice(0, 8).join('；')
-  return { failed, issues, same_essay, summary }
+  return { failed, issues, reminders, same_essay, summary }
 }
 
 export { qualityKeys }
