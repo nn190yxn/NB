@@ -86,11 +86,13 @@ export function draftLengthRangeFrom(target) {
   if (!target) return ''
   return target.min ? `${target.min}-${target.max}` : `不超过 ${target.max}`
 }
+export function draftLengthTargetFor(platform, format) {
+  if (format && draftVideoFormats[format] && draftVideoPlatforms.includes(platform)) return draftVideoFormats[format].length
+  return draftLengthTargets[platform]
+}
+
 export function draftLengthRange(platform, format) {
-  if (format && draftVideoFormats[format] && draftVideoPlatforms.includes(platform)) {
-    return draftLengthRangeFrom(draftVideoFormats[format].length)
-  }
-  return draftLengthRangeFrom(draftLengthTargets[platform])
+  return draftLengthRangeFrom(draftLengthTargetFor(platform, format))
 }
 export function draftLengthTargetOf(draft) {
   const format = draftFormatOf(draft)

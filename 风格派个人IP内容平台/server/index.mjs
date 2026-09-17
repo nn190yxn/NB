@@ -16,7 +16,7 @@ import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
 import { buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody } from './draft-writing.mjs'
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
-import { checkPersona, checkQuality, checkPublishChecklist, draftCheckRewriteNote, scanGeneratedBodies, scanGeneratedBody } from './draft-checks.mjs'
+import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, draftCheckRewriteNote, scanGeneratedBodies, scanGeneratedBody } from './draft-checks.mjs'
 import { approveDraftRecord, defaultApproval, revokeDraftRecord, validateApprovalReadiness } from './draft-approval.mjs'
 
 const port = Number(process.env.PORT || 3001)
@@ -1427,16 +1427,24 @@ const server = createServer(async (request, response) => {
         ])
         let nextBody = parseReviseBody(result.content)
         let scan = scanGeneratedBody(nextBody, draft.platform)
+        // 模型常把「按意见改」做成「删一遍」：只跑写作验收抓不住这件事，所以再比一次原稿。
+        const outcomeOf = body => checkReviseOutcome({ before: draft.body, after: body, platform: draft.platform, format, note: extraNote, requireImprove: fromChecks })
+        let outcome = outcomeOf(nextBody)
         let rewritten = false
-        if (scan.failed) {
+        if (scan.failed || !outcome.ok) {
           rewritten = true
+          const reasons = [scan.failed ? scan.summary : '', ...outcome.failures].filter(Boolean).join('；')
           const retry = await callLlmWithFallback(configs, [
-            { role: 'system', content: draftPlatformRevisePrompt(draft.platform, format, { fromChecks }) + '\n上一稿没过验收：' + scan.summary },
-            { role: 'user', content: draftReviseUserMessage({ title: draft.title, body: draft.body, note, fromChecks, previous: nextBody, issues: scan.summary }) },
+            { role: 'system', content: draftPlatformRevisePrompt(draft.platform, format, { fromChecks }) + '\n上一稿没过验收：' + reasons },
+            { role: 'user', content: draftReviseUserMessage({ title: draft.title, body: draft.body, note, fromChecks, previous: nextBody, issues: reasons }) },
           ])
           nextBody = parseReviseBody(retry.content)
           scan = scanGeneratedBody(nextBody, draft.platform)
-          if (scan.failed) return send(response, 502, { code: 'GENERATION_GATE_FAILED', error: `这一条没过写作验收：${scan.summary}。未改库，请重试。`, retryable: true })
+          outcome = outcomeOf(nextBody)
+          if (scan.failed || !outcome.ok) {
+            const finalReasons = [scan.failed ? scan.summary : '', ...outcome.failures].filter(Boolean).join('；')
+            return send(response, 502, { code: 'REVISE_NOT_IMPROVED', error: `这一条没改成：${finalReasons}。未改库。可以再试一次，或在「修改意见」里写清要保留哪几句。`, retryable: true })
+          }
         }
         const now = new Date().toISOString()
         draft.history ||= []

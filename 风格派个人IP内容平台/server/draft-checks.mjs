@@ -1,7 +1,7 @@
 import { prohibitedHits } from './redfox.mjs'
 import { validateSourceRefs } from './validation.mjs'
 import { openingReadiness } from './draft-workflow.mjs'
-import { consultingToneWords, draftFormatOf, draftLengthRangeFrom, draftLengthTargetOf, draftPlatforms } from './draft-writing.mjs'
+import { consultingToneWords, draftFormatOf, draftLengthRangeFrom, draftLengthTargetFor, draftLengthTargetOf, draftPlatforms } from './draft-writing.mjs'
 
 const riskWordHits = value => prohibitedHits(value).map(item => item.word)
 const qualityKeys = ['opening_clarity', 'audience_fit', 'core_point', 'evidence', 'structure_and_risk']
@@ -205,6 +205,50 @@ export function draftCheckRewriteNote(draft) {
     }
   }
   return [...new Set(hints)].join('；')
+}
+
+// 「按意见改写」的结果护栏。
+//
+// 实测过的失败形态不是改错，而是把「按意见改」做成「删一遗」：字数砍一半、被点名的问题一个没少，
+// 但提示词、写作验收、检查栏都看不见这件事（验收只看自介/编客户/咨询腔/格式，没有长度、也不和原稿比）。
+// 所以这里只问两件能算清的事：有没有越改越短、被点名的问题有没有减少。文笔好坏不在这里判断。
+const shorterRequestPattern = /再短|更短|短一点|短一些|压短|压到|压至|压缩|精简|缩减/
+
+export function rewriteAsksForShorter(note) {
+  return shorterRequestPattern.test(String(note || ''))
+}
+
+// 改正文能管的问题：与 draftCheckRewriteNote 可改的范围同口径，加上超平台上限。
+// 开头句槽位、来源引用、档案短词不在此列——那几项改写改不了，要用户自己点。
+function actionableIssueCodes({ body, platform }) {
+  const codes = writingIssues({ body, platform }).evidence.map(item => item.code)
+  const max = Number(draftLengthTargetOf({ platform })?.max || 0)
+  if (max && String(body || '').trim().length > max) codes.push('platform_length')
+  return codes
+}
+
+export function checkReviseOutcome({ before, after, platform, format = '', note = '', requireImprove = false } = {}) {
+  const failures = []
+  const beforeText = String(before || '')
+  const afterText = String(after || '')
+  const target = draftLengthTargetFor(platform, format) || draftLengthTargetOf({ platform })
+  const max = Number(target?.max || 0)
+  const min = Number(target?.min || 0)
+  // 用户自己要求变短（「再短一点」「压到 200 字」）时不设下限，否则就是不让他把稿子改短。
+  if (!rewriteAsksForShorter(note)) {
+    let floor = Math.round(beforeText.length * 0.85)
+    if (max) floor = Math.min(floor, max)
+    if (min) floor = Math.max(floor, Math.min(min, beforeText.length))
+    if (afterText.length < floor) failures.push(`越改越短：原稿 ${beforeText.length} 字，新稿 ${afterText.length} 字，不得少于 ${floor} 字`)
+  }
+  if (requireImprove) {
+    const beforeCodes = actionableIssueCodes({ body: beforeText, platform })
+    if (beforeCodes.length) {
+      const afterCodes = actionableIssueCodes({ body: afterText, platform })
+      if (afterCodes.length >= beforeCodes.length) failures.push(`被点名的问题没减少：改写前 ${beforeCodes.length} 处（${beforeCodes.join('、')}），改写后 ${afterCodes.length} 处（${afterCodes.join('、')}）`)
+    }
+  }
+  return { ok: failures.length === 0, failures }
 }
 
 // 生成入库前的硬门：提示词拦不住的那几条。不复用 checkQuality——那边会因还没选开头句、还没补来源直接 blocked。

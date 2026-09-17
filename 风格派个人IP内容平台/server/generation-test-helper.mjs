@@ -24,7 +24,13 @@ export async function startGenerationMock({ adaptBody } = {}) {
     })
     if (system.includes('只重写这一条')) {
       const fromLine = last.match(/^必须按修改意见改：(.+)$/m)
-      return reply(`按意见改写：${fromLine?.[1] || '按检查意见改'}。点赞会撒谎，询盘不会。`)
+      const note = fromLine?.[1] || '按检查意见改'
+      // 真实改写会保留原有判断，只动该动的地方。假模型以前无论原稿多长都回一句二十字的话，
+      // 于是「越改越短」这种失败形态在测试里永远看不到。现在按原稿回写，长度基本不变。
+      const current = String(last.match(/当前正文：\n([\s\S]*?)(?=\n上一稿(?:没过验收)?：|$)/)?.[1] || '').trim()
+      if (mode === 'shrink_revise') return reply('点赞会撒谎，询盘不会。')
+      if (!current) return reply(`按意见改写：${note}。点赞会撒谑，询盘不会。`)
+      return reply(`按意见改写：${note}。\n${current.replace(/？/g, '。')}`)
     }
     if (system.includes('没过验收')) {
       if (mode === 'sermon_stuck') return reply(JSON.stringify(sermonBodies))
