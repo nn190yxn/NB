@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
-import { normalizeMaterialFormat, parseMaterialContent, profileGaps, validateDraftUpdate, validRatios, validateMaterialInput, validateSourceRefs } from './validation.mjs'
+import { materialTrustOf, normalizeMaterialFormat, parseMaterialContent, profileGaps, validateDraftUpdate, validRatios, validateMaterialInput, validateSourceRefs } from './validation.mjs'
 import { createRedFoxAdapter, demoHotSearch, demoSearchWork, demoSimilarAccounts, demoTrending, prohibitedHits, prohibitedWordlist } from './redfox.mjs'
 import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterministic } from './growth.mjs'
 import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCollections, saveMysqlState, saveUserDocs, collectionNames, userDocNames } from './mysql.mjs'
@@ -582,7 +582,7 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/materials' && request.method === 'GET') {
       const params = url.searchParams
       const hasQuery = ['q', 'format', 'status', 'review_status', 'sort', 'page', 'kind', 'kind_counts'].some(key => params.get(key))
-      if (!hasQuery) return send(response, 200, owned('materials', request))
+      if (!hasQuery) return send(response, 200, owned('materials', request).map(item => ({ ...item, material_trust: materialTrustOf(item) })))
       if (params.get('kind_counts')) {
         const counts = { article: 0, quote: 0, hotspot: 0, insight: 0, experience: 0 }
         for (const item of owned('materials', request)) counts[item.material_kind || 'article'] = (counts[item.material_kind || 'article'] || 0) + 1
@@ -603,6 +603,8 @@ const server = createServer(async (request, response) => {
       if (reviewStatus) items = items.filter(item => item.review_status === reviewStatus)
       if (kind) items = items.filter(item => (item.material_kind || 'article') === kind)
       items = [...items].sort((a, b) => sort === 'name' ? String(a.name).localeCompare(String(b.name), 'zh') : String(b.imported_at || b.created_at || '').localeCompare(String(a.imported_at || a.created_at || '')))
+      // 历史素材没有 material_trust 字段，读的时候补齐，缺省 verified。
+      items = items.map(item => ({ ...item, material_trust: materialTrustOf(item) }))
       const total = items.length
       const start = (page - 1) * pageSize
       return send(response, 200, { items: items.slice(start, start + pageSize), total, page, page_size: pageSize })
@@ -620,7 +622,7 @@ const server = createServer(async (request, response) => {
       }
       const duplicate = originSource ? state.materials.find(item => item.owner_id === userId(request) && !item.deleted_at && item.origin_source_id === originSource.id && item.origin_text === text) : null
       if (duplicate) return send(response, 200, { ...duplicate, duplicate: true })
-      const material = { id: nextId(state.materials), owner_id: userId(request), name: String(body.name || '').trim() || text.slice(0, 40), source_path: null, format: 'text', content: text, url: null, checksum: createHash('sha256').update(`atom:${originSource ? originSource.id : ''}:${text}`).digest('hex'), status: 'ready', error: null, retry_count: 0, extracted_fields: { segments: [], candidate_topics: [], quotes: [] }, review_status: 'pending', strategy_layer: originSource?.strategy_layer || 'trust', goal_refs: originSource?.goal_refs || [], material_kind: body.kind, source_label: String(body.source_label || '').trim() || null, origin_source_id: originSource ? originSource.id : null, origin_text: text, origin_material_name: originSource ? originSource.name : null, source_refs: originSource ? [sourceRef('material', originSource.id)] : [], imported_at: new Date().toISOString() }
+      const material = { id: nextId(state.materials), owner_id: userId(request), name: String(body.name || '').trim() || text.slice(0, 40), source_path: null, format: 'text', content: text, url: null, checksum: createHash('sha256').update(`atom:${originSource ? originSource.id : ''}:${text}`).digest('hex'), status: 'ready', error: null, retry_count: 0, extracted_fields: { segments: [], candidate_topics: [], quotes: [] }, review_status: 'pending', strategy_layer: originSource?.strategy_layer || 'trust', goal_refs: originSource?.goal_refs || [], material_kind: body.kind, material_trust: 'verified', source_label: String(body.source_label || '').trim() || null, origin_source_id: originSource ? originSource.id : null, origin_text: text, origin_material_name: originSource ? originSource.name : null, source_refs: originSource ? [sourceRef('material', originSource.id)] : [], imported_at: new Date().toISOString() }
       state.materials.push(material)
       if (originSource && (body.kind === 'quote' || body.kind === 'hotspot')) {
         if (!originSource.extracted_fields) originSource.extracted_fields = {}
@@ -656,7 +658,7 @@ const server = createServer(async (request, response) => {
       if (duplicate) return send(response, 200, { ...duplicate, duplicate: true })
       const lines = content.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
       const uploadKinds = ['article', 'quote', 'hotspot', 'insight', 'experience']
-        const material = { id: nextId(state.materials), owner_id: userId(request), name: body.name || '未命名素材', source_path: body.path || null, format, content, url: body.url || null, checksum, status: parsed.status, error: parsed.error, retry_count: 0, extracted_fields: { segments: lines.slice(0, 8), candidate_topics: lines.filter(line => line.length >= 8).slice(0, 5), quotes: lines.filter(line => line.length >= 12).slice(0, 5) }, review_status: 'pending', strategy_layer: body.strategy_layer || 'trust', goal_refs: body.goal_refs || [], material_kind: uploadKinds.includes(body.material_kind) ? body.material_kind : 'article', source_refs: [sourceRef('material', checksum)], imported_at: new Date().toISOString() }
+        const material = { id: nextId(state.materials), owner_id: userId(request), name: body.name || '未命名素材', source_path: body.path || null, format, content, url: body.url || null, checksum, status: parsed.status, error: parsed.error, retry_count: 0, extracted_fields: { segments: lines.slice(0, 8), candidate_topics: lines.filter(line => line.length >= 8).slice(0, 5), quotes: lines.filter(line => line.length >= 12).slice(0, 5) }, review_status: 'pending', strategy_layer: body.strategy_layer || 'trust', goal_refs: body.goal_refs || [], material_kind: uploadKinds.includes(body.material_kind) ? body.material_kind : 'article', material_trust: 'verified', source_refs: [sourceRef('material', checksum)], imported_at: new Date().toISOString() }
       state.materials.push(material)
        await saveState('materials')
       return send(response, 201, material)
@@ -1079,7 +1081,7 @@ const server = createServer(async (request, response) => {
       return send(response, 200, { added: items.length, items: owned('research', request) })
     }
     const researchCollectMatch = url.pathname.match(/^\/api\/research\/(\d+)\/collect$/)
-    if (researchCollectMatch && request.method === 'POST') { const item = owned('research', request).find(existing => existing.id === Number(researchCollectMatch[1])); if (!item) return send(response, 404, { error: '研究条目不存在' }); const existing = owned('materials', request).find(material => material.source_type === 'research' && material.source_id === item.id && !material.deleted_at); if (existing) return send(response, 200, { ...existing, duplicate: true }); const material = { id: nextId(state.materials), owner_id: userId(request), name: item.title, material_kind: 'hotspot', source_type: 'research', source_id: item.id, source_refs: [sourceRef('research', item.id)], url: item.url || null, content: item.title, status: 'ready', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }; state.materials.push(material); item.collected = true; await saveState('materials', 'research'); return send(response, 201, material) }
+    if (researchCollectMatch && request.method === 'POST') { const item = owned('research', request).find(existing => existing.id === Number(researchCollectMatch[1])); if (!item) return send(response, 404, { error: '研究条目不存在' }); const existing = owned('materials', request).find(material => material.source_type === 'research' && material.source_id === item.id && !material.deleted_at); if (existing) return send(response, 200, { ...existing, duplicate: true }); const material = { id: nextId(state.materials), owner_id: userId(request), name: item.title, material_kind: 'hotspot', material_trust: 'sourced', source_type: 'research', source_id: item.id, source_refs: [sourceRef('research', item.id)], url: item.url || null, content: item.title, status: 'ready', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }; state.materials.push(material); item.collected = true; await saveState('materials', 'research'); return send(response, 201, material) }
     if (url.pathname === '/api/research/similar' && request.method === 'POST') {
       const body = await readJson(request)
       const account = String(body.account || '').trim()

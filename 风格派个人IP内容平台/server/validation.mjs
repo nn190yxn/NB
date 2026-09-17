@@ -59,6 +59,11 @@ export function profileGaps(profile) {
 
 export const factCheckStatuses = new Set(['needs_review', 'verified', 'rejected'])
 
+// 素材可信度三档：verified 是自己确认过的（手动新建 / 上传）；sourced 是从外部采来、应带来源链接的（火狐采集）；
+// derived 是模型生成的，未经核实。历史素材没有这个字段，读的时候按 verified 补齐。
+export const materialTrustLevels = new Set(['verified', 'sourced', 'derived'])
+export const materialTrustOf = item => materialTrustLevels.has(item?.material_trust) ? item.material_trust : 'verified'
+
 export function validateDraftUpdate(body, current) {
   if (body.fact_check_status !== undefined && !factCheckStatuses.has(body.fact_check_status)) return '不支持的事实核验状态'
   if (body.status === 'published' && (body.fact_check_status || current.fact_check_status) !== 'verified') return '发布前必须完成事实核验'
