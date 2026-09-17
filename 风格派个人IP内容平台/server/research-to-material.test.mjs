@@ -71,5 +71,12 @@ test('研究条目转素材：保留来源、重复转换不新增、演示数�
   assert.equal(searched.status, 200)
   assert.equal((await list('/api/materials')).length, materialsBeforeSearch, '搜索结果不作为素材')
 
-  // 演示数据（source: 'demo'）当前仍可转换，还没有拦——见任务清单 5.2 的待决事项。
+  // 演示数据可以转，但不得冒充真实来源：落 derived（未经核实），不进 sourced。
+  const demo = (await list('/api/research')).filter(item => item.source === 'demo')
+  assert.ok(demo.length, '演示数据要带 demo 标记')
+  const convertedDemo = await post(`/api/research/${demo[0].id}/collect`, {})
+  assert.equal(convertedDemo.status, 201)
+  const demoMaterial = await convertedDemo.json()
+  assert.notEqual(demoMaterial.material_trust, 'sourced', '演示数据不得被当作真实来源')
+  assert.equal(demoMaterial.material_trust, 'derived')
 })
