@@ -70,3 +70,38 @@ test('手动上传与手动新建默认 verified，客户端不能自封可信�
   assert.equal(paged.items.length, 3)
   assert.ok(paged.items.every(item => item.material_trust === 'verified'), '分页列表也要带可信度')
 })
+
+test('可信度筛选、计数与来源缺失', async t => {
+  const server = startServer()
+  t.after(() => server.kill())
+  await waitReady()
+
+  // 手动上传走 verified。
+  await post('/api/materials/import', { name: '访谈记录', content: '他说，先把一条讲透。' })
+
+  // 火狐采集走 sourced：热搜收录进研究库，再从研究条目转素材。
+  const collected = await post('/api/research/hot-search/collect', { platform: '小红书', entries: [{ title: '追光小牛上了热搜', url: 'https://example.com/hot/1', heat: 88 }, { title: '一条没有链接的热点' }] })
+  assert.equal(collected.status, 200)
+  const research = (await collected.json()).items
+  assert.equal(research.length, 2)
+  for (const entry of research) {
+    const converted = await post(`/api/research/${entry.id}/collect`, {})
+    assert.equal(converted.status, 201)
+    assert.equal((await converted.json()).material_trust, 'sourced', '火狐采集默认 sourced')
+  }
+
+  const counts = await (await fetch(`${baseUrl}/api/materials?kind_counts=1`, { headers })).json()
+  assert.equal(counts.trust_counts.verified, 1)
+  assert.equal(counts.trust_counts.sourced, 2)
+  assert.equal(counts.trust_counts.derived, 0)
+
+  const sourced = await (await fetch(`${baseUrl}/api/materials?trust=sourced&page=1`, { headers })).json()
+  assert.equal(sourced.total, 2)
+  assert.ok(sourced.items.every(item => item.material_trust === 'sourced'))
+  assert.deepEqual(sourced.items.map(item => item.url).filter(Boolean), ['https://example.com/hot/1'], '采集素材要带来源链接')
+  assert.equal(sourced.items.filter(item => !item.url).length, 1, '缺来源链接的那条要能被前端识别出来标「来源缺失」')
+
+  const verified = await (await fetch(`${baseUrl}/api/materials?trust=verified&page=1`, { headers })).json()
+  assert.equal(verified.total, 1)
+  assert.equal(verified.items[0].name, '访谈记录')
+})

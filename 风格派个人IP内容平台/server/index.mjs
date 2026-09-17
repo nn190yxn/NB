@@ -581,18 +581,24 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/api/materials' && request.method === 'GET') {
       const params = url.searchParams
-      const hasQuery = ['q', 'format', 'status', 'review_status', 'sort', 'page', 'kind', 'kind_counts'].some(key => params.get(key))
+      const hasQuery = ['q', 'format', 'status', 'review_status', 'sort', 'page', 'kind', 'trust', 'kind_counts'].some(key => params.get(key))
       if (!hasQuery) return send(response, 200, owned('materials', request).map(item => ({ ...item, material_trust: materialTrustOf(item) })))
       if (params.get('kind_counts')) {
         const counts = { article: 0, quote: 0, hotspot: 0, insight: 0, experience: 0 }
-        for (const item of owned('materials', request)) counts[item.material_kind || 'article'] = (counts[item.material_kind || 'article'] || 0) + 1
-        return send(response, 200, { kind_counts: counts })
+        const trustCounts = { verified: 0, sourced: 0, derived: 0 }
+        for (const item of owned('materials', request)) {
+          counts[item.material_kind || 'article'] = (counts[item.material_kind || 'article'] || 0) + 1
+          const trust = materialTrustOf(item)
+          trustCounts[trust] = (trustCounts[trust] || 0) + 1
+        }
+        return send(response, 200, { kind_counts: counts, trust_counts: trustCounts })
       }
       const query = (params.get('q') || '').trim().toLowerCase()
       const format = params.get('format') || ''
       const status = params.get('status') || ''
       const reviewStatus = params.get('review_status') || ''
       const kind = params.get('kind') || ''
+      const trust = params.get('trust') || ''
       const sort = ['latest', 'name'].includes(params.get('sort')) ? params.get('sort') : 'latest'
       const page = Math.max(1, Number(params.get('page')) || 1)
       const pageSize = 50
@@ -602,6 +608,8 @@ const server = createServer(async (request, response) => {
       if (status) items = items.filter(item => item.status === status)
       if (reviewStatus) items = items.filter(item => item.review_status === reviewStatus)
       if (kind) items = items.filter(item => (item.material_kind || 'article') === kind)
+      // 历史素材没有 material_trust 字段，筛的是读出来的缺省值 verified，和列表里展示的一致。
+      if (trust) items = items.filter(item => materialTrustOf(item) === trust)
       items = [...items].sort((a, b) => sort === 'name' ? String(a.name).localeCompare(String(b.name), 'zh') : String(b.imported_at || b.created_at || '').localeCompare(String(a.imported_at || a.created_at || '')))
       // 历史素材没有 material_trust 字段，读的时候补齐，缺省 verified。
       items = items.map(item => ({ ...item, material_trust: materialTrustOf(item) }))
