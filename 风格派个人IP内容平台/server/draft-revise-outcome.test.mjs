@@ -79,7 +79,7 @@ test('按检查意见改写，模型只压短时拒绝入库', async t => {
   assert.ok(douyin)
 
   // 造一条又长又带问句开头的抖音草稿，正好是「按检查意见改写」要处理的形态。
-  const overCap = `拆完爆款不会用？${'口'.repeat(360)}`
+  const overCap = `拆完爆款不会用？上周三我翻了后台，${'口'.repeat(360)}`
   const saved = await fetch(`${baseUrl}/api/drafts/${douyin.id}`, { method: 'PUT', headers, body: JSON.stringify({ body: overCap, version: douyin.version }) })
   assert.equal(saved.status, 200)
   const target = await saved.json()

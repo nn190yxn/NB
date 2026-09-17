@@ -265,7 +265,7 @@ test('生成验收扫咨询腔、编客户、设问开头和四平台同一篇',
     小红书: '昨天改选题，发现发完就等数据的人最多。先看这条解决哪个场面。你现在看的是点赞还是询盘。'.repeat(3),
     抖音: '点赞会撒谎，询盘不会。别再为流量写，为成交写。问怎么买才算有效。'.repeat(3),
     视频号: '泛泛而谈找路人。讲具体场面才找得着人。私域不是朋友圈展示柜。'.repeat(3),
-    公众号: '把内容当作品会自嗨。把内容当一次实验，看有没有人来问下一步。没有就换角度，有就放大。'.repeat(3),
+    公众号: '上周我把内容当了一次实验，看有没有人来问下一步。没有就换角度，有就放大。'.repeat(3),
   })
   assert.equal(clean.failed, false)
 
@@ -290,4 +290,21 @@ test('正文出现方法骨架或其他平台名都算问题', () => {
   const clean = checkQuality({ ...baseDraft, platform: '抖音', body: '这条只在抖音发。改选题分三步走：先看数据，再找场面，最后给判断。' }, {})
   assert.equal(clean.evidence.some(item => item.code === 'platform_mixup'), false)
   assert.equal(clean.evidence.some(item => item.code === 'method_talk'), false)
+})
+
+test('去 AI 化判据拦住升华句、无主体案例和全篇通用判断', () => {
+  const vague = '第一，踩过的坑。第二，反常识的判断。第三，具体案例。素材原子化，不是让你变成流水线工人，而是让你从重复劳动中解放出来。某某人每天只做一件小事，五年后复利极高。真正的长期主义其实是高频迭代。把内容当作品会自嗨，当成能力展示会没人看。讲得越清楚转发的人越多，观众不欠你注意力。'
+  const quality = checkQuality({ ...baseDraft, platform: '抖音', body: vague }, {})
+  for (const code of ['ai_tone_phrase', 'vague_case', 'no_concrete_support']) {
+    assert.ok(quality.evidence.some(item => item.code === code), `质量门缺 ${code}`)
+  }
+  const gate = scanGeneratedBodies({ 抖音: vague })
+  assert.ok(gate.issues.抖音.some(item => item.code === 'ai_tone_phrase'))
+  assert.ok(gate.issues.抖音.some(item => item.code === 'vague_case'))
+  assert.ok(gate.issues.抖音.some(item => item.code === 'no_concrete_support'))
+
+  const concrete = '上周三改选题，我把最近一条数据好的稿子摊开看，评论区问价的人里同行不少。所以这一拍我直接讲报价怎么算，不讲怎么涨粉。'
+  const clean = checkQuality({ ...baseDraft, platform: '抖音', body: concrete }, {})
+  const codes = ['ai_tone_phrase', 'vague_case', 'no_concrete_support']
+  assert.equal(clean.evidence.some(item => codes.includes(item.code)), false)
 })

@@ -200,7 +200,7 @@ test('只重写一个平台，带修改意见，不动其他平台', async t => 
   const missingChecks = await fetch(`${baseUrl}/api/drafts/${douyin.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ from_checks: true, version: midDraft.version }) })
   assert.equal(missingChecks.status, 422)
 
-  const saved = await fetch(`${baseUrl}/api/drafts/${douyin.id}`, { method: 'PUT', headers, body: JSON.stringify({ body: `拆完爆款不会用？${'口'.repeat(360)}`, version: midDraft.version }) })
+  const saved = await fetch(`${baseUrl}/api/drafts/${douyin.id}`, { method: 'PUT', headers, body: JSON.stringify({ body: `拆完爆款不会用？上周三我翻了后台，${'口'.repeat(360)}`, version: midDraft.version }) })
   assert.equal(saved.status, 200)
   await fetch(`${baseUrl}/api/drafts/${douyin.id}/checks/persona`, { method: 'POST', headers, body: '{}' })
   const qualityRes = await fetch(`${baseUrl}/api/drafts/${douyin.id}/checks/quality`, { method: 'POST', headers, body: '{}' })

@@ -145,9 +145,14 @@ export function checkQuality(draft, profile = {}) {
   if (pointScore < 100) { evidence.push(evidenceItem('point_weak', '核心观点或内容支柱不够明确')); suggestions.push(overlongValue ? shortValueHint() : '用一句话写出你的判断，再用过程或案例支撑') }
   // 模型并不遵守提示词里的字数要求（实测：提示词写抖音不超 250 字，模型给了 384 字），所以这里做确定性校验。
   const mixupWords = platformMixupHits(draft?.body, draft?.platform)
-suggestions.push('把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
+      suggestions.push('把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
   const methodWords = methodTalkHits(draft?.body)
-suggestions.push('把方法骨架换成一件具体的事或一个具体判断，字数不要因此变少')
+      suggestions.push('把方法骨架换成一件具体的事或一个具体判断，字数不要因此变少')
+  const toneWords = aiToneHits(draft?.body)
+  if (toneWords.length) { evidence.push(evidenceItem('ai_tone_phrase', `正文出现升华式句式：${toneWords.join('、')}`)); suggestions.push('把升华句换成一句具体的话：谁、在什么场合、发生了什么') }
+  const vagueWords = vagueCaseHits(draft?.body)
+  if (vagueWords.length) { evidence.push(evidenceItem('vague_case', `正文出现没有主体的案例：${vagueWords.join('、')}`)); suggestions.push('不要用「某某人」举例，换成具体的人和事') }
+  if (lacksConcreteSupport(draft?.body)) { evidence.push(evidenceItem('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断')); suggestions.push('补一个具体场景或数字') }
   const lengthTarget = draftLengthTargetOf(draft)
   const lengthRange = draftLengthRangeFrom(lengthTarget)
   const bodyLength = String(draft?.body || '').trim().length
@@ -203,8 +208,12 @@ const checkRewriteHints = {
   format_leak: '删掉结构说明和其他平台建议',
   case_claim: '不要编客户和数字，改成通用判断',
   consulting_tone: '改成跟熟人说话，删掉咨询腔和工程词',
-platform_mixup: '把其他平台名和分发说明换成这一条自己的具体内容，不要删掉就完事',
-method_talk: '把「拆成几块 / 裂变 / 多平台分发」换成一件具体的经历或判断，字数不要因此变少',
+  platform_mixup: '把其他平台名和分发说明换成这一条自己的具体内容，不要删掉就完事',
+  ai_tone_phrase: '把「不是A而是B」「真正的X是Y」这类升华句换成具体的人和事，不要只换个说法',
+  vague_case: '把「某某人」这种没有主体的例子换成你自己经历过的具体事，或直接删掉',
+  no_concrete_support: '补一个具体场景、数字或时间，让整篇有一个能落地的地方',
+
+  method_talk: '把「拆成几块 / 裂变 / 多平台分发」换成一件具体的经历或判断，字数不要因此变少',
   opening_question: '第一句直给冲突或结论，不要问句',
 }
 
@@ -278,6 +287,32 @@ export function checkReviseOutcome({ before, after, platform, format = '', note 
 }
 
 // 生成入库前的硬门：提示词拦不住的那几条。不复用 checkQuality——那边会因还没选开头句、还没补来源直接 blocked。
+
+// 去 AI 味：只认能一眼确认的形态，宁可漏也不误伤正常口语。
+const aiTonePatterns = [
+  /不是[^。！？\n]{1,20}而是/,
+  /不仅仅是[^。！？\n]{1,20}(更是|而是)/,
+  /与其说[^。！？\n]{1,20}不如说/,
+  /真正的[^。！？\n]{0,12}是/,
+]
+const vagueCasePatterns = [/某某/, /某人/, /有个人/, /有个朋友/, /有位(朋友|学员|客户|同事)/]
+const concreteSignalPatterns = [/[0-9０-９]/, /我/, /(昨天|今天|上周|上个月|去年|当时|那天|前几天)/, /(客户|学员|同事|评论区|私信|直播|现场|后台|群里)/]
+
+function aiToneHits(body) {
+  const text = String(body || '')
+  return aiTonePatterns.map(pattern => text.match(pattern)?.[0]).filter(Boolean).map(hit => hit.slice(0, 14))
+}
+
+function vagueCaseHits(body) {
+  const text = String(body || '')
+  return vagueCasePatterns.map(pattern => text.match(pattern)?.[0]).filter(Boolean)
+}
+
+function lacksConcreteSupport(body) {
+  const text = String(body || '')
+  return text.length >= 120 && !concreteSignalPatterns.some(pattern => pattern.test(text))
+}
+
 function writingIssues(draft) {
   const evidence = []
   const suggestions = []
@@ -291,15 +326,29 @@ function writingIssues(draft) {
     evidence.push(evidenceItem('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`))
     suggestions.push('删掉结构说明、占位符与其他平台建议，只留给读者看的正文')
   }
-  const mixupHits = platformMixupHits(draft?.body, draft?.platform)
+    const aiToneList = aiToneHits(draft?.body)
+    if (aiToneList.length) {
+      evidence.push(evidenceItem('ai_tone_phrase', `正文出现升华式句式：${aiToneList.join('、')}`))
+      suggestions.push('把升华句换成一句具体的话：谁、在什么场合、发生了什么')
+    }
+    const vagueList = vagueCaseHits(draft?.body)
+    if (vagueList.length) {
+      evidence.push(evidenceItem('vague_case', `正文出现没有主体的案例：${vagueList.join('、')}`))
+      suggestions.push('不要用「某某人」举例，换成你自己经历过的具体人、事、数字，或删掉这个例子')
+    }
+    if (lacksConcreteSupport(draft?.body)) {
+      evidence.push(evidenceItem('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断'))
+      suggestions.push('补一个具体场景或数字，哪怕是「上周三改了三遍选题」这种小事')
+    }
+    const mixupHits = platformMixupHits(draft?.body, draft?.platform)
     if (mixupHits.length) {
       evidence.push(evidenceItem('platform_mixup', `正文提到别的平台：${mixupHits.join('、')}`))
-suggestions.push('把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
+      suggestions.push('把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
     }
     const methodHits = methodTalkHits(draft?.body)
     if (methodHits.length) {
       evidence.push(evidenceItem('method_talk', `正文在讲方法或分发骨架：${methodHits.join('、')}`))
-suggestions.push('把方法骨架换成一件具体的事或一个具体判断，字数不要因此变少')
+      suggestions.push('把方法骨架换成一件具体的事或一个具体判断，字数不要因此变少')
     }
   const caseHits = caseClaimHits(draft?.body)
   if (caseHits.length) {
