@@ -5,12 +5,12 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
-import { testPort } from './test-port.mjs'
+import { testPort, listenLocal } from './test-port.mjs'
 
 const port = testPort(3800, 150)
-const mockPort = port + 500
+let mockUrl = ''
 const baseUrl = `http://127.0.0.1:${port}`
-const mockUrl = `http://127.0.0.1:${mockPort}`
+
 
 const mockRequests = []
 const mockServer = createServer((request, response) => {
@@ -50,7 +50,7 @@ function startServer(extraEnv = {}) {
 }
 
 test('API 中心连通测试与红狐配置透传', async t => {
-  await new Promise(resolve => mockServer.listen(mockPort, '127.0.0.1', resolve))
+  mockUrl = (await listenLocal(mockServer)).baseUrl
   t.after(() => new Promise(resolve => mockServer.close(resolve)))
 
   const server = await startServer()

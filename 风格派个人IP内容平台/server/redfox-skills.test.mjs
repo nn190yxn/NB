@@ -6,13 +6,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
-import { testPort } from './test-port.mjs'
+import { testPort, listenLocal } from './test-port.mjs'
 const llmMock = await startSharedLlmMock()
 
 const port = testPort(3900, 150)
-const mockPort = port + 500
+let mockUrl = ''
 const baseUrl = `http://127.0.0.1:${port}`
-const mockUrl = `http://127.0.0.1:${mockPort}`
+
 const headers = { 'content-type': 'application/json', 'x-user-id': 'skill-user' }
 
 const mockRequests = []
@@ -79,7 +79,7 @@ test('红狐 Skill：无配置时研究走演示数据、合规走本地词库�
 })
 
 test('红狐 Skill：请求头配置走官网真实接口并携带 REDFOX_API_KEY，热搜可入库', async t => {
-  await new Promise(resolve => mockServer.listen(mockPort, '127.0.0.1', resolve))
+  mockUrl = (await listenLocal(mockServer)).baseUrl
   t.after(() => new Promise(resolve => mockServer.close(resolve)))
   const server = await startServer()
   t.after(() => server.kill())
@@ -128,7 +128,7 @@ test('红狐 Skill：请求头配置走官网真实接口并携带 REDFOX_API_KE
 })
 
 test('红狐 Skill：环境变量回退与上游错误处理', async t => {
-  await new Promise(resolve => mockServer.listen(mockPort, '127.0.0.1', resolve))
+  mockUrl = (await listenLocal(mockServer)).baseUrl
   t.after(() => new Promise(resolve => mockServer.close(resolve)))
   const server = await startServer({ REDFOX_API_URL: mockUrl, PROJECT_REDFOX_API_KEY: 'env-fox-key' })
   t.after(() => server.kill())

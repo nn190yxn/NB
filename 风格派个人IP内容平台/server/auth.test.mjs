@@ -8,9 +8,10 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { testPort } from './test-port.mjs'
+import { testPortSequence } from './test-port.mjs'
 
-const port = testPort(3200, 200)
+const nextPort = testPortSequence(3200, 400)
+const port = nextPort()
 const baseUrl = `http://127.0.0.1:${port}`
 const testDataFile = join(mkdtempSync(join(tmpdir(), 'content-ip-test-')), 'data.json')
 writeFileSync(testDataFile, '{}')
@@ -479,7 +480,7 @@ test('session 支持创建、复用和注销', async t => {
 })
 
 test('API 超过配置限额后返回 429 并携带请求追踪 ID', async t => {
-  const serverPort = port + 1
+  const serverPort = nextPort()
   const server = await startServer({ serverPort, extraEnv: { API_RATE_LIMIT_MAX: '1', API_RATE_LIMIT_WINDOW_MS: '60000' } })
   t.after(() => server.kill())
   const first = await fetch(`http://127.0.0.1:${serverPort}/api/profile`)
@@ -492,7 +493,7 @@ test('API 超过配置限额后返回 429 并携带请求追踪 ID', async t => 
 })
 
 test('生产模式默认账号制：未登录拦截、注册、登录与数据隔离', async t => {
-  const productionPort = port + 1000
+  const productionPort = nextPort()
   const server = await startServer({ serverPort: productionPort, nodeEnv: 'production' })
   t.after(() => server.kill())
   const prodBase = `http://127.0.0.1:${productionPort}`
@@ -539,7 +540,7 @@ test('生产模式默认账号制：未登录拦截、注册、登录与数据�
 })
 
 test('production access password gates the session', async t => {
-  const prodPort = 3700 + Math.floor(Math.random() * 200)
+  const prodPort = nextPort()
   const prodBaseUrl = `http://127.0.0.1:${prodPort}`
   const prodDataFile = join(mkdtempSync(join(tmpdir(), 'content-ip-prod-')), 'data.json')
   writeFileSync(prodDataFile, '{}')

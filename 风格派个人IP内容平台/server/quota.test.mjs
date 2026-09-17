@@ -5,12 +5,11 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
-import { testPort } from './test-port.mjs'
+import { testPort, listenLocal } from './test-port.mjs'
 
 const port = testPort(47300, 200)
-const mockPort = port + 400
 const baseUrl = `http://127.0.0.1:${port}`
-const mockUrl = `http://127.0.0.1:${mockPort}`
+let mockUrl = ''
 const headers = { 'content-type': 'application/json', 'x-user-id': 'quota-user' }
 
 const upstreamHits = { redfox: 0, llm: 0 }
@@ -58,7 +57,7 @@ function startServer(extraEnv = {}) {
 }
 
 test('共享额度：默认走共享 Key，超额 429，自有 Key 豁免', async t => {
-  await new Promise(resolve => mockServer.listen(mockPort, '127.0.0.1', resolve))
+  mockUrl = (await listenLocal(mockServer)).baseUrl
   t.after(() => new Promise(resolve => mockServer.close(resolve)))
   const server = await startServer()
   t.after(() => server.kill())
