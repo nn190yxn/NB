@@ -92,6 +92,8 @@ test('素材库按认知角色读写、筛选与计数', async t => {
 
   // 上传的知识点分不出概念还是案例，留空。
   await post('/api/materials/import', { name: '一份知识点', content: '知识的定义与边界，先讲清楚再谈用。', material_kind: 'insight' })
+  // 文章是容器不是认知单元，不该进「待定」列表。
+  await post('/api/materials/import', { name: '一篇文章', content: '正文很长的文章内容，用来确认文章容器不会进待定列表。' })
 
   const counts = await (await fetch(`${baseUrl}/api/materials?kind_counts=1`, { headers })).json()
   assert.equal(counts.unit_type_counts.OPI, 1)
@@ -108,7 +110,11 @@ test('素材库按认知角色读写、筛选与计数', async t => {
   const empty = await (await fetch(`${baseUrl}/api/materials?unit_type=SOL&page=1`, { headers })).json()
   assert.equal(empty.total, 1)
 
+  const pending = await (await fetch(`${baseUrl}/api/materials?unit_type=unset&page=1`, { headers })).json()
+  assert.equal(pending.total, 1, '待定只列真该人工判定的，文章容器不算')
+  assert.equal(pending.items[0].name, '一份知识点')
+
   const listed = await (await fetch(`${baseUrl}/api/materials`, { headers })).json()
-  assert.equal(listed.length, 5)
+  assert.equal(listed.length, 6)
   assert.ok(listed.every(item => 'unit_type' in item), '列表里每一条都要带 unit_type，没有就是 null')
 })

@@ -755,12 +755,15 @@ const materialSourceLabel = (item: MaterialItem) => String(item.source_label || 
 // 句式自带的类型标签就写在末尾括号里（数字冲击开场 / 量化损失…），只用于展示。
 const materialPatternTag = (item: MaterialItem) => (String(item.content || '').match(/（([^（）]{2,12})）\s*$/) || [])[1] || ''
 const materialGroupKey = (item: MaterialItem) => !item.material_kind || item.material_kind === 'article' ? '文章素材' : String(item.name || '').trim() || materialKindLabels[item.material_kind]
-type MaterialItem = { id: number; name: string; format: string; status: string; review_status: string; content?: string; url?: string | null; material_kind?: MaterialKind; material_trust?: string; source_type?: string; source_id?: number | null; source_path?: string | null; device_id?: string | null; research_platform?: string; research_metrics?: { discussions?: number; growth?: number }; origin_source_id?: number | null; origin_text?: string; origin_material_name?: string | null; source_label?: string | null; extracted_fields?: { segments?: string[]; candidate_topics?: string[]; quotes?: string[]; collected?: Partial<Record<'quote' | 'hotspot', string[]>> }; imported_at?: string }
+type MaterialItem = { id: number; name: string; format: string; status: string; review_status: string; content?: string; url?: string | null; material_kind?: MaterialKind; material_trust?: string; unit_type?: string | null; source_type?: string; source_id?: number | null; source_path?: string | null; device_id?: string | null; research_platform?: string; research_metrics?: { discussions?: number; growth?: number }; origin_source_id?: number | null; origin_text?: string; origin_material_name?: string | null; source_label?: string | null; extracted_fields?: { segments?: string[]; candidate_topics?: string[]; quotes?: string[]; collected?: Partial<Record<'quote' | 'hotspot', string[]>> }; imported_at?: string }
 const materialKindLabels: Record<MaterialKind, string> = { article: '文章', quote: '金句', hotspot: '热点', insight: '知识点', experience: '经历' }
 const atomKindKeys: MaterialKind[] = ['quote', 'hotspot', 'insight', 'experience']
 // 可信度三档的标签与筛选行共用一份，列表行和筛选行不会说两套话。
 const materialTrustKeys = ['verified', 'sourced', 'derived']
 const materialTrustLabels: Record<string, string> = { verified: '已确认', sourced: '有来源', derived: '模型生成' }
+// 五类认知角色：装配按角色取料。QST 问题 / CON 概念 / OPI 主张 / CAS 案例 / SOL 方案。
+const materialUnitKeys = ['QST', 'CON', 'OPI', 'CAS', 'SOL']
+const materialUnitLabels: Record<string, string> = { QST: '问题', CON: '概念', OPI: '主张', CAS: '案例', SOL: '方案' }
 type TopicDimension = { score: number; evidence: string[]; suggestions: string[] }
 type TopicItem = { id: number; title: string; rationale: string; content_job: string; strategy_layer: string; workflow_status?: string; decision?: 'do' | 'revise' | 'defer' | null; decision_reason?: string; evaluation?: { score: number; decision: 'do' | 'revise' | 'defer'; dimensions: Record<string, TopicDimension>; evidence: { dimension: string; message: string }[]; suggestions: string[]; evaluated_at: string } | null }
 type DraftHook = { id: string; label: string; text: string; source_refs?: unknown[]; validation: { status: string; evidence: string[]; length: number } }
@@ -1668,6 +1671,8 @@ function MaterialWorkspace() {
   const [kindCounts, setKindCounts] = useState<Record<string, number>>({})
   const [trust, setTrust] = useState('')
   const [trustCounts, setTrustCounts] = useState<Record<string, number>>({})
+  const [unit, setUnit] = useState('')
+  const [unitTypeCounts, setUnitTypeCounts] = useState<Record<string, number>>({})
   const [showAtomForm, setShowAtomForm] = useState(false)
   const [atomKind, setAtomKind] = useState<MaterialKind>('quote')
   const [atomText, setAtomText] = useState('')
@@ -1677,7 +1682,7 @@ function MaterialWorkspace() {
   const [error, setError] = useState('')
 
   const refreshCounts = () => {
-    void apiJson<{ kind_counts: Record<string, number>; trust_counts: Record<string, number> }>('/api/materials?kind_counts=1').then(result => { setKindCounts(result.kind_counts || {}); setTrustCounts(result.trust_counts || {}) }).catch(() => undefined)
+    void apiJson<{ kind_counts: Record<string, number>; trust_counts: Record<string, number>; unit_type_counts: Record<string, number> }>('/api/materials?kind_counts=1').then(result => { setKindCounts(result.kind_counts || {}); setTrustCounts(result.trust_counts || {}); setUnitTypeCounts(result.unit_type_counts || {}) }).catch(() => undefined)
   }
 
   useEffect(() => { refreshCounts() }, [])
@@ -1692,6 +1697,7 @@ function MaterialWorkspace() {
       if (reviewStatus) params.set('review_status', reviewStatus)
       if (kind) params.set('kind', kind)
       if (trust) params.set('trust', trust)
+      if (unit) params.set('unit_type', unit)
       params.set('sort', sort)
       void apiJson<{ items: MaterialItem[]; total: number }>(`/api/materials?${params.toString()}`)
         .then(result => { setMaterials(result.items); setTotal(result.total); setPage(1); setError('') })
@@ -1699,7 +1705,7 @@ function MaterialWorkspace() {
         .finally(() => setLoading(false))
     }, 250)
     return () => clearTimeout(timer)
-  }, [query, format, status, reviewStatus, sort, kind, trust])
+  }, [query, format, status, reviewStatus, sort, kind, trust, unit])
 
   const loadMore = () => {
     const params = new URLSearchParams()
@@ -1708,6 +1714,7 @@ function MaterialWorkspace() {
     if (status) params.set('status', status)
     if (reviewStatus) params.set('review_status', reviewStatus)
     if (trust) params.set('trust', trust)
+    if (unit) params.set('unit_type', unit)
     params.set('sort', sort)
     params.set('page', String(page + 1))
     void apiJson<{ items: MaterialItem[]; total: number }>(`/api/materials?${params.toString()}`)
@@ -1780,6 +1787,12 @@ function MaterialWorkspace() {
       {materialTrustKeys.map(name => <button className={trust === name ? 'chip active' : 'chip'} onClick={() => setTrust(trust === name ? '' : name)} key={name}>{materialTrustLabels[name]}{trustCounts[name] ? ` · ${trustCounts[name]}` : ''}</button>)}
     </div>
     <div className="structure-toolbar-row">
+      <span className="filter-label">角色</span>
+      <button className={unit === '' ? 'chip active' : 'chip'} onClick={() => setUnit('')}>全部</button>
+      {materialUnitKeys.map(name => <button className={unit === name ? 'chip active' : 'chip'} onClick={() => setUnit(unit === name ? '' : name)} key={name}>{materialUnitLabels[name]}{unitTypeCounts[name] ? ` · ${unitTypeCounts[name]}` : ''}</button>)}
+      <button className={unit === 'unset' ? 'chip active' : 'chip'} onClick={() => setUnit(unit === 'unset' ? '' : 'unset')}>待定{unitTypeCounts.unset ? ` · ${unitTypeCounts.unset}` : ''}</button>
+    </div>
+    <div className="structure-toolbar-row">
       <span className="filter-label">格式</span>
       <button className={format === '' ? 'chip active' : 'chip'} onClick={() => setFormat('')}>全部格式</button>
       {materialFormats.map(name => <button className={format === name ? 'chip active' : 'chip'} onClick={() => setFormat(format === name ? '' : name)} key={name}>{name}</button>)}
@@ -1810,7 +1823,7 @@ function MaterialWorkspace() {
         <div>
           <h3>{item.name}</h3>
           {item.content && <p className="material-text" title={item.content}>{item.content}</p>}
-          <p className="material-meta"><span className={`trust-tag trust-${item.material_trust || 'verified'}`}>{materialTrustLabels[item.material_trust || 'verified']}</span>{item.material_trust === 'sourced' && (item.url ? <a href={item.url} target="_blank" rel="noreferrer">来源链接 · </a> : <span className="trust-warning">来源缺失 · </span>)}{materialPatternTag(item) && <span className="pattern-tag">{materialPatternTag(item)}</span>}{materialSourceLabel(item) ? <span className="material-source">来源：{materialSourceLabel(item)} · </span> : item.material_kind && item.material_kind !== 'article' ? <span className="material-source">来源：{item.origin_material_name || '手动创建'} · </span> : null}状态：{item.status} · 核验：{item.review_status}{item.imported_at ? ` · 导入 ${new Date(item.imported_at).toLocaleDateString()}` : ''}</p>
+          <p className="material-meta">{item.unit_type && <span className="unit-tag">{materialUnitLabels[item.unit_type] || item.unit_type}</span>}<span className={`trust-tag trust-${item.material_trust || 'verified'}`}>{materialTrustLabels[item.material_trust || 'verified']}</span>{item.material_trust === 'sourced' && (item.url ? <a href={item.url} target="_blank" rel="noreferrer">来源链接 · </a> : <span className="trust-warning">来源缺失 · </span>)}{materialPatternTag(item) && <span className="pattern-tag">{materialPatternTag(item)}</span>}{materialSourceLabel(item) ? <span className="material-source">来源：{materialSourceLabel(item)} · </span> : item.material_kind && item.material_kind !== 'article' ? <span className="material-source">来源：{item.origin_material_name || '手动创建'} · </span> : null}状态：{item.status} · 核验：{item.review_status}{item.imported_at ? ` · 导入 ${new Date(item.imported_at).toLocaleDateString()}` : ''}</p>
           {expandedId === item.id && <div className="research-detail">
             {item.source_type === 'research' && <><strong>热点来源</strong><small>{item.research_platform || '未知平台'} · 讨论 {item.research_metrics?.discussions || 0} · 增长 {item.research_metrics?.growth || 0}% · 研究记录 #{item.source_id}</small>{item.url && <a href={item.url} target="_blank" rel="noreferrer">打开原链接</a>}</>}
             {item.source_type === 'local_sync' && <><strong>桌面同步来源</strong><small>{item.device_id || '未知设备'} · 相对路径 {item.source_path || '未记录'} · 同步状态 {item.status}</small></>}

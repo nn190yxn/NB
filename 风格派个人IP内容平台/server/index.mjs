@@ -593,7 +593,9 @@ const server = createServer(async (request, response) => {
           const trust = materialTrustOf(item)
           trustCounts[trust] = (trustCounts[trust] || 0) + 1
           const unit = unitTypeOf(item)
-          unitCounts[unit || 'unset'] = (unitCounts[unit || 'unset'] || 0) + 1
+          if (unit) unitCounts[unit] = (unitCounts[unit] || 0) + 1
+          // article 是容器不是认知单元，不进「待定」——否则待办列表永远是满的。
+          else if (String(item.material_kind || 'article') !== 'article') unitCounts.unset = (unitCounts.unset || 0) + 1
         }
         return send(response, 200, { kind_counts: counts, trust_counts: trustCounts, unit_type_counts: unitCounts })
       }
@@ -615,7 +617,9 @@ const server = createServer(async (request, response) => {
       if (kind) items = items.filter(item => (item.material_kind || 'article') === kind)
       // 历史素材没有 material_trust 字段，筛的是读出来的缺省值 verified，和列表里展示的一致。
       if (trust) items = items.filter(item => materialTrustOf(item) === trust)
-      if (unitTypes.includes(unit)) items = items.filter(item => unitTypeOf(item) === unit)
+      // 「待定」只列真该人工判定的：article 是容器，不该出现在角色筛选里。
+      if (unit === 'unset') items = items.filter(item => !unitTypeOf(item) && String(item.material_kind || 'article') !== 'article')
+      else if (unitTypes.includes(unit)) items = items.filter(item => unitTypeOf(item) === unit)
       items = [...items].sort((a, b) => sort === 'name' ? String(a.name).localeCompare(String(b.name), 'zh') : String(b.imported_at || b.created_at || '').localeCompare(String(a.imported_at || a.created_at || '')))
       // 历史素材没有 material_trust 字段，读的时候补齐，缺省 verified。
       items = items.map(item => ({ ...item, material_trust: materialTrustOf(item), unit_type: unitTypeOf(item) }))
