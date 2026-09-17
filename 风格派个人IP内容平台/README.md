@@ -6,6 +6,14 @@
 
 本文档面向所有后续接手本项目的开发者与 AI Agent，读完即可独立开展开发、验证与部署。
 
+## 内容创作改写行为（2026-09-17）
+
+作者：Monkeycode。
+
+「按检查意见改写」不再只看模型回没回话：改完先和原稿比一次——不许越改越短（原稿没超平台上限时，新稿不得低于原稿 85%；用户明确要求变短时不设下限），被点名的问题必须在同一套检测下严格减少。任一不过就带原因重写一次，再不过返回 502 且不改库，界面会把原因原样显示出来。
+
+确定性判据在 `server/draft-checks.mjs` 的 `checkReviseOutcome`，接入点在 `server/index.mjs` 的 `POST /api/drafts/:id/revise`；回归见 `server/draft-revise-outcome.test.mjs`。
+
 ## 当前发布状态（2026-09-07 · 用户旅程修复）
 
 作者：Monkeycode。
