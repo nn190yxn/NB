@@ -79,6 +79,6 @@ test('manual variant copy is marked as a variant of its source draft', async t =
   assert.equal(variant.version, 1)
   assert.deepEqual(variant.checks, { persona: null, quality: null, publish_checklist: null })
   const drafts = await (await fetch(`${baseUrl}/api/drafts`, { headers: { 'x-user-id': owner } })).json()
-  assert.equal(drafts.length, 5)
+  assert.equal(drafts.length, 3)
   assert.equal(drafts.find(item => item.id === source.id).archived_at !== null, true, '源草稿的归档状态不应被复制动作影响')
 })

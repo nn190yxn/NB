@@ -141,8 +141,8 @@ test('研究分析自动沉淀结构并幂等，草稿生成累计使用计数',
     headers,
     body: JSON.stringify({ topic: { title: '测试选题', strategy_layer: 'trust', goal_refs: [] }, structure_id: second.items[0].id }),
   })).json()
-  assert.equal(drafts.length, 4)
-  assert.ok(drafts[0].body.startsWith('小红书正文：测试选题'))
+  assert.equal(drafts.length, 2)
+  assert.ok(drafts[0].body.startsWith('抖音口播：测试选题'))
   assert.deepEqual(drafts[0].generation_context.brief.structure, second.items[0].steps)
   assert.ok(drafts[0].source_refs.some(ref => ref.type === 'structure' && ref.id === second.items[0].id))
 

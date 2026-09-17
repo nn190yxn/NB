@@ -33,7 +33,7 @@ test('opening slot stays account-isolated and platform variants remain independe
   const generated = await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers: jsonHeaders(owner), body: JSON.stringify({ topic: { title: '真实创业复盘', strategy_layer: 'trust', goal_refs: [], source_refs: [{ type: 'material', id: 9 }] } }) })
   assert.equal(generated.status, 201)
   const drafts = await generated.json()
-  assert.equal(drafts.length, 4)
+  assert.equal(drafts.length, 2)
   assert.equal(new Set(drafts.map(item => item.variant_group_id)).size, 1)
   assert.ok(drafts.every(item => item.variant_type === 'platform' && item.workflow_status === 'draft'))
   assert.deepEqual(drafts[0].source_refs, [{ type: 'material', id: 9 }])

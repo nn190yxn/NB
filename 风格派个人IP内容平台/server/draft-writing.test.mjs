@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildDraftBrief, consultingToneWords, defaultDraftStructure, draftBriefPrompt, draftDeaiPrompt, draftGateRewritePrompt, draftLengthTargets, draftPlatformForms, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, parseDraftBodies, parseReviseBody, parseReplacePairs, validateReplacePairs, applyReplacePairs, draftReplacePrompt } from './draft-writing.mjs'
+import { buildDraftBrief, consultingToneWords, defaultDraftStructure, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthTargets, draftPlatformBaselineText, draftPlatformBaselines, draftPlatformForms, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, parseDraftBodies, parseReviseBody, parseReplacePairs, validateReplacePairs, applyReplacePairs, draftReplacePrompt } from './draft-writing.mjs'
 import { startGenerationMock } from './generation-test-helper.mjs'
 import { testPort } from './test-port.mjs'
 
@@ -59,16 +59,16 @@ test('写作简报与模型输出解析保持纯函数行为', () => {
   assert.match(prompt, /不要把步骤原文、编号、方法名抄进正文/)
   assert.match(prompt, /先驳后立/)
   assert.match(prompt, /能脱离标题单独听懂/)
-  assert.match(prompt, /四个平台必须是四种读感，不能同一篇改字数/)
-  assert.match(prompt, /小红书是图文笔记/)
-  assert.match(prompt, /平台正文上限 1000 字/)
+  assert.match(prompt, /本期只写抖音和视频号两条/)
+  assert.match(prompt, /两者必须是两种读感/)
+  assert.match(prompt, /两平台长度目标相同，差异不在字数/)
   assert.match(prompt, /把一件事讲清楚比卡时长重要/)
   assert.match(draftPlatformForms.小红书, /不超过 1000 字/)
   assert.match(draftPlatformForms.抖音, /短视频口播/)
   assert.equal(draftLengthTargets.小红书.max, 1000)
   assert.equal(draftLengthTargets.公众号.min, 1000)
-  assert.match(draftGateRewritePrompt('四平台同一篇'), /没过验收/)
-  assert.match(draftGateRewritePrompt('四平台同一篇'), /不能同一篇改字数/)
+  assert.match(draftGateRewritePrompt('两平台同一篇'), /没过验收/)
+  assert.match(draftGateRewritePrompt('两平台同一篇'), /不能同一篇改字数/)
   assert.match(draftPlatformRevisePrompt('抖音'), /只重写这一条抖音/)
   assert.match(draftPlatformRevisePrompt('抖音'), /必须按修改意见改/)
   assert.match(draftPlatformRevisePrompt('抖音', undefined, { fromChecks: true }), /不要只压短/)
@@ -90,11 +90,37 @@ test('写作简报与模型输出解析保持纯函数行为', () => {
   assert.match(deai, /去 AI 味/)
   assert.ok(consultingToneWords.every(word => deai.includes(word)), '去 AI 感必须按同一份词表改写')
 
-  const bodies = parseDraftBodies('前言 {"master":"母版","小红书":"只给了小红书"} 结尾')
-  assert.equal(bodies['小红书'], '只给了小红书')
-  assert.equal(bodies['抖音'], '母版')
+  const bodies = parseDraftBodies('前言 {"master":"母版","抖音":"只给了抖音"} 结尾')
+  assert.equal(bodies['抖音'], '只给了抖音')
+  assert.equal(bodies['视频号'], '母版')
   assert.throws(() => parseDraftBodies('没有 JSON 的回复'), /JSON/)
-  assert.throws(() => parseDraftBodies('{"小红书":"缺少母版"}'), /母版/)
+  assert.throws(() => parseDraftBodies('{"抖音":"缺少母版"}'), /母版/)
+})
+
+test('平台收敛到抖音与视频号，历史平台仍可读，平台基座被生成与改稿引用', () => {
+  assert.deepEqual(draftPlatforms, ['抖音', '视频号'])
+  // 两平台的差异不是字数：长度目标相同，差的是观众心理、开头、节奏、结尾和失败形态。
+  assert.deepEqual(draftLengthTargets.抖音, draftLengthTargets.视频号)
+  assert.notEqual(draftPlatformBaselines.抖音.rhythm, draftPlatformBaselines.视频号.rhythm)
+  assert.notEqual(draftPlatformBaselines.抖音.ending, draftPlatformBaselines.视频号.ending)
+
+  const prompt = draftBriefPrompt({})
+  for (const platform of draftPlatforms) assert.ok(prompt.includes(draftPlatformBaselineText(platform)), `${platform} 基座必须进生成提示词`)
+  assert.doesNotMatch(prompt, /四个平台/, '生成提示词不该再提四个平台')
+  assert.match(prompt, /"抖音":"\.\.\."/)
+
+  const rewrite = draftGateRewritePrompt('')
+  for (const platform of draftPlatforms) assert.ok(rewrite.includes(draftPlatformBaselineText(platform)), `${platform} 基座必须进打回重写提示词`)
+  assert.doesNotMatch(rewrite, /四个平台/)
+
+  assert.match(draftPlatformRevisePrompt('抖音', '短视频'), /平台读感（抖音）/)
+
+  // 历史小红书 / 公众号草稿仍能取到体裁与长度目标，只是不再新生成。
+  assert.match(draftPlatformForms.小红书, /不超过 1000 字/)
+  assert.deepEqual(draftLengthTargets.公众号, { min: 1000, max: 2500 })
+  assert.equal(draftFormatOf({ platform: '公众号', content_format: null }), '长文')
+  assert.equal(draftPlatformBaselineText('小红书'), '', '历史平台不在基座里，返回空串而不是报错')
+  assert.equal(draftPlatformRevisePrompt('公众号', '长文').includes('平台读感'), false)
 })
 
 test('未配置模型时草稿生成 422 且不落库', async t => {
@@ -122,9 +148,9 @@ test('模型返回无效内容时 502 且不落库，成功时正文来自模型
   const created = await generate()
   assert.equal(created.status, 201)
   const drafts = await created.json()
-  assert.equal(drafts.length, 4)
-  assert.ok(drafts[0].body.startsWith('小红书正文：真实正文测试'))
-  assert.ok(drafts.find(item => item.platform === '抖音').body.startsWith('抖音口播：真实正文测试'))
+  assert.equal(drafts.length, 2)
+  assert.ok(drafts[0].body.startsWith('抖音口播：真实正文测试'))
+  assert.ok(drafts.find(item => item.platform === '视频号').body.startsWith('视频号口播：真实正文测试'))
   assert.equal(drafts[0].generation_context.provider, 'primary')
   assert.equal(drafts[0].generation_context.brief.title, '真实正文测试')
   assert.equal(drafts[0].generation_context.gate.rewritten, false)
@@ -142,14 +168,14 @@ test('生成验收不过则打回改写，仍不过则入库标待修改（A 方
   assert.equal(rewritten.status, 201)
   const drafts = await rewritten.json()
   assert.equal(drafts[0].generation_context.gate.rewritten, true)
-  assert.match(drafts[0].body, /小红书笔记：/)
+  assert.match(drafts[0].body, /抖音口播：真实正文测试/)
   assert.equal(drafts.some(item => item.body.includes('颗粒度')), false)
 
   mock.setMode('sermon_stuck')
   const blocked = await generate()
   assert.equal(blocked.status, 201)
   const blockedDrafts = await blocked.json()
-  assert.equal(blockedDrafts.length, 4)
+  assert.equal(blockedDrafts.length, 2)
   assert.ok(blockedDrafts.every(item => item.workflow_status === 'needs_revision'))
   assert.ok(blockedDrafts.every(item => item.generation_context.gate.failed === true))
   assert.ok(blockedDrafts.every(item => item.generation_context.gate.rewritten === true))
@@ -171,15 +197,16 @@ test('只重写一个平台，带修改意见，不动其他平台', async t => 
   assert.equal(created.status, 201)
   const drafts = await created.json()
   const douyin = drafts.find(item => item.platform === '抖音')
-  const xhs = drafts.find(item => item.platform === '小红书')
-  assert.ok(douyin && xhs)
+  const shipinhao = drafts.find(item => item.platform === '视频号')
+  assert.ok(douyin && shipinhao)
   assert.equal(douyin.content_format, '短视频')
-  const xhsBody = xhs.body
+  const otherBody = shipinhao.body
 
   const empty = await fetch(`${baseUrl}/api/drafts/${douyin.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ note: '   ' }) })
   assert.equal(empty.status, 422)
-  const wrongPlatform = await fetch(`${baseUrl}/api/drafts/${xhs.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ format: '中视频' }) })
-  assert.equal(wrongPlatform.status, 422)
+  // 平台收敛后不再生成非视频平台，改用不属于短中长体裁的格式验证同一条 422。
+  const badFormat = await fetch(`${baseUrl}/api/drafts/${shipinhao.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ format: '图文笔记' }) })
+  assert.equal(badFormat.status, 422)
 
   const revised = await fetch(`${baseUrl}/api/drafts/${douyin.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ note: '再短一点，开头别设问', version: douyin.version }) })
   assert.equal(revised.status, 200)
@@ -191,7 +218,7 @@ test('只重写一个平台，带修改意见，不动其他平台', async t => 
   assert.equal(next.generation_context.revise.note, '再短一点，开头别设问')
 
   const stored = await (await fetch(`${baseUrl}/api/drafts`, { headers })).json()
-  assert.equal(stored.find(item => item.id === xhs.id).body, xhsBody)
+  assert.equal(stored.find(item => item.id === shipinhao.id).body, otherBody)
   assert.equal(stored.find(item => item.id === douyin.id).body, next.body)
 
   const mid = await fetch(`${baseUrl}/api/drafts/${douyin.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ format: '中视频', version: next.version }) })
@@ -200,7 +227,7 @@ test('只重写一个平台，带修改意见，不动其他平台', async t => 
   assert.equal(midDraft.content_format, '中视频')
   assert.equal(midDraft.generation_context.revise.note, '改成中视频')
   const afterMid = await (await fetch(`${baseUrl}/api/drafts`, { headers })).json()
-  assert.equal(afterMid.find(item => item.id === xhs.id).body, xhsBody)
+  assert.equal(afterMid.find(item => item.id === shipinhao.id).body, otherBody)
 
   const missingChecks = await fetch(`${baseUrl}/api/drafts/${douyin.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ from_checks: true, version: midDraft.version }) })
   assert.equal(missingChecks.status, 422)

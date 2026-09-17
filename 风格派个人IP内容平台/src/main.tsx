@@ -1950,8 +1950,9 @@ function PerformanceTimeline({ shooting, refreshKey }: { shooting: ShootingItem;
 type CalendarEntry = { type: string; id: number; title: string; platform: string; status: string; date: string }
 
 function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: (next: DraftItem) => void }) {
-  const platforms = ['小红书', '抖音', '视频号', '公众号', 'B站', '快手', '今日头条', '微博', 'X']
-  const [platform, setPlatform] = useState(draft.platform && platforms.includes(draft.platform) ? draft.platform : '小红书')
+  // 平台收敛到抖音与视频号：适配目标也只留这两个，跨平台改稿就是在这两条之间转。
+  const platforms = ['抖音', '视频号']
+  const [platform, setPlatform] = useState(draft.platform && platforms.includes(draft.platform) ? draft.platform : '抖音')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [confirmed, setConfirmed] = useState<string[]>([])

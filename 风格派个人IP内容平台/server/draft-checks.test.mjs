@@ -249,18 +249,19 @@ test('质量门把咨询腔和工程词标出来', () => {
 
 test('提示词里的字数与确定性检查用的是同一套数字', () => {
   const prompt = draftBriefPrompt({})
-  assert.match(prompt, new RegExp(`小红书图文笔记 ${draftLengthTargets.小红书.min}-${draftLengthTargets.小红书.max} 字`))
+  // 平台收敛后提示词只写抖音和视频号；两平台共用同一套长度目标，提示词里的数字仍取自 draftLengthTargets。
   assert.match(prompt, new RegExp(`${draftLengthTargets.抖音.min}-${draftLengthTargets.抖音.max} 字`))
-  assert.match(prompt, new RegExp(`公众号才是长文 ${draftLengthTargets.公众号.min}-${draftLengthTargets.公众号.max} 字`))
+  assert.equal(draftLengthTargets.视频号.min, draftLengthTargets.抖音.min)
+  assert.equal(draftLengthTargets.视频号.max, draftLengthTargets.抖音.max)
 })
 
-test('生成验收扫咨询腔、编客户、设问开头和四平台同一篇', () => {
+test('生成验收扫咨询腔、编客户、设问开头和两平台同一篇', () => {
   const sermon = '很多人做IP内容评估，靠的是拍完后的感觉。钱是唯一诚实的反馈。我有个客户花了三天写文案，结果数据惨淡。把内容拆到颗粒度再评估。'.repeat(2)
   const bad = scanGeneratedBodies({ 小红书: sermon, 抖音: `你是不是觉得做IP最难？${sermon}`, 视频号: sermon, 公众号: sermon })
   assert.equal(bad.failed, true)
   assert.ok(bad.same_essay.length)
   assert.ok(bad.issues['视频号'].some(item => item.code === 'consulting_tone'))
-  assert.ok(bad.issues['小红书'].some(item => item.code === 'case_claim'))
+  assert.ok(bad.issues['视频号'].some(item => item.code === 'case_claim'))
   assert.ok(bad.issues['抖音'].some(item => item.code === 'opening_question'))
 
   const clean = scanGeneratedBodies({

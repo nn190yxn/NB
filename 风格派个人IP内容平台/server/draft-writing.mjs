@@ -1,9 +1,11 @@
 // 草稿正文由大模型撰写：这里只负责组装写作简报、构造指令、解析模型返回，方便单独测试。
 // 简报里必须分开三件事：style 是创作者本人的表达习惯；mechanisms 是对标账号可照用的机制；quotes 是对标原话（只能当引用且要标来源）。
 
-export const draftPlatforms = ['小红书', '抖音', '视频号', '公众号']
+// 本期只生成抖音与视频号两条。小红书与公众号不再出新草稿，但体裁规划仍保留在 draftPlatformPlans 里：
+// 历史草稿要能继续读取、检查、适配，长度目标与体裁提示都得查得到。
+export const draftPlatforms = ['抖音', '视频号']
 
-// 四个平台各自的体裁规划。默认仍一次出四条：小红书图文笔记、抖音短视频口播、视频号短视频口播、公众号长文。
+// 四个平台各自的体裁规划。生成只用 draftPlatforms 里的两个；小红书图文笔记与公众号长文留给历史草稿。
 // 抖音还有中视频（约 1–5 分钟）和长视频（5 分钟以上），这条默认草稿不是逐字长稿。
 export const draftPlatformPlans = {
   小红书: {
@@ -53,6 +55,32 @@ export const consultingToneWords = [
 export const draftLengthTargets = Object.fromEntries(
   Object.entries(draftPlatformPlans).map(([platform, plan]) => [platform, plan.length]),
 )
+// 平台基座：抖音与视频号的读感差异。差异不在字数——两平台的长度目标同为 300-900 字，
+// 差的是观众心理、开头、节奏、结尾和失败形态。生成与诊断都引用这张表。
+export const draftPlatformBaselines = {
+  抖音: {
+    audience: '划到就走，前 3 秒决定生死',
+    opening: '直接冲突 / 反常识',
+    rhythm: '短句、快、信息密度高',
+    ending: '引导评论 / 站队',
+    failure: '平、慢、没冲突',
+  },
+  视频号: {
+    audience: '熟人半熟人，看你这个人靠不靠谱',
+    opening: '可直接给结论，但「我」要在场',
+    rhythm: '可稍慢、可讲过程',
+    ending: '引导转发 / 私信，少喊话',
+    failure: '像广告、不像人说话',
+  },
+}
+
+// 历史小红书 / 公众号草稿不在基座里，返回空串，调用处用 filter(Boolean) 跳过。
+export const draftPlatformBaselineText = platform => {
+  const baseline = draftPlatformBaselines[platform]
+  if (!baseline) return ''
+  return `观众心理：${baseline.audience}；开头：${baseline.opening}；节奏：${baseline.rhythm}；结尾：${baseline.ending}；失败形态：${baseline.failure}`
+}
+
 export const draftVideoPlatforms = ['抖音', '视频号']
 export const draftVideoFormats = {
   短视频: {
@@ -155,8 +183,9 @@ export function draftBriefPrompt(profile = {}) {
     '开头第一句直给冲突或结论，必须是完整口播句：含话题，能脱离标题单独听懂；不要自问自答。',
     '主体先驳后立：先点破常见做法，再立判断；连续抽象别超过一小段。简报里有经历、数字就用，没有就讲通用现象。',
     '结尾给可执行的一步或一个明确判断。',
-    '四个平台必须是四种读感，不能同一篇改字数。按 platform_forms 写：小红书是图文笔记，抖音和视频号是短视频口播，公众号才是分段长文。',
-    `长度：小红书图文笔记 ${draftLengthRange('小红书')} 字（平台正文上限 1000 字，标题不超过 20 字，长文去公众号）；抖音和视频号默认短视频口播（${draftVideoFormats.短视频.duration}，${draftLengthRange('抖音')} 字），把一件事讲清楚比卡时长重要；公众号才是长文 ${draftLengthRange('公众号')} 字且分段短。`,
+    '本期只写抖音和视频号两条，两者必须是两种读感，不能同一篇改字数。按 platform_forms 写，并按下面的平台基座调读感。',
+    `平台基座：抖音（${draftPlatformBaselineText('抖音')}）；视频号（${draftPlatformBaselineText('视频号')}）。`,
+    `长度：两平台都是短视频口播（${draftVideoFormats.短视频.duration}，${draftLengthRange('抖音')} 字），两平台长度目标相同，差异不在字数。把一件事讲清楚比卡时长重要。`,
     '只使用简报里的事实和素材，不编造成绩、客户、数字或案例；「具体支撑」只能用简报里的素材或你确知的真实经历，简报里没有案例时改用通用现象或判断说明，宁可少一个案例也不编造。不要写「我有个客户」「服务了无数」。',
     '不要写自我介绍、不要报名字或称呼（例如「大家好，我是某某」），也不要写引导关注、点赞一类话术；直接进入内容。',
     '正文是纯文本：不要写 Markdown 标记（如 # 标题、** 加粗）或结构占位说明（如「1个痛点场景」「1个客户案例（名字+数据）」），也不要在一条草稿里写其他平台的建议；正文只写给读者看的内容。',
@@ -165,7 +194,7 @@ export function draftBriefPrompt(profile = {}) {
     'quotes 是对标账号的原话：只能当引用用，而且必须在正文里写出 source 字段给的来源（例如「对标dbs」）；不得把对方原话改写成创作者本人说过的话。',
     'mechanisms 与 quotes 为空时，不要提对标、也不要虚构对标来源。',
     profileFacts ? `IP 档案：${profileFacts}。` : '',
-    '只输出 JSON，不要解释：{"master":"母版正文","小红书":"...","抖音":"...","视频号":"...","公众号":"..."}。四个平台键都必须有正文。',
+    '只输出 JSON，不要解释：{"master":"母版正文","抖音":"...","视频号":"..."}。两个平台键都必须有正文。',
   ].filter(Boolean).join('\n')
 }
 
@@ -181,12 +210,13 @@ export function draftDeaiPrompt() {
 
 export function draftGateRewritePrompt(summary) {
   return [
-    '上一稿没过验收，必须按原因重写四个平台。不要解释。',
-    `验收未过：${String(summary || '').trim() || '咨询腔、编客户、设问开头或四平台同一篇'}。`,
-    '四个平台必须是四种读感，不能同一篇改字数。小红书是图文笔记且不超过 1000 字，抖音和视频号是短视频口播，公众号才是分段长文。',
+    '上一稿没过验收，必须按原因重写抖音和视频号两条。不要解释。',
+    `验收未过：${String(summary || '').trim() || '咨询腔、编客户、设问开头或两平台同一篇'}。`,
+    '两条必须是两种读感，不能同一篇改字数。抖音和视频号都是短视频口播，按平台基座调读感，差异不在字数。',
+    `平台基座：抖音（${draftPlatformBaselineText('抖音')}）；视频号（${draftPlatformBaselineText('视频号')}）。`,
     '开头第一句直给冲突或结论，不要自问自答。',
     `删掉咨询腔和工程词：${consultingToneWords.join('、')}。不要编客户和数字。不要自我介绍。`,
-    '只输出 JSON：{"master":"母版正文","小红书":"...","抖音":"...","视频号":"...","公众号":"..."}。',
+    '只输出 JSON：{"master":"母版正文","抖音":"...","视频号":"..."}。',
   ].join('\n')
 }
 
@@ -197,6 +227,7 @@ export function draftPlatformRevisePrompt(platform, format, extra = {}) {
   return [
     `只重写这一条${platform}草稿。不要动其他平台。不要解释。`,
     `体裁：${resolved}。${form}`,
+    draftPlatformBaselineText(platform) ? `平台读感（${platform}）：${draftPlatformBaselineText(platform)}。` : '',
     range ? `长度：${range} 字。` : '',
     '开头第一句直给冲突或结论，不要自问自答。',
     `删掉咨询腔和工程词：${consultingToneWords.join('、')}。不要编客户和数字。`,

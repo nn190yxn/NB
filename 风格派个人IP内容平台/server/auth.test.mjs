@@ -318,7 +318,7 @@ test('session 支持创建、复用和注销', async t => {
   })
   assert.equal(draftResponse.status, 201)
   const drafts = await draftResponse.json()
-  assert.deepEqual(drafts.map(item => item.platform), ['小红书', '抖音', '视频号', '公众号'])
+  assert.deepEqual(drafts.map(item => item.platform), ['抖音', '视频号'])
   assert.equal(new Set(drafts.map(item => item.topic_id)).size, 1)
   assert.equal(new Set(drafts.map(item => JSON.stringify(item.source_refs))).size, 1)
   assert.deepEqual(drafts[0].source_refs, topics[0].source_refs)

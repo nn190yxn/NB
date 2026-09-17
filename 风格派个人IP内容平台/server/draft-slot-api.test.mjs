@@ -63,7 +63,7 @@ test('标题改法作用于整组，其余槽位只改当前草稿且保留版�
   const generated = await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers: jsonHeaders(owner), body: JSON.stringify({ topic: { title: '槽位用例', strategy_layer: 'trust', goal_refs: [] } }) })
   assert.equal(generated.status, 201)
   const drafts = await generated.json()
-  assert.equal(drafts.length, 4)
+  assert.equal(drafts.length, 2)
   const target = drafts.find(item => item.platform === '抖音')
   const richBody = '标题：旧标题\n\n正文：\n原来的第一段\n\n中间段落不能动。\n\n原来的结尾段'
   const saved = await (await fetch(`${baseUrl}/api/drafts/${target.id}`, { method: 'PUT', headers: jsonHeaders(owner), body: JSON.stringify({ title: '旧标题', body: richBody, version: target.version }) })).json()
@@ -78,16 +78,16 @@ test('标题改法作用于整组，其余槽位只改当前草稿且保留版�
   assert.equal(endingOption.structure_id, ending.id)
   assert.equal(endingOption.source, '自有')
 
-  // 标题是整组共用：改一次要改四条平台草稿。
+  // 标题是整组共用：改一次要改两条平台草稿。
   const titleResult = await fetch(`${baseUrl}/api/drafts/${target.id}/slots/title`, { method: 'POST', headers: jsonHeaders(owner), body: JSON.stringify({ option_id: 'title-contrast' }) })
   assert.equal(titleResult.status, 200)
   const titlePayload = await titleResult.json()
-  assert.equal(titlePayload.updated_count, 4)
+  assert.equal(titlePayload.updated_count, 2)
   assert.equal(titlePayload.option.source, '对标dbs')
   const afterTitle = await (await fetch(`${baseUrl}/api/drafts`, { headers: { 'x-user-id': owner } })).json()
-  assert.deepEqual(afterTitle.map(item => item.title), Array.from({ length: 4 }, () => '对标改法之后的新标题'))
+  assert.deepEqual(afterTitle.map(item => item.title), Array.from({ length: 2 }, () => '对标改法之后的新标题'))
   assert.equal(afterTitle.find(item => item.id === target.id).version, 3, '目标草稿经历过一次 PUT，再叠加标题改写')
-  assert.ok(afterTitle.filter(item => item.id !== target.id).every(item => item.version === 2), '其余三个平台应只被标题改写递增一次')
+  assert.ok(afterTitle.filter(item => item.id !== target.id).every(item => item.version === 2), '其余一个平台应只被标题改写递增一次')
   assert.ok(afterTitle.every(item => item.workflow_status === 'content_ready'))
   assert.ok(afterTitle.every(item => item.history.length >= 1), '每个平台都应留下可回退的旧版本')
 

@@ -117,7 +117,7 @@ test('共享额度：默认走共享 Key，超额 429，自有 Key 豁免', asyn
   const draftHeaders = { cookie: draftCookie, 'content-type': 'application/json' }
   const generated = await (await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers: draftHeaders, body: JSON.stringify({ topic: { title: '额度降级测试', strategy_layer: 'trust', goal_refs: [] } }) })).json()
   const draft = generated[0]
-  assert.ok(draft.body.startsWith('小红书正文：额度降级测试'))
+  assert.ok(draft.body.startsWith('抖音口播：额度降级测试'))
   const redfoxHitsBeforeCompliance = upstreamHits.redfox
   const compliance = await fetch(`${baseUrl}/api/drafts/${draft.id}/compliance`, { method: 'POST', headers: draftHeaders, body: JSON.stringify({ text: '这是最好的测试内容' }) })
   assert.equal(compliance.status, 200)
