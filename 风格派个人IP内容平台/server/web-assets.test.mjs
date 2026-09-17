@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join, dirname } from 'node:path'
-import { draftLengthTargets } from './draft-writing.mjs'
+import { draftLengthTargets, draftVideoFormats } from './draft-writing.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -45,6 +45,15 @@ test('工作台使用通用空白账号文案并保留 IP 档案能力', () => {
   assert.match(source, /saveField\(field\)/)
   assert.match(source, /查看最近修改/)
   assert.match(source, /修改后立即用于内容生成/)
+})
+
+test('档案列表字段提示短词并与质量门 12 字口径一致', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /const profileEntryMaxLength = 12/)
+  assert.match(source, /建议每项 2-8 字短词/)
+  assert.match(source, /按短词匹配的正文检查、话题标签与选题评分都会失效/)
+  const checks = readFileSync(join(root, 'server/draft-checks.mjs'), 'utf8')
+  assert.match(checks, /value\.length > 12/)
 })
 test('PWA manifest 声明可安装图标', () => {
   const manifest = JSON.parse(readFileSync(join(root, 'public/manifest.webmanifest'), 'utf8'))
@@ -164,7 +173,10 @@ test('选题评估与决策入口用主按钮，关键动作不被当成正文',
   const source = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8')
   assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => evaluateTopicItem\(topic\)\}>七维评估<\/button>/)
   assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => decideTopic\(topic, 'do'\)\}>确认做<\/button>/)
-  assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => openComposeFor\(topic\)\}>去组装草稿<\/button>/)
+  assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => openComposeFor\(topic\)\}>查看这组草稿<\/button>/)
+  assert.match(source, /topic_id: topic\.id/)
+  assert.match(source, /选题已确认，但草稿生成失败/)
+  assert.match(source, /请等当前选题操作完成后再点/)
   const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
   assert.match(styles, /\.topic-actions \.primary-action\s*\{/)
 })
@@ -174,6 +186,7 @@ test('草稿生成入口收敛到已确认选题，不再从面板手打标题',
   // 面板只提供已确认选题，且 POST 携带 topic_id
   assert.match(source, /apiJson<TopicItem\[\]>\('\/api\/topics'\)\.then\(items => setTopics\(items\.filter\(item => item\.workflow_status === 'approved'\)\)\)/)
   assert.match(source, /topic_id: Number\(topicId\)/)
+  assert.match(source, /liveWorkbenchDrafts/)
   assert.match(source, /先选一条已确认的选题/)
   assert.doesNotMatch(source, /anchorTitle/)
   // 选题助手与爆款方法库都改为带参数跳转，不再各自直接生成
@@ -222,13 +235,43 @@ test('草稿列表的字数警告用同一套平台目标（前后端不漂移�
   assert.match(source, /const draftLengthWarning = \(draft: DraftItem\)/)
   assert.match(source, /'draft-rail-count warn' : 'draft-rail-count'/)
   assert.match(source, /title=\{draftLengthWarning\(item\) \|\| undefined\}/)
+  assert.match(source, /aria-label="修改意见"/)
+  assert.match(source, /\/api\/drafts\/\$\{draft.id\}\/revise/)
+  assert.match(source, /只重写这一条/)
+  assert.match(source, /draft-body-meta/)
+  assert.match(source, /draft-revise-head/)
+  assert.match(source, /图文笔记/)
+  assert.match(source, /短视频口播/)
+  assert.match(source, /draft-format/)
+  assert.match(source, /aria-label="视频体裁"/)
+  assert.match(source, /按检查意见改写/)
+  assert.match(source, /from_checks/)
+  assert.match(source, /needs_revision: '要改'/)
+  assert.match(source, /draftWorkflowLabel/)
+  assert.match(source, /draftHasRewriteableChecks/)
+  assert.match(source, /请先保存当前草稿，再按检查意见改写/)
+  assert.match(source, /正文已经改过，先重新做人设检查和质量门/)
+  assert.match(source, /draft-checks-error/)
+  assert.match(source, /后台还是旧版本，关掉窗口重新打开后再试/)
+  assert.doesNotMatch(source, /<small>\{draft\.workflow_status \|\| 'draft'\}<\/small>/)
+  assert.doesNotMatch(source, /disabled=\{busy \|\| reviseBusy === draft.id \|\| !\(\(draft.checks/)
+  assert.match(source, /中视频提纲/)
+  assert.match(source, /长视频大纲/)
   // 客户端必须与服务端 draftLengthTargets 数字一致，否则「N 字」的告警会和质量门说法不一
   for (const [platform, target] of Object.entries(draftLengthTargets)) {
     const literal = `${platform}: { min: ${target.min}, max: ${target.max} }`
     assert.ok(source.includes(literal), `客户端缺少平台目标：${literal}`)
   }
+  for (const [format, plan] of Object.entries(draftVideoFormats)) {
+    const literal = `${format}: { min: ${plan.length.min}, max: ${plan.length.max} }`
+    assert.ok(source.includes(literal), `客户端缺少视频体裁目标：${literal}`)
+  }
   const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
   assert.match(styles, /\.draft-rail-count\.warn\s*\{/)
+  assert.match(styles, /\.draft-body-meta\.warn/)
+  assert.match(styles, /\.draft-revise-head\s*\{/)
+  assert.match(styles, /\.draft-formats\s*\{/)
+  assert.match(styles, /\.draft-checks-error\s*\{/)
 })
 
 test('上传入口不把二进制文件当纯文本读', () => {

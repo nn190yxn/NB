@@ -22,10 +22,10 @@ export const titleMethods = [
 
 // 平台体裁：来自现有的分平台生成约束（长度、口播/书面、分段要求），不是新造的写法。
 export const platformGenres = [
-  { id: 'genre-douyin', name: '抖音口播三段', platform: '抖音', source: '自有', formula: '≤250 字口播：冲突开场 → 一段经历或案例 → 一句可执行的收尾' },
-  { id: 'genre-xhs', name: '小红书清单体', platform: '小红书', source: '自有', formula: '400-800 字：痛点场景 → 编号清单 → 一句金句 → 互动提问' },
-  { id: 'genre-shipinhao', name: '视频号口播', platform: '视频号', source: '自有', formula: '≤250 字口播：观点起头 → 一个案例支撑 → 明确判断' },
-  { id: 'genre-gzh', name: '公众号论证体', platform: '公众号', source: '自有', formula: '600-1200 字且分段短：现象 → 拆解原因 → 方法 → 收束' },
+  { id: 'genre-douyin', name: '抖音口播三段', platform: '抖音', source: '自有', formula: '短视频口播 ≤250 字（15–60 秒）：冲突开场 → 一段经历或案例 → 一句可执行的收尾' },
+  { id: 'genre-xhs', name: '小红书清单体', platform: '小红书', source: '自有', formula: '图文笔记 400-1000 字（上限 1000）：痛点场景 → 短条判断 → 一句能评论的话' },
+  { id: 'genre-shipinhao', name: '视频号口播', platform: '视频号', source: '自有', formula: '短视频口播 ≤250 字：观点起头 → 一个判断 → 明确结论' },
+  { id: 'genre-gzh', name: '公众号论证体', platform: '公众号', source: '自有', formula: '长文 1000-2500 字且分段短：现象 → 拆解原因 → 方法 → 收束' },
 ]
 
 function clean(value) { return String(value || '').replace(/\s+/g, ' ').trim() }

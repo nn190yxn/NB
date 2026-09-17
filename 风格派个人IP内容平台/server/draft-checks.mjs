@@ -1,7 +1,7 @@
 import { prohibitedHits } from './redfox.mjs'
 import { validateSourceRefs } from './validation.mjs'
 import { openingReadiness } from './draft-workflow.mjs'
-import { draftLengthRange, draftLengthTargets } from './draft-writing.mjs'
+import { consultingToneWords, draftFormatOf, draftLengthRangeFrom, draftLengthTargetOf, draftPlatforms } from './draft-writing.mjs'
 
 const riskWordHits = value => prohibitedHits(value).map(item => item.word)
 const qualityKeys = ['opening_clarity', 'audience_fit', 'core_point', 'evidence', 'structure_and_risk']
@@ -124,38 +124,17 @@ export function checkQuality(draft, profile = {}) {
   if (audienceScore < 100) { evidence.push(evidenceItem('audience_weak', '正文与当前受众问题的连接不够明确')); suggestions.push(overlongValue ? shortValueHint() : '在正文中写出受众正在面对的具体问题') }
   if (pointScore < 100) { evidence.push(evidenceItem('point_weak', '核心观点或内容支柱不够明确')); suggestions.push(overlongValue ? shortValueHint() : '用一句话写出你的判断，再用过程或案例支撑') }
   // 模型并不遵守提示词里的字数要求（实测：提示词写抖音不超 250 字，模型给了 384 字），所以这里做确定性校验。
-  const lengthTarget = draftLengthTargets[draft?.platform]
+  const lengthTarget = draftLengthTargetOf(draft)
+  const lengthRange = draftLengthRangeFrom(lengthTarget)
   const bodyLength = String(draft?.body || '').trim().length
   if (lengthTarget && bodyLength && (bodyLength < lengthTarget.min || bodyLength > lengthTarget.max)) {
-    evidence.push(evidenceItem('platform_length', `正文 ${bodyLength} 字，${draft.platform}目标${draftLengthRange(draft.platform)} 字`))
-    suggestions.push(`把正文调整到 ${draftLengthRange(draft.platform)} 字`)
+    const format = draftFormatOf(draft)
+    evidence.push(evidenceItem('platform_length', `正文 ${bodyLength} 字，${draft.platform}${format ? format : ''}目标${lengthRange} 字`))
+    suggestions.push(`把正文调整到 ${lengthRange} 字`)
   }
-  // 提示词要求「开头第一句直给冲突或结论」，模型实测仍会用设问开头，所以也用可算的判据检查。
-  const introHits = selfIntroHits(draft?.body)
-  if (introHits.length) {
-    evidence.push(evidenceItem('self_intro', `正文出现自我介绍或引导关注：${introHits.join('、')}`))
-    suggestions.push('删掉自我介绍与引导关注，改成直给结论的开头')
-  }
-  // 结构骨架与标记：提示词要求纯文本、只写给读者看的内容，同样需要用可算的判据兑一遍。
-  const leakHits = formatLeakHits(draft?.body)
-  if (leakHits.length) {
-    evidence.push(evidenceItem('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`))
-    suggestions.push('删掉结构说明、占位符与其他平台建议，只留给读者看的正文')
-  }
-  // 具体案例与数字：素材库里只有对标样本、没有己方案例，这类句子很可能是模型编的，发布前必须有人确认。
-  const caseHits = caseClaimHits(draft?.body)
-  if (caseHits.length) {
-    evidence.push(evidenceItem('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`))
-    suggestions.push('确认案例与数字是否真实；不是真实经历就改成通用判断，或补一条真实素材')
-  }
-  // 判据要按行找：口播稿开头常是一行镜头提示（如「（镜头怼脸，语速快）」），那不是句子，要跳到下一行。
-  const opening = openingSentence(draft?.body)
-  if (opening) {
-    if (opening.endsWith('？') || opening.endsWith('?')) {
-      evidence.push(evidenceItem('opening_question', `开头第一句是问句：${opening.length > 26 ? `${opening.slice(0, 26)}…` : opening}`))
-      suggestions.push('把结论提到第一句，或点「开头句」槽位换一个开头范式')
-    }
-  }
+  const writing = writingIssues(draft)
+  evidence.push(...writing.evidence)
+  suggestions.push(...writing.suggestions)
   const scoreBlocked = score < 60
   if (scoreBlocked) evidence.push(evidenceItem('score_low', '质量综合分低于 60 分', 'blocked'))
   const blocked = evidence.some(item => item.severity === 'blocked') || scoreBlocked
@@ -185,6 +164,145 @@ export function checkPublishChecklist(draft) {
 
 export function hasBlockedCheck(draft) {
   return ['persona', 'quality', 'publish_checklist'].some(key => draft?.checks?.[key]?.status === 'blocked')
+}
+
+const checkRewriteHints = {
+  audience_mismatch: '写出受众正在面对的具体问题，用短词，不要抄档案整句',
+  pillar_mismatch: '补一个跟内容支柱直接相关的判断，不要抄档案整句',
+  prohibited_pattern: '去掉档案禁止的说法',
+  low_personal_signal: '用第一人称讲一个本人经历或明确判断',
+  risk_words: '去掉风险表达',
+  structure_weak: '补真实过程和可执行的一步',
+  audience_weak: '用短词写出受众正在面对的具体问题，不要抄档案整句',
+  point_weak: '第一句给出判断，再用场面支撑',
+  self_intro: '删掉自我介绍和引导关注',
+  format_leak: '删掉结构说明和其他平台建议',
+  case_claim: '不要编客户和数字，改成通用判断',
+  consulting_tone: '改成跟熟人说话，删掉咨询腔和工程词',
+  opening_question: '第一句直给冲突或结论，不要问句',
+}
+
+export function draftCheckRewriteNote(draft) {
+  const version = currentVersion(draft)
+  const hints = []
+  for (const key of ['persona', 'quality']) {
+    const item = draft?.checks?.[key]
+    if (!item || Number(item.draft_version || 0) !== version) continue
+    if (item.status === 'passed') continue
+    for (const evidence of item.evidence || []) {
+      if (evidence.code === 'platform_length') {
+        const range = draftLengthRangeFrom(draftLengthTargetOf(draft))
+        if (range) hints.push(`把字数改到${range}，保留原判断和可执行的一步，不要另写一篇更简单的`)
+        continue
+      }
+      const hint = checkRewriteHints[evidence.code]
+      if (!hint) continue
+      const detail = String(evidence.message || '').split('：').slice(1).join('：').trim()
+      if (evidence.code === 'consulting_tone' && detail) hints.push(`${hint}。点名删掉：${detail}`)
+      else if (evidence.code === 'opening_question' && detail) hints.push(`${hint}。现在第一句是：${detail}`)
+      else if (evidence.code === 'case_claim' && detail) hints.push(`${hint}。原文里的：${detail}`)
+      else hints.push(hint)
+    }
+  }
+  return [...new Set(hints)].join('；')
+}
+
+// 生成入库前的硬门：提示词拦不住的那几条。不复用 checkQuality——那边会因还没选开头句、还没补来源直接 blocked。
+function writingIssues(draft) {
+  const evidence = []
+  const suggestions = []
+  const introHits = selfIntroHits(draft?.body)
+  if (introHits.length) {
+    evidence.push(evidenceItem('self_intro', `正文出现自我介绍或引导关注：${introHits.join('、')}`))
+    suggestions.push('删掉自我介绍与引导关注，改成直给结论的开头')
+  }
+  const leakHits = formatLeakHits(draft?.body)
+  if (leakHits.length) {
+    evidence.push(evidenceItem('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`))
+    suggestions.push('删掉结构说明、占位符与其他平台建议，只留给读者看的正文')
+  }
+  const caseHits = caseClaimHits(draft?.body)
+  if (caseHits.length) {
+    evidence.push(evidenceItem('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`))
+    suggestions.push('确认案例与数字是否真实；不是真实经历就改成通用判断，或补一条真实素材')
+  }
+  const toneHits = consultingToneWords.filter(word => String(draft?.body || '').includes(word)).slice(0, 6)
+  if (toneHits.length) {
+    evidence.push(evidenceItem('consulting_tone', `正文出现咨询腔或工程词：${toneHits.join('、')}`))
+    suggestions.push('改成跟熟人说话的口吻，或先用「去 AI 感改写」再人工过一遍')
+  }
+  const opening = openingSentence(draft?.body)
+  if (opening && (opening.endsWith('？') || opening.endsWith('?'))) {
+    evidence.push(evidenceItem('opening_question', `开头第一句是问句：${opening.length > 26 ? `${opening.slice(0, 26)}…` : opening}`))
+    suggestions.push('把结论提到第一句，或点「开头句」槽位换一个开头范式')
+  }
+  return { evidence, suggestions }
+}
+
+function shingles(text, n = 3) {
+  const value = String(text || '').replace(/\s+/g, '')
+  if (value.length < n) return new Set(value ? [value] : [])
+  const set = new Set()
+  for (let index = 0; index <= value.length - n; index += 1) set.add(value.slice(index, index + n))
+  return set
+}
+
+function jaccard(left, right) {
+  const a = shingles(left)
+  const b = shingles(right)
+  if (!a.size || !b.size) return 0
+  let inter = 0
+  for (const item of a) if (b.has(item)) inter += 1
+  return inter / (a.size + b.size - inter)
+}
+
+function containment(left, right) {
+  const a = shingles(left)
+  const b = shingles(right)
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a]
+  if (!small.size) return 0
+  let inter = 0
+  for (const item of small) if (large.has(item)) inter += 1
+  return inter / small.size
+}
+
+function sameEssayHits(bodies) {
+  const hits = []
+  for (let i = 0; i < draftPlatforms.length; i += 1) {
+    for (let j = i + 1; j < draftPlatforms.length; j += 1) {
+      const a = draftPlatforms[i]
+      const b = draftPlatforms[j]
+      const left = String(bodies?.[a] || '').replace(/\s+/g, '')
+      const right = String(bodies?.[b] || '').replace(/\s+/g, '')
+      if (!left || !right) continue
+      if (left === right) {
+        hits.push({ a, b, reason: 'identical' })
+        continue
+      }
+      if (Math.min(left.length, right.length) < 80) continue
+      const jac = jaccard(left, right)
+      const con = containment(left, right)
+      if (jac >= 0.42 || con >= 0.7) hits.push({ a, b, reason: jac >= 0.42 ? 'overlap' : 'containment' })
+    }
+  }
+  return hits
+}
+
+export function scanGeneratedBody(body, platform) {
+  const evidence = writingIssues({ body, platform }).evidence
+  return { failed: evidence.length > 0, evidence, summary: evidence.map(item => item.message).join('；') }
+}
+
+export function scanGeneratedBodies(bodies) {
+  const issues = {}
+  for (const platform of draftPlatforms) issues[platform] = writingIssues({ body: bodies?.[platform], platform }).evidence
+  const same_essay = sameEssayHits(bodies)
+  const failed = same_essay.length > 0 || Object.values(issues).some(list => list.length > 0)
+  const summary = [
+    ...same_essay.map(item => `四平台同一篇（${item.a}≈${item.b}）`),
+    ...draftPlatforms.flatMap(platform => (issues[platform] || []).map(item => `${platform}：${item.message}`)),
+  ].slice(0, 8).join('；')
+  return { failed, issues, same_essay, summary }
 }
 
 export { qualityKeys }

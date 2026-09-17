@@ -13,8 +13,27 @@ export async function startGenerationMock({ adaptBody } = {}) {
     const last = String(payload.messages?.at(-1)?.content || '')
     const reply = content => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: mode === 'invalid' ? 'invalid JSON' : content } }] })) }
 
+    const sermon = '很多人做IP内容评估，靠的是拍完后的感觉。钱是唯一诚实的反馈。我有个客户花了三天写文案，结果数据惨淡。把内容拆到颗粒度再评估。内容不是艺术品，内容是产品。你只看点赞就是在蒙眼射箭。'.repeat(2)
+    const sermonBodies = { master: sermon, 小红书: sermon, 抖音: `你是不是觉得做IP最难的是想选题？${sermon}`, 视频号: sermon, 公众号: sermon }
+    const cleanBodies = title => ({
+      master: `母版重写：${title}。先给判断，再拆常见做法，最后给一步能做的动作。`,
+      小红书: `小红书笔记：${title}。昨天改选题时发现，发完就等数据的人最多。先问这条解决哪个场面。结尾让人评论你现在看的是点赞还是询盘。`,
+      抖音: `抖音口播：${title}。点赞会撒谎，询盘不会。别再为流量写，为成交写。`,
+      视频号: `视频号口播：${title}。泛泛而谈找路人，讲具体场面才找得着人。`,
+      公众号: `公众号正文：${title}。把内容当作品会自嗨。把内容当一次实验，看有没有人来问怎么买。没有就换角度，有就放大。`,
+    })
+    if (system.includes('只重写这一条')) {
+      const fromLine = last.match(/^必须按修改意见改：(.+)$/m)
+      return reply(`按意见改写：${fromLine?.[1] || '按检查意见改'}。点赞会撒谎，询盘不会。`)
+    }
+    if (system.includes('没过验收')) {
+      if (mode === 'sermon_stuck') return reply(JSON.stringify(sermonBodies))
+      const payload = JSON.parse(last)
+      return reply(JSON.stringify(cleanBodies(payload.brief?.title || '重写')))
+    }
     if (system.includes('文案写手')) {
       const brief = JSON.parse(last)
+      if (mode === 'sermon' || mode === 'sermon_stuck') return reply(JSON.stringify(sermonBodies))
       return reply(JSON.stringify({
         master: `母版正文：${brief.title}`,
         小红书: `小红书正文：${brief.title}`,

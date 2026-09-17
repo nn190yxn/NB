@@ -23,6 +23,21 @@ export function openingReadiness(draft) {
   return Boolean(hook && hook.validation?.status === 'passed' && clean(hook.text))
 }
 
+export function supersededDraftsForRegenerate(drafts, { ownerId, topicId }) {
+  if (!ownerId || topicId == null || topicId === '') return []
+  const id = Number(topicId)
+  if (!Number.isFinite(id)) return []
+  return (drafts || []).filter(draft =>
+    draft.owner_id === ownerId
+    && Number(draft.topic_id) === id
+    && !draft.archived_at
+    && draft.status !== 'published'
+    && draft.workflow_status !== 'ready_to_shoot'
+    && draft.workflow_status !== 'published'
+    && draft.approval?.status !== 'approved'
+  )
+}
+
 export function defaultDraftWorkflowFields(draft) {
   return {
     ...draft,

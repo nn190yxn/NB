@@ -13,10 +13,10 @@ import { callLlmWithFallback, callVision, testApiCapability } from './llm.mjs'
 import { interviewInput, interviewDigest, parsePositioning, fillProfile, parseTopics } from './positioning-generation.mjs'
 import { buildContentContext } from './content-context.mjs'
 import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
-import { buildDraftBrief, draftBriefPrompt, draftPlatforms, parseDraftBodies } from './draft-writing.mjs'
-import { defaultDraftWorkflowFields, validateHookText } from './draft-workflow.mjs'
+import { buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody } from './draft-writing.mjs'
+import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
-import { checkPersona, checkQuality, checkPublishChecklist } from './draft-checks.mjs'
+import { checkPersona, checkQuality, checkPublishChecklist, draftCheckRewriteNote, scanGeneratedBodies, scanGeneratedBody } from './draft-checks.mjs'
 import { approveDraftRecord, defaultApproval, revokeDraftRecord, validateApprovalReadiness } from './draft-approval.mjs'
 
 const port = Number(process.env.PORT || 3001)
@@ -1292,6 +1292,7 @@ const server = createServer(async (request, response) => {
       }
       let bodies
       let provider
+      let rewritten = false
       try {
         const result = await callLlmWithFallback(configs, [
           { role: 'system', content: draftBriefPrompt(userDocument('profile', request)) },
@@ -1299,13 +1300,34 @@ const server = createServer(async (request, response) => {
         ])
         bodies = parseDraftBodies(result.content)
         provider = result.provider
+        let scan = scanGeneratedBodies(bodies)
+        if (scan.failed) {
+          rewritten = true
+          const retry = await callLlmWithFallback(configs, [
+            { role: 'system', content: draftGateRewritePrompt(scan.summary) },
+            { role: 'user', content: JSON.stringify({ brief, previous: bodies, issues: { summary: scan.summary, same_essay: scan.same_essay } }) },
+          ])
+          bodies = parseDraftBodies(retry.content)
+          provider = retry.provider
+          scan = scanGeneratedBodies(bodies)
+          if (scan.failed) {
+            return send(response, 502, { code: 'GENERATION_GATE_FAILED', error: `草稿没过写作验收：${scan.summary}。未入库，请重试。`, retryable: true })
+          }
+        }
       } catch (error) {
         return send(response, 502, { code: 'GENERATION_FAILED', error: '草稿生成失败，请检查模型配置后重试；本次未生成草稿。', retryable: true, detail: error instanceof Error ? error.message : undefined })
       }
       const variantGroupId = randomUUID()
       const atomRefs = [...quoteMaterials, ...experienceMaterials].map(item => sourceRef('material', item.id))
       const sourceRefs = [...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs]
-      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider }, created_at: new Date().toISOString() }))
+      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten } }, created_at: new Date().toISOString() }))
+      if (persistedTopic?.id) {
+        const archivedAt = new Date().toISOString()
+        for (const draft of supersededDraftsForRegenerate(state.drafts, { ownerId: userId(request), topicId: persistedTopic.id })) {
+          draft.archived_at = archivedAt
+          draft.updated_at = archivedAt
+        }
+      }
       state.drafts.push(...drafts)
        await saveState('drafts')
       return send(response, 201, drafts)
@@ -1363,7 +1385,7 @@ const server = createServer(async (request, response) => {
       try {
         const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
         const result = await callLlmWithFallback(configs, [
-          { role: 'system', content: '你是去 AI 味的文案改写助手。把给定文案改写得更像真人创作者写的：口语化、加入具体细节和真实语气、拆掉排比与套话、不用"首先/其次/总而言之"、保留原有信息与观点结构。只输出改写后的正文，不要任何解释。' },
+          { role: 'system', content: draftDeaiPrompt() },
           { role: 'user', content: JSON.stringify({ body: String(draft.body || '').slice(0, 3000), style_memories: memories.map(item => item.content).slice(0, 5) }) },
         ])
         const content = String(result.content || '').trim()
@@ -1371,6 +1393,65 @@ const server = createServer(async (request, response) => {
         return send(response, 200, { content, provider: result.provider })
       } catch (error) {
         return send(response, 502, { error: error?.message || '改写失败，请稍后重试', retryable: true })
+      }
+    }
+    const draftReviseMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/revise$/)
+    if (draftReviseMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftReviseMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在' })
+      if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撕回人工确认，再修改草稿', code: 'invalid_transition' })
+      const body = await readJson(request)
+      const requestedFormat = String(body.format || '').trim()
+      if (requestedFormat) {
+        if (!draftVideoPlatforms.includes(draft.platform)) return send(response, 422, { error: '这个平台没有短中长体裁', code: 'validation_failed' })
+        if (!draftVideoFormats[requestedFormat]) return send(response, 422, { error: '体裁只能是短视频、中视频或长视频', code: 'validation_failed' })
+      }
+      const format = requestedFormat || draftFormatOf(draft)
+      const fromChecks = Boolean(body.from_checks)
+      const checkNote = fromChecks ? draftCheckRewriteNote(draft) : ''
+      if (fromChecks && !checkNote) return send(response, 422, { error: '当前检查没有能改正文的意见。开头范式、来源和档案短词要你自己点。', code: 'validation_failed' })
+      const extraNote = String(body.note || '').trim()
+      const note = extraNote && checkNote ? `${checkNote}。补充：${extraNote}` : extraNote || checkNote || (requestedFormat ? `改成${requestedFormat}` : '')
+      if (!note) return send(response, 422, { error: '修改意见不能为空', code: 'validation_failed' })
+      if (body.version !== undefined && body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', code: 'version_conflict', current: draft })
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      if (!configs.primary && !configs.fallback) return send(response, 422, { error: '按意见改写需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      if (usesSharedPrimaryLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) return send(response, 429, { error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false })
+      }
+      try {
+        const result = await callLlmWithFallback(configs, [
+          { role: 'system', content: draftPlatformRevisePrompt(draft.platform, format, { fromChecks }) },
+          { role: 'user', content: draftReviseUserMessage({ title: draft.title, body: draft.body, note, fromChecks }) },
+        ])
+        let nextBody = parseReviseBody(result.content)
+        let scan = scanGeneratedBody(nextBody, draft.platform)
+        let rewritten = false
+        if (scan.failed) {
+          rewritten = true
+          const retry = await callLlmWithFallback(configs, [
+            { role: 'system', content: draftPlatformRevisePrompt(draft.platform, format, { fromChecks }) + '\n上一稿没过验收：' + scan.summary },
+            { role: 'user', content: draftReviseUserMessage({ title: draft.title, body: draft.body, note, fromChecks, previous: nextBody, issues: scan.summary }) },
+          ])
+          nextBody = parseReviseBody(retry.content)
+          scan = scanGeneratedBody(nextBody, draft.platform)
+          if (scan.failed) return send(response, 502, { code: 'GENERATION_GATE_FAILED', error: `这一条没过写作验收：${scan.summary}。未改库，请重试。`, retryable: true })
+        }
+        const now = new Date().toISOString()
+        draft.history ||= []
+        draft.history.push({ ...structuredClone(draft), history: undefined, version: draft.version, snapshot_at: now })
+        draft.body = nextBody
+        if (requestedFormat) draft.content_format = requestedFormat
+        draft.version += 1
+        draft.updated_at = now
+        draft.workflow_status = 'content_ready'
+        draft.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
+        draft.generation_context = { ...(draft.generation_context || {}), content_format: draft.content_format || format, revise: { note, format, rewritten, at: now } }
+        await saveState('drafts')
+        return send(response, 200, draft)
+      } catch (error) {
+        return send(response, 502, { error: error?.message || '按意见改写失败，请稍后重试', retryable: true })
       }
     }
     const draftSlotMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/slots\/(title|opening|structure|ending)$/)

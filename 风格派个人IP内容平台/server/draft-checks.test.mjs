@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { checkPersona, checkPublishChecklist, checkQuality, hasBlockedCheck } from './draft-checks.mjs'
+import { checkPersona, checkPublishChecklist, checkQuality, draftCheckRewriteNote, hasBlockedCheck, scanGeneratedBodies } from './draft-checks.mjs'
 import { draftBriefPrompt, draftLengthTargets } from './draft-writing.mjs'
 
 const opening = { option_id: 'structure-2', name: '开头范式一：预测攻击式', source: '对标dbs', applied_at: '2026-09-14T00:00:00.000Z' }
@@ -76,7 +76,7 @@ test('quality and publish checks block missing evidence, risk and fact verificat
 })
 
 test('质量门把模型不遵守的平台字数不足当成警告而不是拦停', () => {
-  // 实测：提示词要求抖音不超 250 字，模型给了 384 字；公众号要求 600-1200，模型给了 514 字。
+  // 实测：提示词要求抖音不超 250 字，模型给了 384 字；公众号要求 1000-2500，模型给了 514 字。
   const long = checkQuality({ ...baseDraft, platform: '抖音', body: '口'.repeat(384) }, {})
   assert.equal(long.status, 'passed', '字数不合规不应直接拦停发布')
   const lengthEvidence = long.evidence.find(item => item.code === 'platform_length')
@@ -89,10 +89,41 @@ test('质量门把模型不遵守的平台字数不足当成警告而不是拦�
   const short = checkQuality({ ...baseDraft, platform: '公众号', body: '短'.repeat(514) }, {})
   const shortEvidence = short.evidence.find(item => item.code === 'platform_length')
   assert.match(shortEvidence.message, /514 字/)
-  assert.match(shortEvidence.message, /600-1200 字/)
+  assert.match(shortEvidence.message, /1000-2500 字/)
 
   const fine = checkQuality({ ...baseDraft, platform: '小红书', body: '好'.repeat(507) }, {})
   assert.equal(fine.evidence.some(item => item.code === 'platform_length'), false)
+
+  const midOk = checkQuality({ ...baseDraft, platform: '抖音', content_format: '中视频', body: '口'.repeat(800) }, {})
+  assert.equal(midOk.evidence.some(item => item.code === 'platform_length'), false)
+  const midShort = checkQuality({ ...baseDraft, platform: '抖音', content_format: '中视频', body: '口'.repeat(200) }, {})
+  assert.match(midShort.evidence.find(item => item.code === 'platform_length').message, /400-1000 字/)
+})
+
+test('检查意见只抽出能改正文的指令，槽位和档案短词不管', () => {
+  const body = `拆完爆款不会用？因为你只学了皮毛。${'口'.repeat(360)}有个客户。这就叫底层逻辑。`
+  const draft = { ...baseDraft, platform: '抖音', opening_ref: null, body }
+  const persona = checkPersona(draft, { role: '顾问', audiences: ['想做个人IP却每天从零开始的创业者'], pillars: ['素材原子化'] })
+  const quality = checkQuality(draft, { audiences: ['想做个人IP却每天从零开始的创业者'], pillars: ['素材原子化'] })
+  const note = draftCheckRewriteNote({ ...draft, checks: { persona, quality } })
+  assert.match(note, /把字数改到不超过 250/)
+  assert.match(note, /不要另写一篇更简单的/)
+  assert.match(note, /不要问句/)
+  assert.match(note, /咨询腔/)
+  assert.match(note, /底层逻辑/)
+  assert.doesNotMatch(note, /开头句/)
+  assert.doesNotMatch(note, /档案里的/)
+  assert.equal(draftCheckRewriteNote({
+    ...baseDraft,
+    checks: {
+      quality: {
+        status: 'blocked',
+        draft_version: 2,
+        evidence: [{ code: 'opening_missing', message: '尚未用「开头句」槽位确定开头范式', severity: 'blocked' }],
+        suggestions: ['点草稿的「开头句」槽位，从方法库选一个开头范式'],
+      },
+    },
+  }), '')
 })
 
 test('质量门把设问开头当成警告：提示词要求第一句直给冲突或结论', () => {
@@ -129,6 +160,9 @@ test('提示词禁止自我介绍与引导关注', () => {
   assert.match(prompt, /不要写引导关注、点赞一类话术/)
   assert.match(prompt, /不要写 Markdown 标记/)
   assert.match(prompt, /宁可少一个案例也不编造/)
+  assert.match(prompt, /语义块/)
+  assert.match(prompt, /不要写成名词解释/)
+  assert.match(prompt, /不要把机制、钩子、公式、骨架这些词写进给读者看的正文/)
 })
 
 test('质量门把模型编造的自我介绍当成警告', () => {
@@ -195,11 +229,49 @@ test('具体案例与数字必须有人确认', () => {
   assert.equal(timeline.evidence.some(item => item.code === 'case_claim'), false)
 })
 
+test('质量门把咨询腔和工程词标出来', () => {
+  const jargon = checkQuality({ ...baseDraft, body: '把复杂概念拆解成小白能听懂的颗粒度。先用钩子抓住注意力，这就是可复制机制。' }, {})
+  const evidence = jargon.evidence.find(item => item.code === 'consulting_tone')
+  assert.ok(evidence, '工程词必须留下证据')
+  assert.equal(evidence.severity, 'warning')
+  assert.match(evidence.message, /颗粒度/)
+  assert.match(evidence.message, /钩子/)
+  assert.ok(jargon.suggestions.some(item => item.includes('去 AI 感改写')))
+
+  const lecture = checkQuality({ ...baseDraft, body: '首先，灵感不重要。其次，系统才重要。总而言之，你要沉淀资产。' }, {})
+  assert.match(lecture.evidence.find(item => item.code === 'consulting_tone').message, /首先/)
+
+  const normal = checkQuality({ ...baseDraft, body: '很多人以为这件事靠技巧，其实是先把过程讲清楚。定位不清就先别拍。' }, {})
+  assert.equal(normal.evidence.some(item => item.code === 'consulting_tone'), false)
+})
+
 test('提示词里的字数与确定性检查用的是同一套数字', () => {
   const prompt = draftBriefPrompt({})
-  assert.match(prompt, new RegExp(`小红书 ${draftLengthTargets.小红书.min}-${draftLengthTargets.小红书.max} 字`))
+  assert.match(prompt, new RegExp(`小红书图文笔记 ${draftLengthTargets.小红书.min}-${draftLengthTargets.小红书.max} 字`))
   assert.match(prompt, new RegExp(`不超过 ${draftLengthTargets.抖音.max} 字`))
-  assert.match(prompt, new RegExp(`公众号 ${draftLengthTargets.公众号.min}-${draftLengthTargets.公众号.max} 字`))
+  assert.match(prompt, new RegExp(`公众号才是长文 ${draftLengthTargets.公众号.min}-${draftLengthTargets.公众号.max} 字`))
+})
+
+test('生成验收扫咨询腔、编客户、设问开头和四平台同一篇', () => {
+  const sermon = '很多人做IP内容评估，靠的是拍完后的感觉。钱是唯一诚实的反馈。我有个客户花了三天写文案，结果数据惨淡。把内容拆到颗粒度再评估。'.repeat(2)
+  const bad = scanGeneratedBodies({ 小红书: sermon, 抖音: `你是不是觉得做IP最难？${sermon}`, 视频号: sermon, 公众号: sermon })
+  assert.equal(bad.failed, true)
+  assert.ok(bad.same_essay.length)
+  assert.ok(bad.issues['视频号'].some(item => item.code === 'consulting_tone'))
+  assert.ok(bad.issues['小红书'].some(item => item.code === 'case_claim'))
+  assert.ok(bad.issues['抖音'].some(item => item.code === 'opening_question'))
+
+  const clean = scanGeneratedBodies({
+    小红书: '昨天改选题，发现发完就等数据的人最多。先看这条解决哪个场面。你现在看的是点赞还是询盘。'.repeat(3),
+    抖音: '点赞会撒谎，询盘不会。别再为流量写，为成交写。问怎么买才算有效。'.repeat(3),
+    视频号: '泛泛而谈找路人。讲具体场面才找得着人。私域不是朋友圈展示柜。'.repeat(3),
+    公众号: '把内容当作品会自嗨。把内容当一次实验，看有没有人来问下一步。没有就换角度，有就放大。'.repeat(3),
+  })
+  assert.equal(clean.failed, false)
+
+  const copies = scanGeneratedBodies({ 小红书: '短文相同', 抖音: '短文相同', 视频号: '短文相同', 公众号: '短文相同' })
+  assert.equal(copies.failed, true)
+  assert.ok(copies.same_essay.some(item => item.reason === 'identical'))
 })
 
 test('legacy drafts remain publish-check compatible when otherwise complete', () => {
