@@ -96,8 +96,15 @@ export function checkPersona(draft, profile = {}) {
   const prohibitedHits = hitsFor(body, prohibited)
   if (!text(profile.role)) { evidence.push(evidenceItem('missing_role', 'IP 档案缺少角色定位')); suggestions.push('补充角色定位后重新检查') }
   if (!audiences.length) { evidence.push(evidenceItem('missing_audience', 'IP 档案尚未配置受众')); suggestions.push('补充目标受众') }
-  if (audiences.length && !matchedAudience) { evidence.push(evidenceItem('audience_mismatch', '正文未明显对应当前受众')) ; suggestions.push('在正文中写出受众正在面对的具体问题') }
-  if (pillars.length && !matchedPillar) { evidence.push(evidenceItem('pillar_mismatch', '正文未明显对应内容支柱')); suggestions.push('补充一个与内容支柱直接相关的观点或案例') }
+  if (audiences.length && !matchedAudience) {
+    // 档案字段写成了整句时，正文永远不会原样出现这句，这条会一直命中；那是档案的问题，不该算正文不合格。
+    if (profileMatchable(audiences)) { evidence.push(evidenceItem('audience_mismatch', '正文未明显对应当前受众')); suggestions.push('在正文中写出受众正在面对的具体问题') }
+    else { const only = profileFirstOverlong(audiences); if (only) suggestions.push(profileOverlongHint(only)) }
+  }
+  if (pillars.length && !matchedPillar) {
+    if (profileMatchable(pillars)) { evidence.push(evidenceItem('pillar_mismatch', '正文未明显对应内容支柱')); suggestions.push('补充一个与内容支柱直接相关的观点或案例') }
+    else { const only = profileFirstOverlong(pillars); if (only) suggestions.push(profileOverlongHint(only)) }
+  }
   if (prohibitedHits.length) { evidence.push(evidenceItem('prohibited_pattern', `命中档案表达边界：${prohibitedHits.join('、')}`)); suggestions.push('替换为符合个人表达边界的说法') }
   const firstPerson = /我|我的|我们|亲自|经历|复盘/.test(body)
   if (!firstPerson) { evidence.push(evidenceItem('low_personal_signal', '正文缺少明显的个人经历或第一人称信号')); suggestions.push('加入一个本人经历、过程或明确判断') }
@@ -139,20 +146,20 @@ export function checkQuality(draft, profile = {}) {
   if (body && structureScore < 100) { evidence.push(evidenceItem('structure_weak', '正文长度或段落结构仍需加强')); suggestions.push('补充真实过程、证据和可执行步骤') }
   // 受众/支柱的命中靠「正文里出现档案里的原话」。档案里写成了整句时（实测他现在的受众是 17 字整句），
   // 正文不可能原样出现，这条就永远命中（真实草稿 1/32）；把原因写进建议，别让人以为正文真有问题。
-  const overlongValue = [...audienceValues, ...pillarValues].map(value => text(value)).find(value => value.length > 12)
-  const shortValueHint = () => `档案里的「${overlongValue}」有 ${overlongValue.length} 字，正文不会原样出现这句，所以这条会一直命中；把它改成 2-8 字短词（例如「个人IP创业者」），或确认正文确实对上了之后忽略`
-  if (audienceScore < 100) { evidence.push(evidenceItem('audience_weak', '正文与当前受众问题的连接不够明确')); suggestions.push(overlongValue ? shortValueHint() : '在正文中写出受众正在面对的具体问题') }
-  if (pointScore < 100) { evidence.push(evidenceItem('point_weak', '核心观点或内容支柱不够明确')); suggestions.push(overlongValue ? shortValueHint() : '用一句话写出你的判断，再用过程或案例支撑') }
+  const audienceOverlong = profileFirstOverlong(audienceValues)
+  const pillarOverlong = profileFirstOverlong(pillarValues)
+  if (audienceScore < 100) { if (profileMatchable(audienceValues)) { evidence.push(evidenceItem('audience_weak', '正文与当前受众问题的连接不够明确')); suggestions.push('在正文中写出受众正在面对的具体问题') } else if (audienceOverlong) suggestions.push(profileOverlongHint(audienceOverlong)) }
+  if (pointScore < 100) { if (profileMatchable(pillarValues)) { evidence.push(evidenceItem('point_weak', '核心观点或内容支柱不够明确')); suggestions.push('用一句话写出你的判断，再用过程或案例支撑') } else if (pillarOverlong) suggestions.push(profileOverlongHint(pillarOverlong)) }
   // 模型并不遵守提示词里的字数要求（实测：提示词写抖音不超 250 字，模型给了 384 字），所以这里做确定性校验。
   const mixupWords = platformMixupHits(draft?.body, draft?.platform)
       suggestions.push('把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
   const methodWords = methodTalkHits(draft?.body)
-      suggestions.push('把方法骨架换成一件具体的事或一个具体判断，字数不要因此变少')
+      suggestions.push(checkRewriteHints.method_talk)
   const toneWords = aiToneHits(draft?.body)
-  if (toneWords.length) { evidence.push(evidenceItem('ai_tone_phrase', `正文出现升华式句式：${toneWords.join('、')}`)); suggestions.push('把升华句换成一句具体的话：谁、在什么场合、发生了什么') }
+  if (toneWords.length) { evidence.push(evidenceItem('ai_tone_phrase', `正文出现升华式句式：${toneWords.join('、')}`)); suggestions.push(checkRewriteHints.ai_tone_phrase) }
   const vagueWords = vagueCaseHits(draft?.body)
-  if (vagueWords.length) { evidence.push(evidenceItem('vague_case', `正文出现没有主体的案例：${vagueWords.join('、')}`)); suggestions.push('不要用「某某人」举例，换成具体的人和事') }
-  if (lacksConcreteSupport(draft?.body)) { evidence.push(evidenceItem('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断')); suggestions.push('补一个具体场景或数字') }
+  if (vagueWords.length) { evidence.push(evidenceItem('vague_case', `正文出现没有主体的案例：${vagueWords.join('、')}`)); suggestions.push(checkRewriteHints.vague_case) }
+  if (lacksConcreteSupport(draft?.body)) { evidence.push(evidenceItem('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断')); suggestions.push(checkRewriteHints.no_concrete_support) }
   for (const [code, hit] of templateSentenceHits(draft?.body)) { evidence.push(evidenceItem(code, `正文出现模板句：${hit}`)); suggestions.push(templateSentenceHints[code]) }
   const lengthTarget = draftLengthTargetOf(draft)
   const lengthRange = draftLengthRangeFrom(lengthTarget)
@@ -196,6 +203,10 @@ export function hasBlockedCheck(draft) {
   return ['persona', 'quality', 'publish_checklist'].some(key => draft?.checks?.[key]?.status === 'blocked')
 }
 
+const profileMatchable = values => (values || []).some(value => text(value).length <= 12)
+const profileFirstOverlong = values => (values || []).map(value => text(value)).find(value => value.length > 12)
+const profileOverlongHint = value => `档案里的「${value}」有 ${text(value).length} 字，判据匹配不上，正文不算不合格；把它改成 2-8 字短词（例如「个人IP创业者」）`
+
 const checkRewriteHints = {
   audience_mismatch: '写出受众正在面对的具体问题，用短词，不要抄档案整句',
   pillar_mismatch: '补一个跟内容支柱直接相关的判断，不要抄档案整句',
@@ -228,11 +239,14 @@ const checkRewriteHints = {
 export function draftCheckRewriteNote(draft) {
   const version = currentVersion(draft)
   const hints = []
+  const seen = new Set()
   for (const key of ['persona', 'quality']) {
     const item = draft?.checks?.[key]
     if (!item || Number(item.draft_version || 0) !== version) continue
     if (item.status === 'passed') continue
     for (const evidence of item.evidence || []) {
+      if (seen.has(evidence.code)) continue
+      seen.add(evidence.code)
       if (evidence.code === 'platform_length') {
         const range = draftLengthRangeFrom(draftLengthTargetOf(draft))
         if (range) hints.push(`把字数改到${range}，保留原判断和可执行的一步，不要另写一篇更简单的`)
@@ -385,7 +399,7 @@ function writingIssues(draft) {
     const aiToneList = aiToneHits(draft?.body)
     if (aiToneList.length) {
       evidence.push(evidenceItem('ai_tone_phrase', `正文出现升华式句式：${aiToneList.join('、')}`))
-      suggestions.push('把升华句换成一句具体的话：谁、在什么场合、发生了什么')
+      suggestions.push(checkRewriteHints.ai_tone_phrase)
     }
     const vagueList = vagueCaseHits(draft?.body)
     if (vagueList.length) {
@@ -408,7 +422,7 @@ function writingIssues(draft) {
     const methodHits = methodTalkHits(draft?.body)
     if (methodHits.length) {
       evidence.push(evidenceItem('method_talk', `正文在讲方法或分发骨架：${methodHits.join('、')}`))
-      suggestions.push('把方法骨架换成一件具体的事或一个具体判断，字数不要因此变少')
+      suggestions.push(checkRewriteHints.method_talk)
     }
   const caseHits = caseClaimHits(draft?.body)
   if (caseHits.length) {

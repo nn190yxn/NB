@@ -46,23 +46,14 @@ test('质量门不把序数「第一」当风险词阻断，真主张仍然阻�
   assert.equal(claim.status, 'blocked')
 })
 
-test('受众写成整句时，质量门直接把原因说出来', () => {
-  // 实测他现在的受众是 17 字整句（「想做个人IP却每天从零开始的创业者」），正文不会原样出现 → 32 条真实草稿只命中 1 条。
+test('受众写成整句时只提醒改档案，不再算正文不合格', () => {
+  // 他的受众是 17 字整句（「想做个人IP却每天从零开始的创业者」），正文永远不会原样出现这句，这条会一直命中，等于永远卡死。
+  // 实测：32 条真实草稿里只有 1 条命中，说明它量的是档案的写法，不是正文的质量。
   const longAudience = { audiences: ['想做个人IP却每天从零开始的创业者'], pillars: [], viewpoints: [], problems: [] }
   const quality = checkQuality(baseDraft, longAudience)
-  const audience = quality.evidence.find(item => item.code === 'audience_weak')
-  assert.ok(audience)
-  assert.ok(quality.suggestions.some(line => line.includes('不会原样出现') && line.includes('2-8 字短词')))
-
-  // 换成短词、且正文里真的出现了这个词，就不再命中
-  const short = checkQuality({ ...baseDraft, body: `${baseDraft.body}写给创业者看的。` }, { audiences: ['创业者'], pillars: [], viewpoints: [], problems: [] })
-  assert.equal(short.evidence.some(item => item.code === 'audience_weak'), false)
-
-  // 档案里全都不超过 12 字时，不给那条“写太长”的提示
-  const noLong = checkQuality({ ...baseDraft, body: '正文与档案无关的一段话。'.repeat(8) }, { audiences: ['创业者'], pillars: ['素材原子化'], viewpoints: [], problems: [] })
-  assert.equal(noLong.suggestions.some(line => line.includes('不会原样出现')), false)
+  assert.equal(quality.evidence.some(item => item.code === 'audience_weak'), false, '档案写整句不算正文不合格')
+  assert.ok(quality.suggestions.some(item => item.includes('2-8 字短词')), '但仍要提醒改档案')
 })
-
 test('quality and publish checks block missing evidence, risk and fact verification', () => {
   const quality = checkQuality({ ...baseDraft, opening_ref: null, source_refs: [], body: '包赚' }, {})
   assert.equal(quality.status, 'blocked')
@@ -328,4 +319,33 @@ test('句子级模板句判据拦得住，具体清单不误伤', () => {
   const concreteList = '选题、拍摄、剪辑这三件事我各花了一周。上周三改到第四版才发出去。'.repeat(5)
   const clean = checkQuality({ ...baseDraft, platform: '抖音', body: concreteList }, {})
   assert.equal(clean.evidence.some(item => ['triple_list', 'connector_abuse'].includes(item.code)), false)
+})
+
+test('同一问题只给一条建议：人设检查和质量门都报升华句也只写一遍', () => {
+  const draft = {
+    ...baseDraft,
+    platform: '抖音',
+    body: '正文内容足够长。'.repeat(20),
+    version: 3,
+    checks: {
+      persona: { draft_version: 3, status: 'failed', evidence: [{ code: 'ai_tone_phrase', message: '正文出现升华式句式：不是A而是B' }] },
+      quality: { draft_version: 3, status: 'failed', evidence: [{ code: 'ai_tone_phrase', message: '正文出现升华式句式：不是A而是B' }, { code: 'vague_case', message: '正文出现没有主体的案例：某某人' }] },
+    },
+  }
+  const note = draftCheckRewriteNote(draft)
+  assert.equal(note.split('不要只换个说法').length - 1, 1, '升华句只该出现一次')
+  assert.equal(note.split('你自己经历过的具体事').length - 1, 1, '某某人只该出现一次')
+  assert.ok(note.includes('某某人'))
+})
+
+test('档案字段写成整句时只提醒改档案，不算正文不合格', () => {
+  const profile = { role: '顾问', audiences: ['想做个人IP却每天从零开始的创业者'], problems: ['选题靠灵感'], pillars: ['定位先于内容'], viewpoints: [], tone_preferences: [], prohibited_patterns: [] }
+  const draft = { ...baseDraft, platform: '抖音', body: '定位先于内容这件事我上周改了三版才想明白。'.repeat(6) }
+  const quality = checkQuality(draft, profile)
+  const persona = checkPersona(draft, profile)
+  const codes = [...quality.evidence, ...persona.evidence].map(item => item.code)
+  assert.equal(codes.includes('audience_weak'), false, '档案写整句不该算正文不合格')
+  assert.equal(codes.includes('audience_mismatch'), false)
+  const hints = [...quality.suggestions, ...persona.suggestions].join(' ')
+  assert.ok(hints.includes('2-8 字短词'), hints)
 })
