@@ -53,9 +53,9 @@ test('改写结果护栏：只认能算清的两件事', () => {
   assert.equal(underCap.ok, false)
   assert.match(underCap.failures[0], /不得少于 1000 字/)
 
-  // 抖音短视频上限 400、下限 150：原稿 600 字可以压到 400，不能压到 80。
-  assert.equal(checkReviseOutcome({ before: '口'.repeat(600), after: '口'.repeat(400), platform: '抖音', format: '短视频' }).ok, true)
-  assert.equal(checkReviseOutcome({ before: '口'.repeat(600), after: '口'.repeat(80), platform: '抖音', format: '短视频' }).ok, false)
+  // 抖音短视频 300-900：原稿 1200 字可以压到 900（上限），不能压到 80。
+  assert.equal(checkReviseOutcome({ before: '口'.repeat(1200), after: '口'.repeat(900), platform: '抖音', format: '短视频' }).ok, true)
+  assert.equal(checkReviseOutcome({ before: '口'.repeat(1200), after: '口'.repeat(80), platform: '抖音', format: '短视频' }).ok, false)
 
   // 「按检查意见改写」时，被点名的问题必须真的少下去，不是换个更简单的说法。
   const withIssue = `拆完爆款不会用？${'口'.repeat(360)}`

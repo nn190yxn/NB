@@ -24,7 +24,7 @@ test('段落结构判据用未折叠的原文，口播稿不按分段要求', ()
   assert.equal(paragraphs.evidence.some(item => item.code === 'structure_weak'), false)
 
   // 长文一整段不分段仍要提示
-  const flat = checkQuality({ ...baseDraft, body: '一整段长文，中间没有空行。'.repeat(40) }, {})
+  const flat = checkQuality({ ...baseDraft, body: '一整段长文，中间没有空行。'.repeat(80) }, {})
   assert.equal(flat.dimensions.structure_and_risk, 65)
   assert.ok(flat.evidence.some(item => item.code === 'structure_weak'))
 
@@ -77,14 +77,14 @@ test('quality and publish checks block missing evidence, risk and fact verificat
 
 test('质量门把模型不遵守的平台字数不足当成警告而不是拦停', () => {
   // 实测：提示词要求抖音不超 400 字，模型给过 420 字；公众号要求 1000-2500，模型给过 514 字。
-  const long = checkQuality({ ...baseDraft, platform: '抖音', body: '口'.repeat(420) }, {})
+  const long = checkQuality({ ...baseDraft, platform: '抖音', body: '口'.repeat(950) }, {})
   assert.equal(long.status, 'passed', '字数不合规不应直接拦停发布')
   const lengthEvidence = long.evidence.find(item => item.code === 'platform_length')
   assert.ok(lengthEvidence, '字数超出目标必须留下证据')
   assert.equal(lengthEvidence.severity, 'warning')
-  assert.match(lengthEvidence.message, /420 字/)
-  assert.match(lengthEvidence.message, /150-400/)
-  assert.ok(long.suggestions.some(item => item.includes('150-400')))
+  assert.match(lengthEvidence.message, /950 字/)
+  assert.match(lengthEvidence.message, /300-900/)
+  assert.ok(long.suggestions.some(item => item.includes('300-900')))
 
   const short = checkQuality({ ...baseDraft, platform: '公众号', body: '短'.repeat(514) }, {})
   const shortEvidence = short.evidence.find(item => item.code === 'platform_length')
@@ -101,12 +101,12 @@ test('质量门把模型不遵守的平台字数不足当成警告而不是拦�
 })
 
 test('检查意见只抽出能改正文的指令，槽位和档案短词不管', () => {
-  const body = `拆完爆款不会用？因为你只学了皮毛。${'口'.repeat(420)}有个客户。这就叫底层逻辑。`
+  const body = `拆完爆款不会用？因为你只学了皮毛。${'口'.repeat(950)}有个客户。这就叫底层逻辑。`
   const draft = { ...baseDraft, platform: '抖音', opening_ref: null, body }
   const persona = checkPersona(draft, { role: '顾问', audiences: ['想做个人IP却每天从零开始的创业者'], pillars: ['素材原子化'] })
   const quality = checkQuality(draft, { audiences: ['想做个人IP却每天从零开始的创业者'], pillars: ['素材原子化'] })
   const note = draftCheckRewriteNote({ ...draft, checks: { persona, quality } })
-  assert.match(note, /把字数改到150-400/)
+  assert.match(note, /把字数改到300-900/)
   assert.match(note, /不要另写一篇更简单的/)
   assert.match(note, /不要问句/)
   assert.match(note, /咨询腔/)
@@ -248,7 +248,7 @@ test('质量门把咨询腔和工程词标出来', () => {
 test('提示词里的字数与确定性检查用的是同一套数字', () => {
   const prompt = draftBriefPrompt({})
   assert.match(prompt, new RegExp(`小红书图文笔记 ${draftLengthTargets.小红书.min}-${draftLengthTargets.小红书.max} 字`))
-  assert.match(prompt, new RegExp(`不超过 ${draftLengthTargets.抖音.max} 字`))
+  assert.match(prompt, new RegExp(`${draftLengthTargets.抖音.min}-${draftLengthTargets.抖音.max} 字`))
   assert.match(prompt, new RegExp(`公众号才是长文 ${draftLengthTargets.公众号.min}-${draftLengthTargets.公众号.max} 字`))
 })
 

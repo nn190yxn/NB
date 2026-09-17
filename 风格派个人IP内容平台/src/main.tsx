@@ -723,9 +723,9 @@ type MaterialKind = 'article' | 'quote' | 'hotspot' | 'insight' | 'experience'
 // 平台字数目标：与 server/draft-writing.mjs 的 draftLengthTargets 保持一致。
 // 客户端需要在编辑时实时判断字数是否超目标（草稿列表的「N 字」），所以这里必须有一份；
 // 两处数字漂移会被 web-assets.test.mjs 的断言直接拦下。
-const draftLengthTargets: Record<string, { min: number; max: number }> = { 小红书: { min: 400, max: 1000 }, 抖音: { min: 150, max: 400 }, 视频号: { min: 150, max: 400 }, 公众号: { min: 1000, max: 2500 } }
+const draftLengthTargets: Record<string, { min: number; max: number }> = { 小红书: { min: 400, max: 1000 }, 抖音: { min: 300, max: 900 }, 视频号: { min: 300, max: 900 }, 公众号: { min: 1000, max: 2500 } }
 const draftPlatformFormats: Record<string, string> = { 小红书: '图文笔记', 抖音: '短视频口播', 视频号: '短视频口播', 公众号: '长文' }
-const draftVideoFormatLengths: Record<string, { min: number; max: number }> = { 短视频: { min: 150, max: 400 }, 中视频: { min: 400, max: 1000 }, 长视频: { min: 600, max: 1500 } }
+const draftVideoFormatLengths: Record<string, { min: number; max: number }> = { 短视频: { min: 300, max: 900 }, 中视频: { min: 400, max: 1000 }, 长视频: { min: 600, max: 1500 } }
 const draftVideoPlatforms = ['抖音', '视频号']
 const draftVideoFormatOf = (draft: DraftItem) => {
   if (!draftVideoPlatforms.includes(draft.platform)) return ''

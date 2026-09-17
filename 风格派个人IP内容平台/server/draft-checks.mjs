@@ -145,9 +145,9 @@ export function checkQuality(draft, profile = {}) {
   if (pointScore < 100) { evidence.push(evidenceItem('point_weak', '核心观点或内容支柱不够明确')); suggestions.push(overlongValue ? shortValueHint() : '用一句话写出你的判断，再用过程或案例支撑') }
   // 模型并不遵守提示词里的字数要求（实测：提示词写抖音不超 250 字，模型给了 384 字），所以这里做确定性校验。
   const mixupWords = platformMixupHits(draft?.body, draft?.platform)
-  if (mixupWords.length) { evidence.push(evidenceItem('platform_mixup', `正文提到别的平台：${mixupWords.join('、')}`)); suggestions.push('一条草稿只对当前平台说话，删掉其他平台名和分发说明') }
+suggestions.push('把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
   const methodWords = methodTalkHits(draft?.body)
-  if (methodWords.length) { evidence.push(evidenceItem('method_talk', `正文在讲方法或分发骨架：${methodWords.join('、')}`)); suggestions.push('方法和骨架留给自己，正文只写读者能拿走的那件事') }
+suggestions.push('把方法骨架换成一件具体的事或一个具体判断，字数不要因此变少')
   const lengthTarget = draftLengthTargetOf(draft)
   const lengthRange = draftLengthRangeFrom(lengthTarget)
   const bodyLength = String(draft?.body || '').trim().length
@@ -203,8 +203,8 @@ const checkRewriteHints = {
   format_leak: '删掉结构说明和其他平台建议',
   case_claim: '不要编客户和数字，改成通用判断',
   consulting_tone: '改成跟熟人说话，删掉咨询腔和工程词',
-  platform_mixup: '删掉正文里的其他平台名和分发说明，只对当前平台说话',
-  method_talk: '删掉「拆成几块 / 裂变 / 多平台分发」这类方法骨架，直接写那件事本身',
+platform_mixup: '把其他平台名和分发说明换成这一条自己的具体内容，不要删掉就完事',
+method_talk: '把「拆成几块 / 裂变 / 多平台分发」换成一件具体的经历或判断，字数不要因此变少',
   opening_question: '第一句直给冲突或结论，不要问句',
 }
 
@@ -294,12 +294,12 @@ function writingIssues(draft) {
   const mixupHits = platformMixupHits(draft?.body, draft?.platform)
     if (mixupHits.length) {
       evidence.push(evidenceItem('platform_mixup', `正文提到别的平台：${mixupHits.join('、')}`))
-      suggestions.push('一条草稿只对当前平台说话，删掉其他平台名和分发说明')
+suggestions.push('把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
     }
     const methodHits = methodTalkHits(draft?.body)
     if (methodHits.length) {
       evidence.push(evidenceItem('method_talk', `正文在讲方法或分发骨架：${methodHits.join('、')}`))
-      suggestions.push('方法和骨架留给自己，正文只写读者能拿走的那件事')
+suggestions.push('把方法骨架换成一件具体的事或一个具体判断，字数不要因此变少')
     }
   const caseHits = caseClaimHits(draft?.body)
   if (caseHits.length) {

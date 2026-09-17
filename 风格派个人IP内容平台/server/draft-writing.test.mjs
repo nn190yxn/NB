@@ -62,7 +62,7 @@ test('写作简报与模型输出解析保持纯函数行为', () => {
   assert.match(prompt, /四个平台必须是四种读感，不能同一篇改字数/)
   assert.match(prompt, /小红书是图文笔记/)
   assert.match(prompt, /平台正文上限 1000 字/)
-  assert.match(prompt, /不要写成中视频或长视频逐字稿/)
+  assert.match(prompt, /把一件事讲清楚比卡时长重要/)
   assert.match(draftPlatformForms.小红书, /不超过 1000 字/)
   assert.match(draftPlatformForms.抖音, /短视频口播/)
   assert.equal(draftLengthTargets.小红书.max, 1000)
