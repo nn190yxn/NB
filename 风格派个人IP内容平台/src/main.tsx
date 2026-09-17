@@ -760,7 +760,8 @@ const materialKindLabels: Record<MaterialKind, string> = { article: '文章', qu
 const atomKindKeys: MaterialKind[] = ['quote', 'hotspot', 'insight', 'experience']
 // 可信度三档的标签与筛选行共用一份，列表行和筛选行不会说两套话。
 const materialTrustKeys = ['verified', 'sourced', 'derived']
-const materialTrustLabels: Record<string, string> = { verified: '已确认', sourced: '有来源', derived: '模型生成' }
+// derived 既盖模型生成、也盖演示数据，统称「未核实」：写「模型生成」会把演示数据说错。
+const materialTrustLabels: Record<string, string> = { verified: '已确认', sourced: '有来源', derived: '未核实' }
 // 五类认知角色：装配按角色取料。QST 问题 / CON 概念 / OPI 主张 / CAS 案例 / SOL 方案。
 const materialUnitKeys = ['QST', 'CON', 'OPI', 'CAS', 'SOL']
 const materialUnitLabels: Record<string, string> = { QST: '问题', CON: '概念', OPI: '主张', CAS: '案例', SOL: '方案' }
