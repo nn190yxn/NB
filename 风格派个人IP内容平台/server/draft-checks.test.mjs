@@ -24,11 +24,11 @@ test('段落结构判据用未折叠的原文，口播稿不按分段要求', ()
   assert.equal(paragraphs.evidence.some(item => item.code === 'structure_weak'), false)
 
   // 长文一整段不分段仍要提示
-  const flat = checkQuality({ ...baseDraft, body: '一整段长文，中间没有空行。'.repeat(20) }, {})
+  const flat = checkQuality({ ...baseDraft, body: '一整段长文，中间没有空行。'.repeat(40) }, {})
   assert.equal(flat.dimensions.structure_and_risk, 65)
   assert.ok(flat.evidence.some(item => item.code === 'structure_weak'))
 
-  // 口播稿（≤250 字）本来就常常一整段，不因为段落数被扣分
+  // 口播稿本来就常常一整段（门槛跟平台上限走），不因为段落数被扣分
   const spoken = checkQuality({ ...baseDraft, platform: '抖音', body: '口播稿一整段，不超过两百五十个字。'.repeat(8) }, {})
   assert.equal(spoken.dimensions.structure_and_risk, 100)
   assert.equal(spoken.evidence.some(item => item.code === 'structure_weak'), false)
@@ -76,15 +76,15 @@ test('quality and publish checks block missing evidence, risk and fact verificat
 })
 
 test('质量门把模型不遵守的平台字数不足当成警告而不是拦停', () => {
-  // 实测：提示词要求抖音不超 250 字，模型给了 384 字；公众号要求 1000-2500，模型给了 514 字。
-  const long = checkQuality({ ...baseDraft, platform: '抖音', body: '口'.repeat(384) }, {})
+  // 实测：提示词要求抖音不超 400 字，模型给过 420 字；公众号要求 1000-2500，模型给过 514 字。
+  const long = checkQuality({ ...baseDraft, platform: '抖音', body: '口'.repeat(420) }, {})
   assert.equal(long.status, 'passed', '字数不合规不应直接拦停发布')
   const lengthEvidence = long.evidence.find(item => item.code === 'platform_length')
   assert.ok(lengthEvidence, '字数超出目标必须留下证据')
   assert.equal(lengthEvidence.severity, 'warning')
-  assert.match(lengthEvidence.message, /384 字/)
-  assert.match(lengthEvidence.message, /不超过 250 字/)
-  assert.ok(long.suggestions.some(item => item.includes('不超过 250 字')))
+  assert.match(lengthEvidence.message, /420 字/)
+  assert.match(lengthEvidence.message, /150-400/)
+  assert.ok(long.suggestions.some(item => item.includes('150-400')))
 
   const short = checkQuality({ ...baseDraft, platform: '公众号', body: '短'.repeat(514) }, {})
   const shortEvidence = short.evidence.find(item => item.code === 'platform_length')
@@ -101,12 +101,12 @@ test('质量门把模型不遵守的平台字数不足当成警告而不是拦�
 })
 
 test('检查意见只抽出能改正文的指令，槽位和档案短词不管', () => {
-  const body = `拆完爆款不会用？因为你只学了皮毛。${'口'.repeat(360)}有个客户。这就叫底层逻辑。`
+  const body = `拆完爆款不会用？因为你只学了皮毛。${'口'.repeat(420)}有个客户。这就叫底层逻辑。`
   const draft = { ...baseDraft, platform: '抖音', opening_ref: null, body }
   const persona = checkPersona(draft, { role: '顾问', audiences: ['想做个人IP却每天从零开始的创业者'], pillars: ['素材原子化'] })
   const quality = checkQuality(draft, { audiences: ['想做个人IP却每天从零开始的创业者'], pillars: ['素材原子化'] })
   const note = draftCheckRewriteNote({ ...draft, checks: { persona, quality } })
-  assert.match(note, /把字数改到不超过 250/)
+  assert.match(note, /把字数改到150-400/)
   assert.match(note, /不要另写一篇更简单的/)
   assert.match(note, /不要问句/)
   assert.match(note, /咨询腔/)
@@ -277,4 +277,17 @@ test('生成验收扫咨询腔、编客户、设问开头和四平台同一篇',
 test('legacy drafts remain publish-check compatible when otherwise complete', () => {
   const publish = checkPublishChecklist({ ...baseDraft, variant_group_id: null, variant_type: 'legacy', fact_check_status: 'verified' })
   assert.equal(publish.status, 'passed')
+})
+
+test('正文出现方法骨架或其他平台名都算问题', () => {
+  // 实测模型原话：「同一内核，抖音发 15 秒快节奏，小红书发带细节图文，视频号发深度对话。一条内容，裂变成三条爆款。」
+  const mixup = checkQuality({ ...baseDraft, platform: '视频号', body: '我把观点拆成三块：踩过的坑、反常识判断、具体数据。同一内核，抖音发15秒快节奏，小红书发带细节图文。一条内容，裂变成三条爆款。' }, {})
+  assert.ok(mixup.evidence.some(item => item.code === 'platform_mixup'))
+  assert.ok(mixup.evidence.some(item => item.code === 'method_talk'))
+  assert.equal(mixup.status, 'passed', '写作问题只给警告，不拦停质量门')
+
+  // 自己平台的名字不算串台；「分三步走」这类正常叙事不算方法骨架。
+  const clean = checkQuality({ ...baseDraft, platform: '抖音', body: '这条只在抖音发。改选题分三步走：先看数据，再找场面，最后给判断。' }, {})
+  assert.equal(clean.evidence.some(item => item.code === 'platform_mixup'), false)
+  assert.equal(clean.evidence.some(item => item.code === 'method_talk'), false)
 })

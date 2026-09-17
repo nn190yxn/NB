@@ -36,6 +36,25 @@ function selfIntroHits(body) {
 
 // 结构骨架与标记泄漏：实测模型会把结构槽位的步骤、占位说明、甚至其他平台的标题建议写进正文。
 // 这些都不是给读者看的内容，只抓能确定判的行：Markdown 标题与加粗、「N 个…」占位、「（名字+数据）」类说明、其他平台的列表项。
+const otherPlatformWords = ['抖音', '小红书', '视频号', '公众号', 'B站', '快手', '微博', '知乎']
+
+// 串台：正文里出现其他平台名。实测模型会写「同一内核，抖音发 15 秒快节奏，小红书发带细节图文，
+// 视频号发深度对话」——读者拿到的是分发说明，不是内容。自己平台的名字不算。
+function platformMixupHits(body, platform) {
+  const value = text(body)
+  const own = text(platform)
+  return otherPlatformWords.filter(word => word !== own && value.includes(word))
+}
+
+// 讲方法：正文在交代「怎么拆、怎么分发、怎么裂变」，而不是给读者一件事。
+// 只收能确定判的骨架词，正常叙事里的「分三步」不会被判（要求紧跟数量词才命中）。
+const methodTalkPatterns = [/裂变/, /一鱼多吃/, /同一内核/, /多平台(分发|复制|发布|复用)/, /一套内容.{0,8}(多平台|复制|分发)/, /(拆成|分成)[0-9一二三四五六七八九十两]+[块部分条]/]
+
+function methodTalkHits(body) {
+  const value = text(body)
+  return [...new Set(methodTalkPatterns.map(pattern => value.match(pattern)).filter(Boolean).map(matched => matched[0]))]
+}
+
 function formatLeakHits(body) {
   const hits = []
   for (const rawLine of String(body || '').split('\n')) {
@@ -99,8 +118,9 @@ export function checkQuality(draft, profile = {}) {
   const pillarValues = [...list(profile.pillars), ...list(profile.viewpoints), ...list(profile.problems)]
   const audienceScore = audienceValues.length && audienceValues.some(value => body.includes(value)) ? 100 : audienceValues.length ? 50 : 40
   const pointScore = pillarValues.length && pillarValues.some(value => body.includes(value)) ? 100 : pillarValues.length ? 55 : 45
-  // 口播稿（≤250 字）本来就常常是一整段，不拿段落数要求它们；长文才看分段。
-  const structureReady = rawBody.length >= 120 && (rawBody.length <= 250 || paragraphCount >= 2)
+  // 口播稿本来就常常是一整段，不拿段落数要求它们；门槛跟当前平台的上限走，不再写死 250。
+  const structureCap = Number(draftLengthTargetOf(draft)?.max || 250)
+  const structureReady = rawBody.length >= 120 && (rawBody.length <= structureCap || paragraphCount >= 2)
   const structureScore = structureReady ? 100 : rawBody.length >= 60 ? 65 : 20
   const dimensions = {
     opening_clarity: openingReady ? 100 : 0,
@@ -124,6 +144,10 @@ export function checkQuality(draft, profile = {}) {
   if (audienceScore < 100) { evidence.push(evidenceItem('audience_weak', '正文与当前受众问题的连接不够明确')); suggestions.push(overlongValue ? shortValueHint() : '在正文中写出受众正在面对的具体问题') }
   if (pointScore < 100) { evidence.push(evidenceItem('point_weak', '核心观点或内容支柱不够明确')); suggestions.push(overlongValue ? shortValueHint() : '用一句话写出你的判断，再用过程或案例支撑') }
   // 模型并不遵守提示词里的字数要求（实测：提示词写抖音不超 250 字，模型给了 384 字），所以这里做确定性校验。
+  const mixupWords = platformMixupHits(draft?.body, draft?.platform)
+  if (mixupWords.length) { evidence.push(evidenceItem('platform_mixup', `正文提到别的平台：${mixupWords.join('、')}`)); suggestions.push('一条草稿只对当前平台说话，删掉其他平台名和分发说明') }
+  const methodWords = methodTalkHits(draft?.body)
+  if (methodWords.length) { evidence.push(evidenceItem('method_talk', `正文在讲方法或分发骨架：${methodWords.join('、')}`)); suggestions.push('方法和骨架留给自己，正文只写读者能拿走的那件事') }
   const lengthTarget = draftLengthTargetOf(draft)
   const lengthRange = draftLengthRangeFrom(lengthTarget)
   const bodyLength = String(draft?.body || '').trim().length
@@ -179,6 +203,8 @@ const checkRewriteHints = {
   format_leak: '删掉结构说明和其他平台建议',
   case_claim: '不要编客户和数字，改成通用判断',
   consulting_tone: '改成跟熟人说话，删掉咨询腔和工程词',
+  platform_mixup: '删掉正文里的其他平台名和分发说明，只对当前平台说话',
+  method_talk: '删掉「拆成几块 / 裂变 / 多平台分发」这类方法骨架，直接写那件事本身',
   opening_question: '第一句直给冲突或结论，不要问句',
 }
 
@@ -209,7 +235,7 @@ export function draftCheckRewriteNote(draft) {
 
 // 「按意见改写」的结果护栏。
 //
-// 实测过的失败形态不是改错，而是把「按意见改」做成「删一遗」：字数砍一半、被点名的问题一个没少，
+// 实测过的失败形态不是改错，而是把「按意见改」做成「删一遍」：字数砍一半、被点名的问题一个没少，
 // 但提示词、写作验收、检查栏都看不见这件事（验收只看自介/编客户/咨询腔/格式，没有长度、也不和原稿比）。
 // 所以这里只问两件能算清的事：有没有越改越短、被点名的问题有没有减少。文笔好坏不在这里判断。
 const shorterRequestPattern = /再短|更短|短一点|短一些|压短|压到|压至|压缩|精简|缩减/
@@ -265,6 +291,16 @@ function writingIssues(draft) {
     evidence.push(evidenceItem('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`))
     suggestions.push('删掉结构说明、占位符与其他平台建议，只留给读者看的正文')
   }
+  const mixupHits = platformMixupHits(draft?.body, draft?.platform)
+    if (mixupHits.length) {
+      evidence.push(evidenceItem('platform_mixup', `正文提到别的平台：${mixupHits.join('、')}`))
+      suggestions.push('一条草稿只对当前平台说话，删掉其他平台名和分发说明')
+    }
+    const methodHits = methodTalkHits(draft?.body)
+    if (methodHits.length) {
+      evidence.push(evidenceItem('method_talk', `正文在讲方法或分发骨架：${methodHits.join('、')}`))
+      suggestions.push('方法和骨架留给自己，正文只写读者能拿走的那件事')
+    }
   const caseHits = caseClaimHits(draft?.body)
   if (caseHits.length) {
     evidence.push(evidenceItem('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`))

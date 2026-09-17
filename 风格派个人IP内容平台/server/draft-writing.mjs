@@ -15,13 +15,13 @@ export const draftPlatformPlans = {
   抖音: {
     format: '短视频口播',
     title_max: 30,
-    length: { min: 0, max: 250 },
-    form: '短视频口播（15–60 秒）：短句，能对着镜头一口气念完。冲突开场，中间一个场面或判断，收一句能做的动作。不要写成 1–5 分钟中视频讲稿，也不要写 5 分钟以上长视频逐字稿。',
+    length: { min: 150, max: 400 },
+    form: '短视频口播（30–90 秒）：短句，能对着镜头一口气念完。冲突开场，中间一个场面或判断，收一句能做的动作。不要写成 1–5 分钟中视频讲稿，也不要写 5 分钟以上长视频逐字稿。',
   },
   视频号: {
     format: '短视频口播',
     title_max: 30,
-    length: { min: 0, max: 250 },
+    length: { min: 150, max: 400 },
     form: '短视频口播：观点起头，一个能立住的判断，收明确结论。给微信熟人看，不要写成文章节选，也不要写成抖音同款冲突密度。',
   },
   公众号: {
@@ -56,9 +56,9 @@ export const draftLengthTargets = Object.fromEntries(
 export const draftVideoPlatforms = ['抖音', '视频号']
 export const draftVideoFormats = {
   短视频: {
-    duration: '15-60秒',
-    length: { min: 0, max: 250 },
-    form: '短视频口播（15–60 秒）：短句，能对着镜头一口气念完。冲突开场，中间一个场面或判断，收一句能做的动作。不要写成中视频讲稿或长视频逐字稿。',
+    duration: '30-90秒',
+    length: { min: 150, max: 400 },
+    form: '短视频口播（30–90 秒）：短句，能对着镜头一口气念完。冲突开场，中间一个场面或判断，收一句能做的动作。不要写成中视频讲稿或长视频逐字稿。',
   },
   中视频: {
     duration: '1-5分钟',

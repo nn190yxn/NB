@@ -53,8 +53,8 @@ test('改写结果护栏：只认能算清的两件事', () => {
   assert.equal(underCap.ok, false)
   assert.match(underCap.failures[0], /不得少于 1000 字/)
 
-  // 抖音短视频上限 250：原稿 600 字可以压到 250，不能压到 80。
-  assert.equal(checkReviseOutcome({ before: '口'.repeat(600), after: '口'.repeat(250), platform: '抖音', format: '短视频' }).ok, true)
+  // 抖音短视频上限 400、下限 150：原稿 600 字可以压到 400，不能压到 80。
+  assert.equal(checkReviseOutcome({ before: '口'.repeat(600), after: '口'.repeat(400), platform: '抖音', format: '短视频' }).ok, true)
   assert.equal(checkReviseOutcome({ before: '口'.repeat(600), after: '口'.repeat(80), platform: '抖音', format: '短视频' }).ok, false)
 
   // 「按检查意见改写」时，被点名的问题必须真的少下去，不是换个更简单的说法。
@@ -109,5 +109,5 @@ test('按检查意见改写，模型只压短时拒绝入库', async t => {
   const next = await improved.json()
   assert.equal(next.version, checked.version + 1)
   assert.ok(!next.body.startsWith('拆完爆款不会用？'), '改写后开头不应还是问句')
-  assert.ok(next.body.length >= 250, `改写后不该比平台上限还短，实际 ${next.body.length} 字`)
+  assert.ok(next.body.length >= Math.round(overCap.length * 0.85), `改写后不该比原稿短太多，实际 ${next.body.length} 字`)
 })
