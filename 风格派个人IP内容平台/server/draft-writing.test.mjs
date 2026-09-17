@@ -148,12 +148,17 @@ test('生成验收不过则打回改写，仍不过则入库标待修改（A 方
   mock.setMode('sermon_stuck')
   const blocked = await generate()
   assert.equal(blocked.status, 201)
-  const payload = await blocked.json()
-  assert.equal(payload.code, 'GENERATION_GATE_FAILED')
-  assert.match(payload.error, /未入库/)
+  const blockedDrafts = await blocked.json()
+  assert.equal(blockedDrafts.length, 4)
+  assert.ok(blockedDrafts.every(item => item.workflow_status === 'needs_revision'))
+  assert.ok(blockedDrafts.every(item => item.generation_context.gate.failed === true))
+  assert.ok(blockedDrafts.every(item => item.generation_context.gate.rewritten === true))
+  assert.ok(blockedDrafts.every(item => item.generation_context.gate.summary))
+  // A 方案的关键：拦停的稿子照常入库（不再 502 丢弃），用户可以在草稿页按句定位替换。
   const stored = await (await fetch(`${baseUrl}/api/drafts`, { headers })).json()
-  assert.equal(stored.length, 4)
-  assert.ok(stored.every(item => item.body.includes('小红书笔记：') || item.body.includes('抖音口播：') || item.body.includes('视频号口播：') || item.body.includes('公众号正文：')))
+  const storedById = new Map(stored.map(item => [item.id, item]))
+  assert.ok(blockedDrafts.every(item => storedById.get(item.id)?.workflow_status === 'needs_revision'))
+  assert.ok(blockedDrafts.every(item => typeof item.body === 'string' && item.body.trim()))
 })
 
 test('只重写一个平台，带修改意见，不动其他平台', async t => {

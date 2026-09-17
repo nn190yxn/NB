@@ -258,3 +258,13 @@ node scripts/import-benchmark.mjs scripts/benchmarks/dontbesilent.json
 以前检查意见塞进 JSON 的 note 字段，模型只看见「改短」，就把稿子写成更简单的一版。现在用户消息逐条列出字数、设问、咨询腔、编客户，并写明保留原判断、不要另写一篇更简单的。咨询腔会点名要删的词。
 
 验证：`npm test` 217/217 通过。未做真实模型 A/B。开头句仍要点。
+
+## 2026-09-18 · 生成验收不过的稿子不再丢
+
+作者：Monkeycode。
+
+草稿生成时写作验收拦停（`platform_mixup`、`method_talk` 这类骨架判据命中），以前是重写一次仍不过就返回 502、整批稿子丢掉。现在稿子照常入库，`workflow_status` 标 `needs_revision`，验收理由记在 `generation_context.gate`（`failed` / `rewritten` / `summary`），用户可以直接在草稿页「定位替换」按句改，不必重新生成。
+
+模型完全不可用或输出解析不出正文仍是 502 且不落库——那是没东西可救的情况。「按检查意见改写」不变，仍会在改不动时返回 502 `REVISE_NOT_IMPROVED` 且不改库。
+
+验证：`node --test server/*.test.mjs desktop/*.test.mjs` 226/226 通过。A 方案与定位替换仍只在 mock 集成测试下验证，未跑真实模型端到端。
