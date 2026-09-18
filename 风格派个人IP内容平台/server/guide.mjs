@@ -25,6 +25,13 @@ export const guideStages = [
 
 export const guideMods = ['新手教程', '任务前路由', '任务后导航']
 
+// Requirement 19：定位、素材、对标全空时给这三条，不拿选题生成那套「缺身份定位」文案顶上来。
+export const guideColdStartPaths = [
+  { id: 'small_sample', label: '先做小样本', detail: '只对一个小问题连着发 3 条' },
+  { id: 'narrow_scope', label: '先收缩边界', detail: '把话题收窄到你自己今年真正做过的一件事' },
+  { id: 'topic_only', label: '直接用纯选题生成一版没有素材的初稿', detail: '初稿里缺细节的地方会标出来' },
+]
+
 const count = (list, predicate = () => true) => (Array.isArray(list) ? list.filter(predicate).length : 0)
 
 // 定位这类是按用户分的文档，空文档也算存在。只有真写过内容才算做过这一步。
@@ -59,7 +66,7 @@ export function guideProgress(data = {}) {
   return done
 }
 
-export function guideState(data = {}, { coldStartPaths = [] } = {}) {
+export function guideState(data = {}, { coldStartPaths = guideColdStartPaths } = {}) {
   const done = guideProgress(data)
   const next = guideStages.find(stage => !done[stage.id]) || null
   const doneCount = guideStages.filter(stage => done[stage.id]).length

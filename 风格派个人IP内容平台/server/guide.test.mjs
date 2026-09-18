@@ -5,15 +5,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
-import { guideProgress, guideStages, guideState } from './guide.mjs'
+import { guideColdStartPaths, guideProgress, guideStages, guideState } from './guide.mjs'
 import { testPort } from './test-port.mjs'
 
 const llmMock = await startSharedLlmMock()
-const coldStartPaths = [
-  { id: 'small_sample', label: '先做小样本', detail: '只对一个小问题连着发 3 条' },
-  { id: 'narrow_scope', label: '先收缩边界', detail: '把话题收窄到你自己今年真正做过的一件事' },
-  { id: 'topic_only', label: '直接用纯选题生成一版没有素材的初稿', detail: '初稿里缺细节的地方会标出来' },
-]
+const coldStartPaths = guideColdStartPaths
 
 test('单步路由：没做过就带他走一遍，做到一半指出下一步，走完转成任务后导航', () => {
   const empty = guideState({}, { coldStartPaths })
@@ -93,6 +89,9 @@ test('新手进来只看到一个动作，冷启动降级路径一并给到', as
   assert.equal(guide.next.index, 1)
   assert.equal(guide.degraded.active, true)
   assert.ok(guide.degraded.paths.length >= 1, '缺素材缺定位的时候要给出降级路径，而不是直接进重流程')
+  assert.deepEqual(guide.degraded.missing, ['定位', '素材', '对标'])
+  assert.deepEqual(guide.degraded.paths.map(path => path.id), ['small_sample', 'narrow_scope', 'topic_only'])
+  assert.deepEqual(guide.degraded.paths.map(path => path.label), ['先做小样本', '先收缩边界', '直接用纯选题生成一版没有素材的初稿'])
   assert.equal(guide.stages.length, 11)
 
   // 补上定位之后降级提示消失，下一步顺着链路走到素材。

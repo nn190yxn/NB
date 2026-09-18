@@ -25,7 +25,7 @@ import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, 
 import { hookMethodSource, hookMethods } from './hook-diagnosis.mjs'
 import { coreMechanismCheck, parseResonanceResponse, resonancePrompt } from './resonance.mjs'
 import { activeFeatureReplacements, buildPreferenceRecords, draftVersions, finalDraftCandidates, isFeatureId, performanceCandidates, performanceSignalNote } from './return-flow.mjs'
-import { guideState } from './guide.mjs'
+import { guideColdStartPaths, guideState } from './guide.mjs'
 import { hookIdeasPrompt, hookReadiness, ideaKinds, parseHookIdeas, parseTitleIdeas, titleIdeasPrompt } from './ideas.mjs'
 import { titleFormulaSource } from './title-formulas.mjs'
 
@@ -1721,7 +1721,7 @@ const server = createServer(async (request, response) => {
         shooting: mine('shooting'),
         performance_snapshots: mine('performance_snapshots'),
         preferences: mine('preferences'),
-      }, { coldStartPaths }))
+      }, { coldStartPaths: guideColdStartPaths }))
     }
     // Requirement 17：终稿回流。数出比最早那一版和确认那一版的差分，产出偏好候选。
     const draftPreferencesMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/preferences$/)

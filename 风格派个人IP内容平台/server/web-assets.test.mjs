@@ -147,6 +147,21 @@ test('首页研究使用真实数据并可定位热点研究详情', () => {
   assert.match(source, /activeNav === '今日工作台' \? <>/)
 })
 
+test('今日工作台单步路由卡片：新手教程、三条降级路径、点定位进访谈而不是内容创作', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /function NextStepCard/)
+  assert.match(source, /guide\.mode/)
+  assert.match(source, /guide\.degraded\.missing\.join\('、'\)/)
+  assert.match(source, /看全部环节/)
+  assert.match(source, /positioning: '定位发现'/)
+  assert.match(source, /shooting: '今日拍摄'/)
+  assert.match(source, /nav === '定位发现'/)
+  assert.match(source, /setShowOnboarding\(true\)/)
+  assert.match(source, /nav === '今日拍摄'/)
+  assert.match(source, /setShowShooting\(true\)/)
+  assert.match(source, /path => <li key=\{path\.id\}/)
+})
+
 test('爆款方法库按四类方法组织并保留结构 API', () => {
   const source = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8')
   assert.match(source, /'选题方法', '标题方法', '开头方法', '内容结构'/)

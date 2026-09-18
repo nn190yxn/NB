@@ -261,7 +261,12 @@ function App() {
             {showSyncManager && <SyncManagementPanel onClose={() => setShowSyncManager(false)} onSync={syncNow} syncing={syncing} />}
             {showShooting && <ShootingWorkspace onClose={() => setShowShooting(false)} />}
             {activeNav === '今日工作台' ? <>
-           <NextStepCard onGo={setActiveNav} />
+           <NextStepCard onGo={(nav) => {
+             if (nav === '定位发现') { setShowOnboarding(true); return }
+             if (nav === '热点研究') { openResearch(); return }
+             if (nav === '今日拍摄') { setShowShooting(true); return }
+             setActiveNav(nav)
+           }} />
            <div className="page-heading"><div><p className="eyebrow">YOUR CONTENT WORKSPACE</p><h1>欢迎回来<span className="accent">。</span></h1><p className="lede">从定位、研究到创作，建立属于你的内容工作流。</p></div><button className="primary-action" onClick={() => openResearch()}><Plus size={17} /> 新建研究</button></div>
 
           <div className="signal-strip"><div className="signal-icon"><Radio size={18} /></div><div><strong>从你的定位开始</strong><span>完善 IP 档案后，研究、选题和创作会更贴近你的真实目标。</span></div><button onClick={() => setShowOnboarding(true)}>继续定位 <ArrowUpRight size={15} /></button></div>
@@ -2134,7 +2139,7 @@ type CalendarEntry = { type: string; id: number; title: string; platform: string
 
 // Requirement 14：标题与开头各出多个方案，每条带溯源（公式编号或方法名），用户点「用这个」才落进草稿。
 // Requirement 18：单步路由卡片。只把下一个动作摆到最前面，其余环节列出来可以自己跳。
-const stageNavOf: Record<string, string> = { positioning: '定位发现', materials: '素材库', research: '热点研究', structures: '爆款方法库', topics: '选题助手', draft: '内容创作', diagnosis: '内容创作', approval: '内容创作', shooting: '内容创作', publish: '内容创作', return_flow: '内容创作' }
+const stageNavOf: Record<string, string> = { positioning: '定位发现', materials: '素材库', research: '热点研究', structures: '爆款方法库', topics: '选题助手', draft: '内容创作', diagnosis: '内容创作', approval: '内容创作', shooting: '今日拍摄', publish: '内容创作', return_flow: '内容创作' }
 type GuideStage = { id: string; label: string; question: string; action: string; needs: string; gain: string; done: boolean }
 type GuideState = { mode: string; stages: GuideStage[]; done_count: number; total: number; next: (GuideStage & { index: number }) | null; completed: string[]; degraded: { active: boolean; missing: string[]; paths: { id: string; label: string; detail: string }[]; gain: string } }
 
