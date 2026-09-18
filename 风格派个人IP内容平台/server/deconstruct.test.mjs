@@ -46,6 +46,27 @@ test('拆概念返回四段式产出并判定 Question 还是 Problem', async t 
   assert.equal(result.unit_type, 'CON', 'Question 是概念没对齐，产出物是还原后的概念')
 })
 
+test('确认门禁：拆概念本身不落素材，确认后才落且类型与信度正确', async t => {
+  const server = await startServer()
+  t.after(() => server.kill())
+  const owner = 'deconstruct-gate'
+  const materials = async () => (await (await fetch(`${baseUrl}/api/materials`, { headers: headers(owner) })).json()).length
+
+  const before = await materials()
+  const proposal = await (await fetch(`${baseUrl}/api/skills/deconstruct`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ term: '定位' }) })).json()
+  assert.equal(await materials(), before, '拆概念只是提案，不能自己写进素材库')
+
+  // 用户改过之后再确认入库，入库的必须是改后的文本。
+  const edited = `概念还原（我改过的版本）：${proposal.restored}`
+  const saved = await fetch(`${baseUrl}/api/materials/atoms`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ kind: 'insight', text: edited, name: proposal.term, unit_type: proposal.unit_type, source_label: '拆概念' }) })
+  assert.equal(saved.status, 201)
+  const material = await saved.json()
+  assert.equal(material.content, edited, '入库的是用户改后的文本，不是模型原文')
+  assert.equal(material.unit_type, 'CON')
+  assert.equal(material.material_trust, 'verified', '用户确认过的落 verified，不是 sourced')
+  assert.equal(await materials(), before + 1, '确认后恰好新增一条')
+})
+
 test('解析：无效 kind 退回 question，usages 清掉空值，缺概念还原直接报错', () => {
   const parsed = parseDeconstruction(JSON.stringify({ assumed: ' a ', usages: ['培训里当卖点说', '', '   '], restored: '其实指一组可重复的动作', plain: '就是照着做的那套步骤', kind: 'unknown' }))
   assert.equal(parsed.kind, 'question', 'kind 不认识时按概念处理，不能默默当成问题')
