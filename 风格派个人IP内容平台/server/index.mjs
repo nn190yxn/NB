@@ -1334,6 +1334,8 @@ const server = createServer(async (request, response) => {
       const topic = persistedTopic || body.topic || { title: '未命名选题', strategy_layer: 'trust', goal_refs: [] }
       const quoteMaterials = (body.quote_ids || []).map(id => owned('materials', request).find(item => item.id === id && !item.deleted_at)).filter(item => item && item.material_kind === 'quote')
       const experienceMaterials = (body.experience_ids || []).map(id => owned('materials', request).find(item => item.id === id && !item.deleted_at)).filter(item => item && item.material_kind === 'experience')
+      // 按认知角色取的素材：QST/CON/OPI/CAS/SOL 都进简报，不再只有 quote 和 experience。
+      const roleMaterials = (body.material_ids || []).map(id => owned('materials', request).find(item => item.id === id && !item.deleted_at)).filter(Boolean)
       if (structure) {
         structure.usage_count += 1
         structure.updated_at = new Date().toISOString()
@@ -1343,7 +1345,7 @@ const server = createServer(async (request, response) => {
       if (hookValidation?.status === 'blocked') return send(response, 422, { error: 'Hook 校验未通过', code: 'validation_failed', evidence: hookValidation.evidence })
       const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
       const mechanisms = activeMemories(userId(request)).filter(item => item.memory_type === 'benchmark')
-      const brief = buildDraftBrief({ topic, structure, quotes: quoteMaterials, experiences: experienceMaterials, memories, mechanisms, hookText: requestedHook })
+      const brief = buildDraftBrief({ topic, structure, quotes: quoteMaterials, experiences: experienceMaterials, materials: roleMaterials, memories, mechanisms, hookText: requestedHook })
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       if (!configs.primary && !configs.fallback) return send(response, 422, { code: 'MISSING_CONFIG', reason: 'llm_not_configured', error: '草稿正文由大模型撰写，请先在 API 中心配置文本模型。' })
       if (usesSharedPrimaryLlm(request)) {
@@ -1378,7 +1380,7 @@ const server = createServer(async (request, response) => {
         return send(response, 502, { code: 'GENERATION_FAILED', error: '草稿生成失败，请检查模型配置后重试；本次未生成草稿。', retryable: true, detail: error instanceof Error ? error.message : undefined })
       }
       const variantGroupId = randomUUID()
-      const atomRefs = [...quoteMaterials, ...experienceMaterials].map(item => sourceRef('material', item.id))
+      const atomRefs = [...new Map([...quoteMaterials, ...experienceMaterials, ...roleMaterials].map(item => [item.id, item])).values()].map(item => sourceRef('material', item.id))
       const sourceRefs = [...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs]
       const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), summary: gateFailure ? gateFailure.summary : null } }, created_at: new Date().toISOString() }))
       if (persistedTopic?.id) {

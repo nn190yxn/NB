@@ -147,7 +147,25 @@ export const defaultDraftStructure = [
   '收束：把开头那句判断再说清楚，或留一个值得争论的问题；不求关注',
 ]
 
-export function buildDraftBrief({ topic, structure, quotes, experiences, memories, mechanisms, hookText }) {
+export const draftMaterialRoles = ['QST', 'CON', 'OPI', 'CAS', 'SOL']
+
+// 按认知角色取料，并按 id 升序：同一批素材每次生成的简报顺序必须一致，
+// 否则同一选题两次生成的简报不同，出了问题无法复现。
+export function groupMaterialsByRole(materials) {
+  const groups = Object.fromEntries(draftMaterialRoles.map(role => [role, []]))
+  const ordered = [...(materials || [])].filter(Boolean).sort((left, right) => Number(left.id || 0) - Number(right.id || 0))
+  ordered.forEach(item => {
+    if (!draftMaterialRoles.includes(item.unit_type)) return
+    const text = String(item.content || '').trim()
+    if (!text) return
+    groups[item.unit_type].push({ text, source: String(item.name || '').trim(), trust: String(item.material_trust || 'derived') })
+  })
+  return groups
+}
+
+export function buildDraftBrief({ topic, structure, quotes, experiences, materials, memories, mechanisms, hookText }) {
+  const roleGroups = groupMaterialsByRole(materials)
+  const roleCount = draftMaterialRoles.reduce((sum, role) => sum + roleGroups[role].length, 0)
   const librarySteps = Array.isArray(structure?.steps) ? structure.steps.map(step => String(step)).filter(Boolean) : []
   const usingLibrary = librarySteps.length > 0
   return {
@@ -161,6 +179,9 @@ export function buildDraftBrief({ topic, structure, quotes, experiences, memorie
     style: (memories || []).map(item => String(item.content || '')).filter(Boolean),
     mechanisms: (mechanisms || []).map(item => ({ content: String(item.content || ''), source: String(item.source_label || '对标账号') })).filter(item => item.content),
     platforms: draftPlatforms,
+    // 一条素材都没有时明说，让模型知道自己在裸写，而不是假装有依据。
+    material_roles: roleGroups,
+    material_gap: roleCount ? null : '这条选题没有可用素材：不要编案例和数字，没有依据的判断直接说成判断，不要说成事实。',
     platform_forms: draftPlatformForms,
   }
 }
@@ -179,6 +200,8 @@ export function draftBriefPrompt(profile = {}) {
     '不要写成名词解释（「什么是X」），不要「一、二、三」说明书，不要排比收成「你不是A，你是B」。',
     '不要「不是A而是B」「不仅仅是A，更是B」「与其说A，不如说B」「真正的X，是Y」这类升华句；不要用「某某人」「有个人」这种没有主体的例子。',
     '正文至少要有一个具体的场面、人、数字或时间；整篇都是通用判断、没有一个具体细节的稿子不合格。',
+    '案例只能引用简报 material_roles.CAS 里的素材，数字只能来自素材或简报；素材里没有的案例和数字一律不写。',
+    '简报里 material_gap 有值时按它的要求写：宁可少一个案例，也不许编。',
     '按 structure 的顺序写。步骤只决定段落顺序，不要把步骤原文、编号、方法名抄进正文。',
     '开头第一句直给冲突或结论，必须是完整口播句：含话题，能脱离标题单独听懂；不要自问自答。',
     '主体先驳后立：先点破常见做法，再立判断；连续抽象别超过一小段。简报里有经历、数字就用，没有就讲通用现象。',
