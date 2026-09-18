@@ -2,6 +2,7 @@ import { prohibitedHits } from './redfox.mjs'
 import { validateSourceRefs } from './validation.mjs'
 import { openingReadiness } from './draft-workflow.mjs'
 import { aiFeatureByCode } from './ai-features.mjs'
+import { structureDimensions, structureReport } from './structure-flow.mjs'
 import { consultingToneWords, draftFormatOf, draftLengthRangeFrom, draftLengthTargetFor, draftLengthTargetOf, draftPlatforms } from './draft-writing.mjs'
 
 const riskWordHits = value => prohibitedHits(value).map(item => item.word)
@@ -162,8 +163,9 @@ export function checkQuality(draft, profile = {}) {
     evidence.push(evidenceItem('platform_length', `正文 ${bodyLength} 字，${draft.platform}${format ? format : ''}目标${lengthRange} 字`))
     suggestions.push(`把正文调整到 ${lengthRange} 字`)
   }
-  // 闸门项（自介 / 格式泄漏 / 串台 / 字数严重不足）留在 evidence 里，它们是客观项；
+  // 闸门项（格式泄漏 / 串台）留在 evidence 里，它们是客观项；
   // 语言层命中走 reminders，不混进 evidence——否则同一个问题会在面板上出现两次。
+  // self_intro 与 length_severe 降级后也走 reminders，但仍是可改项。
   const writing = writingIssues(draft)
   evidence.push(...writing.gate)
   suggestions.push(...writing.suggestions)
@@ -375,7 +377,10 @@ function lacksConcreteSupport(body) {
 // 闸门：客观可判定，命中即拦停生成结果。封顶 5 条，加一条必须先删一条。
 // 第 5 条 same_essay 在 scanGeneratedBodies 里判——它要看四篇正文，单篇判不了。
 // 内容层（案例、数字是否真实）不在闸门里：系统没有事实来源，没资格判。
-export const gateCodes = ['format_leak', 'platform_mixup', 'self_intro', 'length_severe']
+// 闸门只留「初稿根本没做出来」：格式泄漏与串台。四平台同一篇走 sameEssayHits。
+// self_intro（Requirement 13 第 3 条）与 length_severe（第 4 条）已降为提醒：
+// 它们落在 reminders 里，不再触发生成阶段的自动重写，也不拦停发布。
+export const gateCodes = ['format_leak', 'platform_mixup']
 
 // 语言层提醒：审美类，不拦停、不触发自动重写、不影响 workflow_status。
 // 不再归并成类别，也不设条数上限（Requirement 11 第 6 条）：一个 code 一条，按正文顺序逐处呈现。
@@ -421,6 +426,9 @@ const languageFixes = {
   method_talk: '把「拆成几块 / 裂变 / 多平台分发」换成一件具体的经历或判断，字数不要因此变少',
   consulting_tone: '改成跟熟人说话，删掉咨询腔和工程词',
   opening_question: '第一句直给冲突或结论，不要问句',
+  // Requirement 13 第 3、4 条：自介与字数不足降为提醒后，改写指令不能跟着丢。
+  self_intro: '删掉自我介绍和引导关注，直接说内容本身',
+  length_severe: '把正文补到目标字数，保留已有的判断，不要另写一篇更简单的',
 }
 
 function writingIssues(draft) {
@@ -538,8 +546,9 @@ export function unbackedNumberHits(body, allowedText = '') {
   return draftNumbers(body).filter(number => !allowed.has(number.replace(/[%％万倍元块]/g, '')))
 }
 
-// 生成阶段的拦停只看闸门：闸门 5 类（这里 4 类，same_essay 要看四篇）+ 四平台同一篇。
-// 语言层命中（审美）不拦停，进 reminders 等用户点「检查」或「重写」时再说。
+// 生成阶段的拦停只看闸门：格式泄漏、串台，加四平台同一篇。
+// 语言层命中与降级后的 self_intro / length_severe（审美）不拦停，
+// 进 reminders 等用户点「检查」或「重写」时再说。
 export function scanGeneratedBody(body, platform) {
   const issues = writingIssues({ body, platform })
   return {
@@ -596,13 +605,16 @@ export const diagnosticReportFooter = '以上是检测结果，不涉及修改�
 
 export function diagnosticReport(draft) {
   const { hits } = writingIssues(draft)
-  const entries = hits
-    // 不带 reminders 的七类归并：报告按文本顺序呈现，不按特征分类。
-    .map(item => ({ code: item.code, label: item.label, quote: item.quote, note: item.message, severity: item.feature?.severity || diagnosticSeverityOf[item.code] || 'weak', position: item.position, intent: item.intent, followup: item.followup, feature: item.feature ? { id: item.feature.id, name: item.feature.name } : null }))
-    .sort((left, right) => (left.position < 0 ? Number.MAX_SAFE_INTEGER : left.position) - (right.position < 0 ? Number.MAX_SAFE_INTEGER : right.position))
+  // Requirement 13：结构层（dbs-script-flow）与语言层用同一份报告、同一套风险三档，
+  // 按文本顺序逐处呈现；layer 标清是哪一层判出来的。结构层不拦停生成。
+  const structure = structureReport(draft)
+  const entries = [
+    ...hits.map(item => ({ layer: 'language', code: item.code, label: item.label, quote: item.quote, note: item.message, severity: item.feature?.severity || diagnosticSeverityOf[item.code] || 'weak', position: item.position, intent: item.intent, followup: item.followup, feature: item.feature ? { id: item.feature.id, name: item.feature.name } : null })),
+    ...structure.findings.map(item => ({ layer: 'structure', code: item.code, label: structureDimensions[item.dimension], quote: item.quote, note: item.note, severity: item.risk, position: item.position, intent: '', followup: '', fix: item.fix })),
+  ].sort((left, right) => (left.position < 0 ? Number.MAX_SAFE_INTEGER : left.position) - (right.position < 0 ? Number.MAX_SAFE_INTEGER : right.position))
   // 第 5 条：整体没特征就直说，不硬找。
-  const summary = entries.length ? '' : '没有发现明显的 AI 特征。不硬找。'
-  return { entries, summary, severity_labels: diagnosticSeverityLabels, footer: diagnosticReportFooter }
+  const summary = entries.length ? '' : '没有发现明显的 AI 特征，也没发现逻辑断裂。不硬找。'
+  return { entries, segments: structure.segments, summary, severity_labels: diagnosticSeverityLabels, footer: diagnosticReportFooter }
 }
 
 export { qualityKeys }

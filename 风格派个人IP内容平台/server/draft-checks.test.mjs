@@ -165,21 +165,27 @@ test('提示词禁止自我介绍与引导关注', () => {
 test('质量门把模型编造的自我介绍当成警告', () => {
   // 实测：模型把自己服务商的名字当成创作者——「大家好，我是Agnes」。
   const intro = checkQuality({ ...baseDraft, platform: '视频号', body: '大家好，我是Agnes。\n今天讲一个反常识：灵感枯竭其实是素材没拆开。\n关注我，让你的个人IP可执行。' }, {})
-  const evidence = intro.evidence.find(item => item.code === 'self_intro')
+  const evidence = issueItems(intro).find(item => item.code === 'self_intro')
   assert.ok(evidence, '自我介绍必须留下证据')
   assert.equal(evidence.severity, 'warning')
   assert.match(evidence.message, /我是Agnes/)
   assert.match(evidence.message, /关注我/)
-  assert.ok(intro.suggestions.some(item => item.includes('删掉自我介绍')))
+  // Requirement 13 第 3 条：自介降为提醒，不再进 evidence、不再是闸门。
+  assert.equal(intro.evidence.some(item => item.code === 'self_intro'), false, '自介不再进 evidence')
+  assert.ok(intro.reminders.some(item => item.code === 'self_intro'), '降级后进 reminders')
+  // 降级不能把改写指令一起丢掉，否则「按检查意见改写」修不了自介。
+  const note = draftCheckRewriteNote({ ...baseDraft, checks: { quality: { draft_version: 2, status: 'failed', evidence: [], reminders: intro.reminders } } })
+  assert.match(note, /删掉自我介绍/, '降级后改写指令仍要给得出改法')
 
   const named = checkQuality({ ...baseDraft, body: '我叫小李，做了三年内容。\n先说结论：素材得拆开用。' }, {})
-  assert.match(named.evidence.find(item => item.code === 'self_intro').message, /我叫小李/)
+  assert.match(issueItems(named).find(item => item.code === 'self_intro').message, /我叫小李/)
 
   // 不能误伤正常句式
+  // 不能误伤正常句式：用摊平后的命中列表判，只查 evidence 会因为自介已移出而假绿。
   const normal = checkQuality({ ...baseDraft, body: '我是做个人IP咨询的，先给结论：内容是系统的产物。\n今天记录一次真实复盘。' }, {})
-  assert.equal(normal.evidence.some(item => item.code === 'self_intro'), false)
+  assert.equal(issueItems(normal).some(item => item.code === 'self_intro'), false)
   const clean = checkQuality({ ...baseDraft, body: '很多人以为这件事靠技巧，其实是先把过程讲清楚。' }, {})
-  assert.equal(clean.evidence.some(item => item.code === 'self_intro'), false)
+  assert.equal(issueItems(clean).some(item => item.code === 'self_intro'), false)
 })
 
 test('质量门拦下结构骨架与标记泄漏', () => {
