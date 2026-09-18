@@ -20,7 +20,7 @@ import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
 import { buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs } from './draft-writing.mjs'
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
-import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, draftCheckRewriteNote, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
+import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
 
 // Requirement 19（冷启动降级路径）：定位、素材库、对标为空时不许把人卡在第一步。
 // 说清缺什么、补上能得到什么，并至少给一条现在就能走的路：小样本 / 收缩边界 / 纯选题无素材初稿。
@@ -1340,7 +1340,8 @@ const server = createServer(async (request, response) => {
       const profile = userDocument('profile', request)
       if (checkName === 'quality' && (!draft.checks?.persona || draft.checks.persona.draft_version !== currentVersion)) return send(response, 409, { error: '请先完成当前版本的人设检查', code: 'invalid_transition' })
       if (checkName === 'publish' && (!draft.checks?.quality || draft.checks.quality.draft_version !== currentVersion || draft.checks.quality.status !== 'passed')) return send(response, 409, { error: '请先通过当前版本的质量门', code: 'invalid_transition' })
-      const check = checkName === 'persona' ? checkPersona(draft, profile) : checkName === 'quality' ? checkQuality(draft, profile) : checkPublishChecklist(draft)
+      // 质量诊断同时给出按文本顺序的报告：界面直接呈现，不用自己拼顺序。
+      const check = checkName === 'persona' ? checkPersona(draft, profile) : checkName === 'quality' ? { ...checkQuality(draft, profile), report: diagnosticReport(draft) } : checkPublishChecklist(draft)
       draft.checks = { ...(draft.checks || {}), [checkKey]: check }
       draft.workflow_status = checkName === 'persona' ? 'persona_checked' : check.status === 'blocked' ? 'needs_revision' : checkName === 'quality' ? 'quality_checked' : 'publish_ready'
       draft.updated_at = new Date().toISOString()

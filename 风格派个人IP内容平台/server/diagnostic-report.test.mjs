@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { spawn } from 'node:child_process'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { diagnosticReport, diagnosticReportFooter, diagnosticSeverityLabels } from './draft-checks.mjs'
+import { startSharedLlmMock } from './generation-test-helper.mjs'
+import { testPort } from './test-port.mjs'
 
 // 故意把两处问题写反顺序：自我介绍在后半段，平台名在最前面。
 // 按文本顺序排，报告第一处应该是平台名，不是自我介绍。
@@ -51,4 +57,41 @@ test('干净的正文出空报告，不硬凑条目', () => {
   assert.equal(clean.entries.some(entry => entry.code === 'self_intro'), false)
   assert.equal(clean.entries.some(entry => entry.code === 'platform_mixup'), false)
   assert.ok(clean.footer, '没有条目也要给结尾声明')
+})
+
+const llmMock = await startSharedLlmMock()
+const port = testPort(49200, 150)
+const baseUrl = `http://127.0.0.1:${port}`
+const dataFile = join(mkdtempSync(join(tmpdir(), 'diagnostic-report-test-')), 'data.json')
+writeFileSync(dataFile, '{}')
+
+function startServer() {
+  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...llmMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 5000)
+    child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve(child) } })
+    child.once('error', reject)
+    child.once('exit', code => { if (code !== null) reject(new Error(`测试 API 异常退出: ${code}`)) })
+  })
+}
+
+test('质量诊断把报告挂进检查结果，界面不用自己拼顺序', async t => {
+  const server = await startServer()
+  t.after(() => server.kill())
+  const owner = 'diagnostic-owner'
+  const headers = { 'x-user-id': owner, 'content-type': 'application/json' }
+
+  const drafts = await (await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers, body: JSON.stringify({ topic: { title: '内容要按成交写', strategy_layer: 'trust', goal_refs: [] } }) })).json()
+  const draft = drafts[0]
+  assert.ok(draft.id)
+  await fetch(`${baseUrl}/api/drafts/${draft.id}/checks/persona`, { method: 'POST', headers, body: '{}' })
+  const response = await fetch(`${baseUrl}/api/drafts/${draft.id}/checks/quality`, { method: 'POST', headers, body: '{}' })
+  assert.equal(response.status, 200)
+  const updated = await response.json()
+  const report = updated.checks.quality.report
+  assert.ok(report, '质量诊断要带报告')
+  assert.ok(Array.isArray(report.entries))
+  assert.match(report.footer, /以上是检测结果，不涉及修改/)
+  const known = report.entries.map(entry => entry.position).filter(position => position >= 0)
+  assert.deepEqual(known, [...known].sort((left, right) => left - right), '报告条目要按正文顺序返回')
 })
