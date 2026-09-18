@@ -74,6 +74,13 @@ export async function startGenerationMock({ adaptBody } = {}) {
     if (system.includes('记忆')) return reply(JSON.stringify([{ memory_type: 'style', content: '共享模型提炼的记忆' }]))
     if (system.includes('复盘')) return reply(JSON.stringify({ verdict: 'winner', summary: '表现优于往常', lessons: ['真实案例更受欢迎'], drivers: ['真实案例'] }))
 
+    if (system.includes('形式匹配')) {
+      const topic = JSON.parse(last).topic
+      // 「错形式」用来测范围外的形式会不会被拦下来。
+      if (topic.includes('错形式')) return reply(JSON.stringify({ form: '播客', reason: '故意给一个范围外的形式' }))
+      const form = topic.includes('长文') ? '长文' : topic.includes('长视频') ? '长视频' : '短视频'
+      return reply(JSON.stringify({ form, reason: `「${topic}」只需要把一个判断讲清楚，${form}就够` }))
+    }
     if (system.includes('主张提炼')) {
       const text = JSON.parse(last).text
       // 「单一主张」用来测不触发提示的那条路径。

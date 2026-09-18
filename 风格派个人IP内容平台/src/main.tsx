@@ -80,8 +80,9 @@ const navItems = [
   { label: '热点研究', icon: Radio },
   { label: '素材库', icon: FolderOpen },
   { label: '爆款方法库', icon: Library },
-  { label: '拆概念', icon: Sparkles },
-  { label: '提主张', icon: Sparkles },
+  { label: '拆概念', icon: CircleHelp },
+  { label: '提主张', icon: Star },
+  { label: '形式判断', icon: LayoutGrid },
   { label: '选题助手', icon: BrainCircuit },
   { label: '内容创作', icon: PenLine },
   { label: '内容日历', icon: CalendarDays },
@@ -683,7 +684,7 @@ function StrategyPanel({ ratios, setRatios, saving, onReview }: { ratios: number
 function StrategyReview({ ratios, onClose }: { ratios: number[]; onClose: () => void }) {
   return <section className="review-panel"><div className="review-head"><div><span className="section-kicker">STRATEGY REVIEW</span><h2>内容策略复盘</h2><p>尚未形成口径一致、可核验的周期对比数据，暂不提供增长率或自动配比建议。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="review-metrics">{strategyLayers.map((layer, index) => <div key={layer.label}><span>{layer.label}</span><strong>{ratios[index]}%</strong><small>当前配置比例，不是表现指标</small></div>)}</div><p>请先在今日拍摄录入内容表现，核对数据来源与日期；如需调整，可手动修改当前内容策略。</p><button className="skip-action" onClick={onClose}>返回工作台</button></section>
 }
-type WorkspaceSection = '热点研究' | '素材库' | '爆款方法库' | '拆概念' | '提主张' | '选题助手' | '内容创作' | '内容日历' | 'IP 档案'
+type WorkspaceSection = '热点研究' | '素材库' | '爆款方法库' | '拆概念' | '提主张' | '形式判断' | '选题助手' | '内容创作' | '内容日历' | 'IP 档案'
 type ResearchItem = { id: number; platform: string; title: string; author?: string; url?: string | null; metrics?: { discussions?: number; growth?: number }; analysis?: { structure: string[]; summary?: string }; source_refs?: unknown[]; captured_at?: string; collected?: boolean; fit?: { score: number; matched: string[] } }
 type DraftAdaptation = { title: string; body: string; hashtags: string[]; provider: string; checklist: { item: string; status: string; detail: string }[]; updated_at: string; draft_version?: number }
 
@@ -1534,6 +1535,30 @@ function ClaimsPanel() {
   </section>
 }
 
+type FormJudgement = { form: string; reason: string }
+
+function FormPanel() {
+  const [topic, setTopic] = useState('')
+  const [result, setResult] = useState<FormJudgement | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const judgeForm = () => {
+    setBusy(true); setError('')
+    void apiJson<FormJudgement>('/api/skills/form', { method: 'POST', body: JSON.stringify({ topic: topic.trim() }) })
+      .then(setResult)
+      .catch(reason => setError(reason instanceof Error ? reason.message : '形式判断失败，请重试。'))
+      .finally(() => setBusy(false))
+  }
+
+  return <section className="workspace-view">
+    <div className="workspace-view-head"><div><span className="section-kicker">WORKSPACE / 形式判断</span><h2>形式判断</h2><p>这条选题该拍短片还是写长文？先定形式再动笔，别按错的形式写完才返工。形式只会从写作层认得的四种里选。</p></div><button className="primary-action" disabled={busy || !topic.trim()} onClick={judgeForm}>{busy ? '判断中...' : '判断形式'} <Sparkles size={15} /></button></div>
+    {error && <p className="structure-error" role="alert">{error}</p>}
+    <div className="deconstruct-input"><input aria-label="要判断的选题" placeholder="例如：为什么内容要按成交写" value={topic} disabled={busy} onChange={event => { setTopic(event.target.value); setResult(null) }} /></div>
+    {result ? <article className="trend-card"><div className="card-top"><span className="platform-tag douyin">{result.form}</span><span className="draft-format">推荐形式</span></div><p className="draft-basis">{result.reason}</p></article> : <div className="structure-empty"><p className="empty-state">输入一条选题，看它适合哪一种形式。</p></div>}
+  </section>
+}
+
 function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId, leaveGuard }: { leaveGuard: { current: () => boolean }; section: WorkspaceSection; onNavigate: (section: WorkspaceSection) => void; onOpenShooting: () => void; focusedResearchId: number | null }) {
   const [topics, setTopics] = useState<TopicItem[]>([])
   const [topicsLoading, setTopicsLoading] = useState(true)
@@ -1726,6 +1751,7 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId,
   if ((section as string) === '素材库') return <MaterialWorkspace />
   if (section === '拆概念') return <DeconstructPanel />
   if (section === '提主张') return <ClaimsPanel />
+  if (section === '形式判断') return <FormPanel />
   if (section === '热点研究') return <ResearchLibrary focusedResearchId={focusedResearchId} />
   if (section === '内容日历') return <ContentCalendar />
   const archivedDrafts = drafts.filter(draft => draft.archived_at)

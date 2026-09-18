@@ -9,6 +9,7 @@ import { createRedFoxAdapter, demoHotSearch, demoSearchWork, demoSimilarAccounts
 import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterministic } from './growth.mjs'
 import { deconstructSystemPrompt, parseDeconstruction } from './deconstruct.mjs'
 import { claimsSystemPrompt, parseClaims } from './claims.mjs'
+import { contentFormSystemPrompt, parseFormJudgement } from './content-form.mjs'
 import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCollections, saveMysqlState, saveUserDocs, collectionNames, userDocNames } from './mysql.mjs'
 import { emptyPublicApiConfigs, emptyPublicRedfoxConfig, parseApiConfigKey, publicApiConfig, publicRedfoxConfig, runtimeApiConfig, runtimeRedfoxConfig, updateApiConfig, updateRedfoxConfig } from './api-settings.mjs'
 import { publicPrivateFile, readPrivateFile, storePrivateFile, validatePrivateFile } from './private-files.mjs'
@@ -1193,6 +1194,20 @@ const server = createServer(async (request, response) => {
       return send(response, 200, item)
     }
     if (url.pathname === '/api/topics' && request.method === 'GET') return send(response, 200, owned('topics', request))
+    if (url.pathname === '/api/skills/form' && request.method === 'POST') {
+      const body = await readJson(request)
+      const topic = String(body.topic || '').trim().slice(0, 300)
+      if (!topic) return send(response, 422, { error: '选题不能为空' })
+      try {
+        const content = await generateStructured(request, contentFormSystemPrompt, { topic })
+        return send(response, 200, parseFormJudgement(content))
+      } catch (error) {
+        // 模型给了范围外的形式：把契约错误原文透出并标记 retryable: false，
+        // 否则使用者会以为是模型服务故障，反复点重试。
+        const contractError = error.code === undefined && !/QUOTA|MISSING/.test(String(error.code || ''))
+        return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: contractError ? error.message : ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '形式判断失败，请检查模型配置并重试。', retryable: !contractError })
+      }
+    }
     if (url.pathname === '/api/skills/claims' && request.method === 'POST') {
       const body = await readJson(request)
       const text = String(body.text || '').trim().slice(0, 8000)
