@@ -24,6 +24,7 @@ import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, s
 import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, openingSentence, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
 import { hookMethodSource, hookMethods } from './hook-diagnosis.mjs'
 import { coreMechanismCheck, parseResonanceResponse, resonancePrompt } from './resonance.mjs'
+import { activeFeatureReplacements, buildPreferenceRecords, draftVersions, finalDraftCandidates, isFeatureId, performanceCandidates } from './return-flow.mjs'
 import { hookIdeasPrompt, hookReadiness, ideaKinds, parseHookIdeas, parseTitleIdeas, titleIdeasPrompt } from './ideas.mjs'
 import { titleFormulaSource } from './title-formulas.mjs'
 
@@ -116,6 +117,7 @@ const defaultState = {
   topics: [],
   drafts: [],
   shooting: [],
+  preferences: [],
   sync_jobs: [],
   sync_directories: [], devices: [], private_files: [], api_configs: [], vision_tasks: [], performance_snapshots: [],
   conflicts: [],
@@ -151,6 +153,7 @@ const state = {
   topics: persistedState.topics || [],
   drafts: persistedState.drafts || [],
   shooting: persistedState.shooting || [],
+  preferences: persistedState.preferences || [],
   sync_jobs: persistedState.sync_jobs || [],
   profile_reviews: persistedState.profile_reviews || [],
   conflicts: persistedState.conflicts || [],
@@ -160,7 +163,7 @@ const state = {
   feedback: persistedState.feedback || [],
   sync_directories: persistedState.sync_directories || [], devices: persistedState.devices || [], private_files: persistedState.private_files || [], api_configs: persistedState.api_configs || [], vision_tasks: persistedState.vision_tasks || [], performance_snapshots: persistedState.performance_snapshots || [],
 }
-for (const collection of ['users', 'materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'sync_directories', 'devices', 'private_files', 'api_configs', 'vision_tasks', 'performance_snapshots']) {
+for (const collection of ['users', 'materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'preferences', 'sync_jobs', 'sync_directories', 'devices', 'private_files', 'api_configs', 'vision_tasks', 'performance_snapshots']) {
   state[collection] = state[collection].map(item => ({ ...item, owner_id: collection === 'users' ? (item.id || item.owner_id || 'system') : (item.owner_id || 'demo-user'), ...(collection === 'topics' ? defaultTopicFields(item) : {}), ...(collection === 'drafts' ? defaultDraftWorkflowFields(item) : {}), ...(collection === 'shooting' && item.status === 'todo' ? { status: 'ready_to_shoot' } : {}) }))
 }
 for (const collection of ['positioning', 'strategy', 'profile']) {
@@ -1699,6 +1702,56 @@ const server = createServer(async (request, response) => {
       draft.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
       await saveState('drafts')
       return send(response, 200, draft)
+    }
+    // Requirement 17：终稿回流。数出比最早那一版和确认那一版的差分，产出偏好候选。
+    const draftPreferencesMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/preferences$/)
+    if (draftPreferencesMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftPreferencesMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      const versions = draftVersions(draft)
+      if (!versions.changed) return send(response, 422, { error: '这份草稿还没有可比的两版（最早留下的那一版和你确认的那一版），先把稿子改完并确认定稿再来。', code: 'no_diff', current: draft })
+      const mine = () => state.preferences.filter(item => item.owner_id === userId(request))
+      const records = buildPreferenceRecords(finalDraftCandidates(draft), { ownerId: userId(request), existing: mine() })
+      for (const record of records) { record.id = nextId(state.preferences); state.preferences.push(record) }
+      if (records.length) await saveState('preferences')
+      return send(response, 200, { created: records, preferences: mine() })
+    }
+    // Requirement 17：数据回流。只认用户确认过的快照，待确认的表现数据不参与。
+    if (url.pathname === '/api/preferences/data-flow' && request.method === 'POST') {
+      const mine = () => state.preferences.filter(item => item.owner_id === userId(request))
+      const records = buildPreferenceRecords(performanceCandidates(owned('performance_snapshots', request)), { ownerId: userId(request), existing: mine() })
+      for (const record of records) { record.id = nextId(state.preferences); state.preferences.push(record) }
+      if (records.length) await saveState('preferences')
+      return send(response, 200, { created: records, preferences: mine() })
+    }
+    // Requirement 17 第 4 条：哪些通用特征已经被用户的偏好替换了，要能查回来。
+    if (url.pathname === '/api/preferences' && request.method === 'GET') {
+      const mine = state.preferences.filter(item => item.owner_id === userId(request))
+      return send(response, 200, { preferences: mine, replaced_features: [...activeFeatureReplacements(mine).entries()].map(([featureId, entry]) => ({ feature_id: featureId, ...entry })) })
+    }
+    // Requirement 17 第 3 条：候选要用户确认才生效，系统不自动改写判据。
+    const preferenceActionMatch = url.pathname.match(/^\/api\/preferences\/(\d+)\/(confirm|reject)$/)
+    if (preferenceActionMatch && request.method === 'POST') {
+      const preference = state.preferences.find(item => item.id === Number(preferenceActionMatch[1]) && item.owner_id === userId(request))
+      if (!preference) return send(response, 404, { error: '偏好候选不存在', code: 'resource_not_found' })
+      const body = await readJson(request)
+      const now = new Date().toISOString()
+      preference.trace ||= []
+      if (preferenceActionMatch[2] === 'confirm') {
+        const raw = body.replaces_feature
+        if (raw !== undefined && raw !== null && !isFeatureId(raw)) return send(response, 422, { error: '要替换的通用特征编号不存在', code: 'validation_failed' })
+        preference.status = 'active'
+        preference.replaces_feature = raw === undefined || raw === null ? null : Number(raw)
+        preference.confirmed_at = now
+        preference.trace.push({ at: now, action: 'confirmed', replaces_feature: preference.replaces_feature })
+      } else {
+        preference.status = 'rejected'
+        preference.reject_reason = String(body.reason || '').trim() || null
+        preference.trace.push({ at: now, action: 'rejected', reason: preference.reject_reason })
+      }
+      preference.updated_at = now
+      await saveState('preferences')
+      return send(response, 200, preference)
     }
     // Requirement 16 第 2-3 条：发布前内容层报告（五维共鸣 + 传播心理）。只出报告，不拦停发布。
     const draftResonanceMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/resonance$/)
