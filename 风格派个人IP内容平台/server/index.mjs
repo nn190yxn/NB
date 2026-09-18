@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
+import { followupAnswerSource, followupMaterialInput, unitTypeFromAnswer } from './followup-answers.mjs'
 import { materialTrustOf, normalizeMaterialFormat, parseMaterialContent, profileGaps, validateDraftUpdate, validRatios, validateMaterialInput, validateSourceRefs } from './validation.mjs'
 import { materialsWithUnitTypes, unitTypeFromKind, unitTypeOf, unitTypes } from './unit-types.mjs'
 import { createRedFoxAdapter, demoHotSearch, demoSearchWork, demoSimilarAccounts, demoTrending, prohibitedHits, prohibitedWordlist } from './redfox.mjs'
@@ -1482,6 +1483,33 @@ const server = createServer(async (request, response) => {
       } catch (error) {
         return send(response, 502, { error: error?.message || '改写失败，请稍后重试', retryable: true })
       }
+    }
+    // Requirement 12：追问的答案回写素材。
+    // 入库前必须由用户确认：这个接口只在用户点过「入库」之后才会被调用，不静默写入。
+    const draftFollowupMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/followups$/)
+    if (draftFollowupMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftFollowupMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      const body = await readJson(request)
+      const input = followupMaterialInput({ draft, entry: { code: body.code, label: body.label }, answer: body.answer })
+      if (!input) return send(response, 422, { error: '回答不能为空' })
+      const checksum = createHash('sha256').update(`followup:${draft.id}:${input.content}`).digest('hex')
+      const duplicate = owned('materials', request).find(item => item.checksum === checksum)
+      // 同一个回答重复提交就当幂等，不再写第二条。
+      if (duplicate) return send(response, 200, { ...duplicate, material_trust: materialTrustOf(duplicate), unit_type: unitTypeOf(duplicate), duplicate: true })
+      const material = {
+        id: nextId(state.materials),
+        owner_id: userId(request),
+        ...input,
+        status: 'ready',
+        review_status: 'pending',
+        extracted_fields: { segments: [input.content], candidate_topics: [], quotes: [] },
+        checksum,
+        imported_at: new Date().toISOString(),
+      }
+      state.materials.push(material)
+      await saveState('materials')
+      return send(response, 201, { ...material, material_trust: materialTrustOf(material), unit_type: unitTypeOf(material) })
     }
     // 定点替换：模型只给「原文这句 → 改成这句」的对照表，改不改由用户点，服务端不拦。
     const draftReplaceMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/replacements$/)
