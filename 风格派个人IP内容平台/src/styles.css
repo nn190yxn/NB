@@ -143,6 +143,17 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .publish-body { width: 100%; min-height: 160px; resize: vertical; border-radius: 10px; border: 1px solid var(--border-color, rgba(0,0,0,.1)); padding: 10px; font: inherit; background: transparent; color: inherit; }
 .publish-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .publish-checklist { display: flex; flex-direction: column; gap: 8px; }
+.publish-resonance { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-color, rgba(0,0,0,.08)); }
+.publish-resonance-note { margin: 0; opacity: .65; font-size: .85rem; }
+.resonance-core { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.resonance-core small { opacity: .6; }
+.resonance-list { list-style: none; display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; }
+.resonance-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.resonance-head small { opacity: .6; }
+.resonance-evidence { margin: 4px 0 0; opacity: .8; }
+.resonance-synthesis, .resonance-fixes { display: flex; flex-direction: column; gap: 6px; }
+.resonance-synthesis p, .resonance-fixes p { margin: 0; }
+.resonance-synthesis small { opacity: .6; }
 .publish-check-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .publish-check-row small { opacity: .65; margin-left: auto; }
 .publish-check-status { font-size: .75rem; padding: 2px 8px; border-radius: 999px; }

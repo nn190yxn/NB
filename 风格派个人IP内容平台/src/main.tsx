@@ -790,10 +790,12 @@ const draftBriefSummary = (draft: DraftItem) => {
   ].filter(Boolean)
   return parts.length ? `写作依据${legacy ? '（旧记录未区分对标机制）' : ''}：${parts.join(' · ')}` : ''
 }
+// Requirement 16：发布前共鸣报告的形状。判定只认三档、每条必须关联原文，服务端已经过滤过一轮。
+type DraftResonanceReport = { dimensions: { id: string; label: string; theory: string; verdict: string; evidence: string; detail: string }[]; verdict_counts: Record<string, number>; core: { verdict: string; text: string; measured?: { verdict: string; claim_count: number; note: string } | null }; synthesis: Record<string, { label: string; text: string; from: string | null }>; fixes: { cut: string[]; compress: string[]; strengthen: string[] }; generated_at?: string; draft_version?: number; provider?: string }
 // Requirement 14：标题/开头方案的形状。溯源字段都可能为空（服务端只收能溯源的），所以都按可选处理。
 type DraftIdeaPlan = { formula_id?: number; formula_template?: string; formula_example?: string; formula_example_source?: string; category?: string; category_label?: string; title?: string; why?: string; method?: string; method_label?: string; opening?: string; note?: string; used_material?: string; needs_user_material?: boolean }
 type DraftIdeaGroup = { plans?: DraftIdeaPlan[]; source?: string; blocked?: string; methods?: { id: string; label: string }[] | null; readiness?: { richness?: { verdict?: string; dimensions: { label: string; found: boolean }[] }; opening?: { dimensions: { label: string; judged: boolean; problem: boolean | null }[] } } | null }
-type DraftItem = { id: number; topic_id?: number | null; platform: string; content_format?: string; title: string; body: string; fact_check_status: string; status: string; workflow_status?: string; hooks?: DraftHook[]; selected_hook_id?: string | null; selected_hook?: DraftHook | null; opening_ref?: { option_id: string; name: string } | null; variant_group_id?: string | null; variant_type?: string; variant_of?: number | null; archived_at?: string | null; generation_context?: Record<string, unknown> | null; checks?: { persona?: DraftCheck | null; quality?: DraftCheck | null; publish_checklist?: DraftCheck | null }; approval?: DraftApproval; version?: number; history?: DraftItem[]; adaptations?: Record<string, DraftAdaptation>; planned_date?: string | null; ideas?: { title?: DraftIdeaGroup | null; hook?: DraftIdeaGroup | null } | null }
+type DraftItem = { id: number; topic_id?: number | null; platform: string; content_format?: string; title: string; body: string; fact_check_status: string; status: string; workflow_status?: string; hooks?: DraftHook[]; selected_hook_id?: string | null; selected_hook?: DraftHook | null; opening_ref?: { option_id: string; name: string } | null; variant_group_id?: string | null; variant_type?: string; variant_of?: number | null; archived_at?: string | null; generation_context?: Record<string, unknown> | null; checks?: { persona?: DraftCheck | null; quality?: DraftCheck | null; publish_checklist?: DraftCheck | null }; approval?: DraftApproval; version?: number; history?: DraftItem[]; adaptations?: Record<string, DraftAdaptation>; planned_date?: string | null; ideas?: { title?: DraftIdeaGroup | null; hook?: DraftIdeaGroup | null } | null; resonance?: DraftResonanceReport | null }
 const draftIsLocked = (draft: DraftItem) => draft.approval?.status === 'approved' || draft.workflow_status === 'ready_to_shoot' || draft.status === 'published'
 const liveWorkbenchDrafts = (drafts: DraftItem[]) => {
   const live = drafts.filter(draft => !draft.archived_at)
@@ -2152,9 +2154,20 @@ function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: 
   const platforms = ['抖音', '视频号']
   const [platform, setPlatform] = useState(draft.platform && platforms.includes(draft.platform) ? draft.platform : '抖音')
   const [busy, setBusy] = useState(false)
+  const [diagnosing, setDiagnosing] = useState(false)
   const [message, setMessage] = useState('')
   const [confirmed, setConfirmed] = useState<string[]>([])
   const adaptation = draft.adaptations?.[platform] || null
+  const report = draft.resonance || null
+
+  // Requirement 16：共鸣报告只是给人看的一份诊断，不改稿、不写检查，也不拦发布。
+  const diagnose = () => {
+    setDiagnosing(true); setMessage('')
+    void apiJson<DraftItem>(`/api/drafts/${draft.id}/resonance`, { method: 'POST', body: '{}' })
+      .then(onUpdated)
+      .catch((error: unknown) => setMessage(error instanceof Error && error.message ? error.message : '共鸣诊断失败，请稍后重试。'))
+      .finally(() => setDiagnosing(false))
+  }
 
   const generate = () => {
     setBusy(true); setMessage(''); setConfirmed([])
@@ -2191,6 +2204,32 @@ function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: 
       </label>)}</div>
       <div className="publish-actions"><button className="primary-action" onClick={copyVersion}>复制标题 + 正文 + 标签</button><small>{confirmed.length}/{adaptation.checklist.length} 项已确认</small></div>
     </div> : <p className="empty-state">还没生成「{platform}」版本，点“生成本平台版本”。</p>}
+    <div className="publish-resonance">
+      <div className="structure-toolbar-row">
+        <strong>发布前共鸣报告</strong>
+        <button className="primary-action" disabled={diagnosing} onClick={diagnose}>{diagnosing ? '诊断中...' : report ? '重新诊断' : '跑一次共鸣诊断'}</button>
+      </div>
+      <p className="publish-resonance-note">这份报告只提醒，不拦发布：发布流程不会因为它停下来。</p>
+      {report ? <>
+        {report.draft_version !== undefined && draft.version !== undefined && report.draft_version !== draft.version && <p className="skill-message" role="status">正文已改到第 {draft.version} 版，这份诊断是基于第 {report.draft_version} 版的，建议重新诊断。</p>}
+        <div className="resonance-core">
+          <span className={`publish-check-status status-${report.core.verdict === '明确' ? 'pass' : report.core.verdict === '被稀释' ? 'risk' : 'warn'}`}>{report.core.verdict}</span>
+          <span>{report.core.text || '模型没给出一句话的核心机制。'}</span>
+          {report.core.measured && <small>{report.core.measured.note}</small>}
+        </div>
+        <ul className="resonance-list">{report.dimensions.map(item => <li key={item.id}>
+          <div className="resonance-head"><strong>{item.label}</strong><span className={`publish-check-status status-${item.verdict === '有效' ? 'pass' : item.verdict === '弱' ? 'warn' : 'risk'}`}>{item.verdict}</span><small>{item.theory}</small></div>
+          <p className="resonance-evidence">原文：「{item.evidence}」</p>
+          {item.detail && <p>{item.detail}</p>}
+        </li>)}</ul>
+        <div className="resonance-synthesis">{Object.values(report.synthesis).map(item => <p key={item.label}><strong>{item.label}：</strong>{item.text}{item.from ? <small>（来自「{item.from}」）</small> : <small>（模型没给出可核对的推导来源）</small>}</p>)}</div>
+        {report.fixes.cut.length + report.fixes.compress.length + report.fixes.strengthen.length > 0 && <div className="resonance-fixes">
+          {report.fixes.cut.length > 0 && <p><strong>删掉：</strong>{report.fixes.cut.join('；')}</p>}
+          {report.fixes.compress.length > 0 && <p><strong>压成支撑材料：</strong>{report.fixes.compress.join('；')}</p>}
+          {report.fixes.strengthen.length > 0 && <p><strong>放大：</strong>{report.fixes.strengthen.join('；')}</p>}
+        </div>}
+      </> : <p className="empty-state">还没诊断过。诊断只读正文，不改稿、不影响发布。</p>}
+    </div>
     {message && <p className="skill-message" role="status">{message}</p>}
   </details>
 }
