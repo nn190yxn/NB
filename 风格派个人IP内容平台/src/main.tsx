@@ -81,6 +81,7 @@ const navItems = [
   { label: '素材库', icon: FolderOpen },
   { label: '爆款方法库', icon: Library },
   { label: '拆概念', icon: Sparkles },
+  { label: '提主张', icon: Sparkles },
   { label: '选题助手', icon: BrainCircuit },
   { label: '内容创作', icon: PenLine },
   { label: '内容日历', icon: CalendarDays },
@@ -682,7 +683,7 @@ function StrategyPanel({ ratios, setRatios, saving, onReview }: { ratios: number
 function StrategyReview({ ratios, onClose }: { ratios: number[]; onClose: () => void }) {
   return <section className="review-panel"><div className="review-head"><div><span className="section-kicker">STRATEGY REVIEW</span><h2>内容策略复盘</h2><p>尚未形成口径一致、可核验的周期对比数据，暂不提供增长率或自动配比建议。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="review-metrics">{strategyLayers.map((layer, index) => <div key={layer.label}><span>{layer.label}</span><strong>{ratios[index]}%</strong><small>当前配置比例，不是表现指标</small></div>)}</div><p>请先在今日拍摄录入内容表现，核对数据来源与日期；如需调整，可手动修改当前内容策略。</p><button className="skip-action" onClick={onClose}>返回工作台</button></section>
 }
-type WorkspaceSection = '热点研究' | '素材库' | '爆款方法库' | '拆概念' | '选题助手' | '内容创作' | '内容日历' | 'IP 档案'
+type WorkspaceSection = '热点研究' | '素材库' | '爆款方法库' | '拆概念' | '提主张' | '选题助手' | '内容创作' | '内容日历' | 'IP 档案'
 type ResearchItem = { id: number; platform: string; title: string; author?: string; url?: string | null; metrics?: { discussions?: number; growth?: number }; analysis?: { structure: string[]; summary?: string }; source_refs?: unknown[]; captured_at?: string; collected?: boolean; fit?: { score: number; matched: string[] } }
 type DraftAdaptation = { title: string; body: string; hashtags: string[]; provider: string; checklist: { item: string; status: string; detail: string }[]; updated_at: string; draft_version?: number }
 
@@ -1484,6 +1485,55 @@ function DeconstructPanel() {
   </section>
 }
 
+type ClaimsProposal = { claims: string[]; mechanism: string; judgement: string; scope: string; why: string; notice: string | null }
+
+function ClaimsPanel() {
+  const [text, setText] = useState('')
+  const [proposal, setProposal] = useState<ClaimsProposal | null>(null)
+  const [drafting, setDrafting] = useState({ judgement: '', scope: '', why: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState('')
+
+  const extract = () => {
+    setBusy(true); setError(''); setSaved('')
+    void apiJson<ClaimsProposal>('/api/skills/claims', { method: 'POST', body: JSON.stringify({ text: text.trim() }) })
+      .then(result => { setProposal(result); setDrafting({ judgement: result.judgement, scope: result.scope, why: result.why }) })
+      .catch(reason => setError(reason instanceof Error ? reason.message : '提主张失败，请重试。'))
+      .finally(() => setBusy(false))
+  }
+
+  // 同拆概念：模型产出只是提案，确认且改过之后才落库。
+  const confirmIntoMaterials = () => {
+    if (!proposal) return
+    const body = [drafting.judgement, drafting.scope, drafting.why].map(value => String(value || '').trim()).filter(Boolean).join('\n')
+    if (!body) { setError('至少要留下一栏内容再入库。'); return }
+    const materialText = `${body}${proposal.mechanism ? `\n核心机制：${proposal.mechanism}` : ''}`
+    setBusy(true); setError('')
+    void apiJson<{ id: number }>('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: 'insight', text: materialText, name: String(drafting.judgement || '').slice(0, 40) || '主张', unit_type: 'OPI', source_label: '提主张' }) })
+      .then(result => setSaved(`已入库：素材 #${result.id}（主张 · 已确认）`))
+      .catch(reason => setError(reason instanceof Error ? reason.message : '入库失败，请重试。'))
+      .finally(() => setBusy(false))
+  }
+
+  return <section className="workspace-view">
+    <div className="workspace-view-head"><div><span className="section-kicker">WORKSPACE / 提主张</span><h2>提主张</h2><p>先把素材里的主张全提出来，再找串起它们的核心机制。超过两条会提示收窄，但不拦你。确认后才进素材库。</p></div><button className="primary-action" disabled={busy || !text.trim()} onClick={extract}>{busy ? '提炼中...' : '提主张'} <Sparkles size={15} /></button></div>
+    {error && <p className="structure-error" role="alert">{error}</p>}
+    {saved && <p role="status">{saved}</p>}
+    <div className="deconstruct-input"><textarea aria-label="要提炼的素材" placeholder="粘一段素材或文案，看它到底立了几条主张" value={text} disabled={busy} onChange={event => { setText(event.target.value); setProposal(null); setSaved('') }} /></div>
+    {proposal ? <article className="trend-card">
+      <div className="card-top"><span className="platform-tag douyin">主张</span><span className="draft-format">{proposal.claims.length} 条主张</span></div>
+      {proposal.notice && <p className="draft-basis">{proposal.notice}</p>}
+      {proposal.claims.length ? <ul className="claims-list">{proposal.claims.map((claim, index) => <li key={`${index}-${claim}`}>{claim}</li>)}</ul> : null}
+      <p className="draft-basis">核心机制：{proposal.mechanism || '模型没给出'}</p>
+      <label className="deconstruct-field">核心判断<textarea className="draft-body-input" disabled={busy} value={drafting.judgement} onChange={event => setDrafting({ ...drafting, judgement: event.target.value })} /></label>
+      <label className="deconstruct-field">适用范围<textarea className="draft-body-input" disabled={busy} value={drafting.scope} onChange={event => setDrafting({ ...drafting, scope: event.target.value })} /></label>
+      <label className="deconstruct-field">为什么重要<textarea className="draft-body-input" disabled={busy} value={drafting.why} onChange={event => setDrafting({ ...drafting, why: event.target.value })} /></label>
+      <div className="topic-actions"><button className="primary-action" disabled={busy} onClick={confirmIntoMaterials}>确认入库</button><small>确认前不会写入素材库。</small></div>
+    </article> : <div className="structure-empty"><p className="empty-state">粘一段素材进来，看看它到底立了几条主张。</p></div>}
+  </section>
+}
+
 function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId, leaveGuard }: { leaveGuard: { current: () => boolean }; section: WorkspaceSection; onNavigate: (section: WorkspaceSection) => void; onOpenShooting: () => void; focusedResearchId: number | null }) {
   const [topics, setTopics] = useState<TopicItem[]>([])
   const [topicsLoading, setTopicsLoading] = useState(true)
@@ -1675,6 +1725,7 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId,
   const revokeDraftApproval = (draft: DraftItem) => { const reason = window.prompt('请输入撤回原因'); if (!reason?.trim()) return; setBusy(true); void apiJson<DraftApprovalResponse>(`/api/drafts/${draft.id}/revoke-approval`, { method: 'POST', body: JSON.stringify({ version: draft.version, reason: reason.trim() }) }).then(result => setDrafts(current => current.map(item => item.id === result.draft.id ? result.draft : item))).catch(() => undefined).finally(() => setBusy(false)) }
   if ((section as string) === '素材库') return <MaterialWorkspace />
   if (section === '拆概念') return <DeconstructPanel />
+  if (section === '提主张') return <ClaimsPanel />
   if (section === '热点研究') return <ResearchLibrary focusedResearchId={focusedResearchId} />
   if (section === '内容日历') return <ContentCalendar />
   const archivedDrafts = drafts.filter(draft => draft.archived_at)

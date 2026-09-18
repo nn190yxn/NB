@@ -8,6 +8,7 @@ import { materialsWithUnitTypes, unitTypeFromKind, unitTypeOf, unitTypes } from 
 import { createRedFoxAdapter, demoHotSearch, demoSearchWork, demoSimilarAccounts, demoTrending, prohibitedHits, prohibitedWordlist } from './redfox.mjs'
 import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterministic } from './growth.mjs'
 import { deconstructSystemPrompt, parseDeconstruction } from './deconstruct.mjs'
+import { claimsSystemPrompt, parseClaims } from './claims.mjs'
 import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCollections, saveMysqlState, saveUserDocs, collectionNames, userDocNames } from './mysql.mjs'
 import { emptyPublicApiConfigs, emptyPublicRedfoxConfig, parseApiConfigKey, publicApiConfig, publicRedfoxConfig, runtimeApiConfig, runtimeRedfoxConfig, updateApiConfig, updateRedfoxConfig } from './api-settings.mjs'
 import { publicPrivateFile, readPrivateFile, storePrivateFile, validatePrivateFile } from './private-files.mjs'
@@ -1192,6 +1193,17 @@ const server = createServer(async (request, response) => {
       return send(response, 200, item)
     }
     if (url.pathname === '/api/topics' && request.method === 'GET') return send(response, 200, owned('topics', request))
+    if (url.pathname === '/api/skills/claims' && request.method === 'POST') {
+      const body = await readJson(request)
+      const text = String(body.text || '').trim().slice(0, 8000)
+      if (!text) return send(response, 422, { error: '素材内容不能为空' })
+      try {
+        const content = await generateStructured(request, claimsSystemPrompt, { text })
+        return send(response, 200, parseClaims(content))
+      } catch (error) {
+        return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '主张提炼失败，请检查模型配置并重试。', retryable: true })
+      }
+    }
     if (url.pathname === '/api/skills/deconstruct' && request.method === 'POST') {
       const body = await readJson(request)
       const term = String(body.term || '').trim().slice(0, 80)

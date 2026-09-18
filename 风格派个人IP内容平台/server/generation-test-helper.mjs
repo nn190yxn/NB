@@ -74,6 +74,14 @@ export async function startGenerationMock({ adaptBody } = {}) {
     if (system.includes('记忆')) return reply(JSON.stringify([{ memory_type: 'style', content: '共享模型提炼的记忆' }]))
     if (system.includes('复盘')) return reply(JSON.stringify({ verdict: 'winner', summary: '表现优于往常', lessons: ['真实案例更受欢迎'], drivers: ['真实案例'] }))
 
+    if (system.includes('主张提炼')) {
+      const text = JSON.parse(last).text
+      // 「单一主张」用来测不触发提示的那条路径。
+      const claims = text.includes('单一主张')
+        ? ['先给判断，再给一步能做的动作']
+        : ['内容要按成交写，不按流量写', '点赞会撒谎，询盘不会', '案例比观点更能带来咨询']
+      return reply(JSON.stringify({ claims, mechanism: '把内容当成一次可复盘的成交实验', judgement: `核心判断：${claims[0]}`, scope: '适用于已经有成交动作的账号', why: '因为只有询盘能反馈内容有没有用' }))
+    }
     if (system.includes('概念拆解')) {
       const term = JSON.parse(last).term
       return reply(JSON.stringify({ assumed: `你以为「${term}」是一种方法`, usages: ['培训场合里当卖点说', '交付场合里当步骤讲'], restored: `「${term}」其实指一组可重复的动作`, plain: '就是每次都能照着做的那套步骤', kind: 'question' }))
