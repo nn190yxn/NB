@@ -25,6 +25,7 @@ import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, 
 import { hookMethodSource, hookMethods } from './hook-diagnosis.mjs'
 import { coreMechanismCheck, parseResonanceResponse, resonancePrompt } from './resonance.mjs'
 import { activeFeatureReplacements, buildPreferenceRecords, draftVersions, finalDraftCandidates, isFeatureId, performanceCandidates } from './return-flow.mjs'
+import { guideState } from './guide.mjs'
 import { hookIdeasPrompt, hookReadiness, ideaKinds, parseHookIdeas, parseTitleIdeas, titleIdeasPrompt } from './ideas.mjs'
 import { titleFormulaSource } from './title-formulas.mjs'
 
@@ -1702,6 +1703,23 @@ const server = createServer(async (request, response) => {
       draft.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
       await saveState('drafts')
       return send(response, 200, draft)
+    }
+    // Requirement 18：单步路由状态。看用户手上有什么，算出下一个动作；环节切换不受这个限制。
+    if (url.pathname === '/api/guide' && request.method === 'GET') {
+      const mine = collection => state[collection].filter(item => item.owner_id === userId(request))
+      return send(response, 200, guideState({
+        // 只认这个用户自己写的定位文档：演示数据的兼底不算他做过定位。
+        positioning: state.positioning_by_user?.[userId(request)] || null,
+        positioning_candidates: state.positioning_candidates_by_user?.[userId(request)] || null,
+        materials: mine('materials'),
+        research: mine('research'),
+        structures: mine('structures'),
+        topics: mine('topics'),
+        drafts: mine('drafts').filter(item => !item.archived_at),
+        shooting: mine('shooting'),
+        performance_snapshots: mine('performance_snapshots'),
+        preferences: mine('preferences'),
+      }, { coldStartPaths }))
     }
     // Requirement 17：终稿回流。数出比最早那一版和确认那一版的差分，产出偏好候选。
     const draftPreferencesMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/preferences$/)

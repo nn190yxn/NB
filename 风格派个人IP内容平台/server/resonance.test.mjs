@@ -75,7 +75,7 @@ test('诊断解析：判定不在三档内、维度不认识、指不到原文�
 })
 
 test('发布前报告只出报告，不拦停发布', async t => {
-  const port = testPort(51500, 150)
+  const port = testPort(41400, 150)
   const workspace = makeWorkspace()
   const server = await startServer(port, workspace.dataFile)
   t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })

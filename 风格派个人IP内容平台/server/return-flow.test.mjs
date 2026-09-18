@@ -115,7 +115,7 @@ async function recheckAndApprove(base, headers, draft) {
 }
 
 test('回流候选要用户确认才生效，确认过程不碰草稿', async t => {
-  const port = testPort(51700, 150)
+  const port = testPort(41100, 150)
   const workspace = makeWorkspace()
   const server = await startServer(port, workspace.dataFile)
   t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })
