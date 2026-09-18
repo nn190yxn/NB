@@ -74,6 +74,10 @@ export async function startGenerationMock({ adaptBody } = {}) {
     if (system.includes('记忆')) return reply(JSON.stringify([{ memory_type: 'style', content: '共享模型提炼的记忆' }]))
     if (system.includes('复盘')) return reply(JSON.stringify({ verdict: 'winner', summary: '表现优于往常', lessons: ['真实案例更受欢迎'], drivers: ['真实案例'] }))
 
+    if (system.includes('概念拆解')) {
+      const term = JSON.parse(last).term
+      return reply(JSON.stringify({ assumed: `你以为「${term}」是一种方法`, usages: ['培训场合里当卖点说', '交付场合里当步骤讲'], restored: `「${term}」其实指一组可重复的动作`, plain: '就是每次都能照着做的那套步骤', kind: 'question' }))
+    }
     const input = JSON.parse(last)
     const result = input.answers
       ? Array.from({ length: 3 }, (_, index) => ({ name: `方向${index + 1}`, positioning_statement: input.answers['0'] || '根据能力形成内容', audiences: ['创业者'], problems: ['内容难以持续'], pillars: ['真实复盘'], uncertainties: ['需要验证需求'], answer_refs: Object.keys(input.answers).filter(key => input.answers[key]) }))

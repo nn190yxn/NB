@@ -7,6 +7,7 @@ import { materialTrustOf, normalizeMaterialFormat, parseMaterialContent, profile
 import { materialsWithUnitTypes, unitTypeFromKind, unitTypeOf, unitTypes } from './unit-types.mjs'
 import { createRedFoxAdapter, demoHotSearch, demoSearchWork, demoSimilarAccounts, demoTrending, prohibitedHits, prohibitedWordlist } from './redfox.mjs'
 import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterministic } from './growth.mjs'
+import { deconstructSystemPrompt, parseDeconstruction } from './deconstruct.mjs'
 import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCollections, saveMysqlState, saveUserDocs, collectionNames, userDocNames } from './mysql.mjs'
 import { emptyPublicApiConfigs, emptyPublicRedfoxConfig, parseApiConfigKey, publicApiConfig, publicRedfoxConfig, runtimeApiConfig, runtimeRedfoxConfig, updateApiConfig, updateRedfoxConfig } from './api-settings.mjs'
 import { publicPrivateFile, readPrivateFile, storePrivateFile, validatePrivateFile } from './private-files.mjs'
@@ -1191,6 +1192,17 @@ const server = createServer(async (request, response) => {
       return send(response, 200, item)
     }
     if (url.pathname === '/api/topics' && request.method === 'GET') return send(response, 200, owned('topics', request))
+    if (url.pathname === '/api/skills/deconstruct' && request.method === 'POST') {
+      const body = await readJson(request)
+      const term = String(body.term || '').trim().slice(0, 80)
+      if (!term) return send(response, 422, { error: '概念词为必填项' })
+      try {
+        const content = await generateStructured(request, deconstructSystemPrompt, { term })
+        return send(response, 200, { term, ...parseDeconstruction(content) })
+      } catch (error) {
+        return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '概念拆解失败，请检查模型配置并重试。', retryable: true })
+      }
+    }
     if (url.pathname === '/api/topics/generate' && request.method === 'POST') {
       const body = await readJson(request)
       const sourceRefs = (body.research_ids || []).filter(id => owned('research', request).some(item => item.id === id)).map(id => sourceRef('research', id)).concat((body.material_ids || []).filter(id => owned('materials', request).some(item => item.id === id)).map(id => sourceRef('material', id)))
