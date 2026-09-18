@@ -86,6 +86,24 @@ export async function startGenerationMock({ adaptBody } = {}) {
         { method: '凭空编法', opening: '这个方法不存在', note: '故意给一个不认识的方法名' },
       ] }))
     }
+    // Requirement 16：共鸣五维报告。故意给一条判定不在三档内的、一条维度不认识的，测校验会不会丢。
+    if (system.includes('共鸣诊断')) {
+      return reply(JSON.stringify({
+        dimensions: [
+          { id: 'silence', verdict: '有效', evidence: '点赞会撒谎，询盘不会', detail: '替受众说出了不敢公开的判断' },
+          { id: 'gratification', verdict: '弱', evidence: '别再为流量写，为成交写', detail: '只给了信息价值，没给情绪出口' },
+          { id: 'framing', verdict: '有效', evidence: '上周我翻了后台', detail: '站在做事的人这边' },
+          { id: 'gateway', verdict: '无效', evidence: '询盘不会', detail: '找不到第一批传播者' },
+          { id: 'belief', verdict: '很有效', evidence: '为成交写', detail: '判定不在三档内，这条应该被丢掉' },
+          { id: 'unknown', verdict: '有效', evidence: '随便一句', detail: '维度不认识，这条应该被丢掉' },
+        ],
+        core: { text: '内容要按成交写，不为流量写', verdict: '明确' },
+        emotion_core: { text: '被流量数字骗过的无力感', from: 'silence' },
+        effective_stance: { text: '站在被数据骗过的服务者这边', from: 'framing' },
+        audience_wants: { text: '怎么判断一条内容值不值得写', from: 'unknown' },
+        fixes: { cut: ['「点赞会撒谎」后面绕的那句删掉'], compress: ['第二段的解释压成一句'], strengthen: ['「询盘不会」这句单独成行'] },
+      }))
+    }
     if (system.includes('记忆')) return reply(JSON.stringify([{ memory_type: 'style', content: '共享模型提炼的记忆' }]))
     if (system.includes('复盘')) return reply(JSON.stringify({ verdict: 'winner', summary: '表现优于往常', lessons: ['真实案例更受欢迎'], drivers: ['真实案例'] }))
 

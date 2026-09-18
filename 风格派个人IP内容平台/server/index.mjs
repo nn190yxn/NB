@@ -23,6 +23,7 @@ import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHook
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
 import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, openingSentence, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
 import { hookMethodSource, hookMethods } from './hook-diagnosis.mjs'
+import { coreMechanismCheck, parseResonanceResponse, resonancePrompt } from './resonance.mjs'
 import { hookIdeasPrompt, hookReadiness, ideaKinds, parseHookIdeas, parseTitleIdeas, titleIdeasPrompt } from './ideas.mjs'
 import { titleFormulaSource } from './title-formulas.mjs'
 
@@ -1698,6 +1699,33 @@ const server = createServer(async (request, response) => {
       draft.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
       await saveState('drafts')
       return send(response, 200, draft)
+    }
+    // Requirement 16 第 2-3 条：发布前内容层报告（五维共鸣 + 传播心理）。只出报告，不拦停发布。
+    const draftResonanceMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/resonance$/)
+    if (draftResonanceMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftResonanceMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      if (!String(draft.body || '').trim()) return send(response, 422, { error: '这份草稿还没有正文，先写正文再诊断', code: 'validation_failed' })
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      if (!configs.primary && !configs.fallback) return send(response, 422, { error: '共鸣诊断需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      if (usesSharedPrimaryLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) return send(response, 429, { code: 'QUOTA_EXCEEDED', error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false })
+      }
+      try {
+        const core = coreMechanismCheck(draft.body)
+        const prompt = resonancePrompt({ platform: draft.platform, topic: draft.title, body: draft.body, core })
+        const result = await callLlmWithFallback(configs, [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }])
+        const report = parseResonanceResponse(result.content, { core })
+        // 一条能关联到原文的结论都没有就不落库：源技能禁止空话结论，宁可不给。
+        if (!report || !report.dimensions.length) return send(response, 502, { code: 'RESONANCE_UNLINKED', error: '这一轮诊断没有一条能关联到文稿原句，没有落库。可以再试一次。', retryable: true })
+        // 只挂在草稿上给人看：不写 checks、不改 workflow_status、不动 approval，所以它拦不住发布。
+        draft.resonance = { ...report, generated_at: new Date().toISOString(), draft_version: draft.version, provider: result.provider }
+        await saveState('drafts')
+        return send(response, 200, draft)
+      } catch (error) {
+        return send(response, 502, { error: error?.message || '共鸣诊断失败，请稍后重试', retryable: true })
+      }
     }
     const draftSlotMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/slots\/(title|opening|structure|ending)$/)
     if (draftSlotMatch && request.method === 'POST') { const body = await readJson(request); const draft = owned('drafts', request).find(item => item.id === Number(draftSlotMatch[1])); if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' }); const slot = draftSlotMatch[2]; if (!slotIds.includes(slot)) return send(response, 422, { error: '不支持的槽位', code: 'validation_failed' }); if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撕回人工确认，再修改草稿', code: 'invalid_transition' }); const option = findSlotOption(buildSlotOptions({ structures: owned('structures', request), platform: draft.platform }), slot, body.option_id); if (!option) return send(response, 422, { error: '槽位选项不存在', code: 'validation_failed' }); const slotConfigs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }; if (!slotConfigs.primary && !slotConfigs.fallback) return send(response, 422, { error: '槽位改写需要先在 API 中心配置大模型', reason: 'llm_not_configured' }); if (usesSharedPrimaryLlm(request)) { const quota = await consumeQuota(request, 'llm', llmDailyLimit); if (!quota.allowed) return send(response, 429, { error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false }) }
