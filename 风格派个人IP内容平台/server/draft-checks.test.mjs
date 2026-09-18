@@ -3,12 +3,8 @@ import test from 'node:test'
 import { checkPersona, checkPublishChecklist, checkQuality, draftCheckRewriteNote, hasBlockedCheck, scanGeneratedBodies } from './draft-checks.mjs'
 import { draftBriefPrompt, draftLengthTargets } from './draft-writing.mjs'
 
-// 语言层命中已从 evidence 移到 reminders（按 7 类分组），同一个问题不会在面板上出现两次。
-// 这里把两部分摊平成同一种条目，断言只关心「有没有命中」，不绑死它在哪个字段里呈现。
-const issueItems = checked => [
-  ...(checked?.evidence || []),
-  ...(checked?.reminders || []).flatMap(group => group.codes.map(code => ({ code, category: group.category, message: group.message, hint: group.hint, severity: 'warning' }))),
-]
+// 语言层命中不再归并成类别：reminders 里已经是一个 code 一条，和 evidence 摊平成同一种条目。
+const issueItems = checked => [...(checked?.evidence || []), ...(checked?.reminders || [])]
 // 生成闸门有「字数严重不足（低于目标下限六成）」一条，健康正文要写够平台下限的字数，
 // 否则 failed 会被字数而不是内容决定。
 const fillTo = (seed, min) => { let out = ''; while (out.length < min) out += seed; return out }
@@ -133,7 +129,7 @@ test('质量门把设问开头当成警告：提示词要求第一句直给冲�
   assert.ok(evidence, '首句是问句必须留下证据')
   assert.equal(evidence.severity, 'warning')
   assert.match(evidence.message, /你是不是经常面对空白的文档/)
-  assert.match(evidence.hint, /第一句/)
+  assert.match(evidence.label, /第一句/)
   assert.equal(question.status, 'passed', '设问开头不应直接拦停发布')
 
   const statement = checkQuality({ ...baseDraft, body: '很多人以为这件事靠技巧，其实是先把过程讲清楚。' }, {})
@@ -214,8 +210,9 @@ test('具体案例与数字必须有人确认', () => {
   assert.match(evidence.message, /案例人物/)
   assert.match(evidence.message, /结果数字/)
   assert.match(evidence.message, /我有个客户/)
-  // 「确认案例与数字是否真实」这句改法已按类归并到 unsourced_case 的提醒里。
-  assert.match(evidence.hint, /你自己经历过/)
+  // case_claim 对不上 dbs-ai-check 的任何一条特征，所以只有名字、没有追问：不硬配。
+  assert.match(evidence.label, /来路不明/)
+  assert.equal(evidence.followup, '', '对不上特征就不给追问')
 
   const vendor = checkQuality({ ...baseDraft, body: '上个月，一位做本地家政的老板，提炼出一个核心观点：干净不是扫出来的，是收纳出来的。' }, {})
   assert.match(issueItems(vendor).find(item => item.code === 'case_claim').message, /案例人物/)
@@ -238,7 +235,7 @@ test('质量门把咨询腔和工程词标出来', () => {
   assert.equal(evidence.severity, 'warning')
   assert.match(evidence.message, /颗粒度/)
   assert.match(evidence.message, /钩子/)
-  assert.match(evidence.hint, /删掉咨询腔/)
+  assert.match(evidence.followup, /你嘴上会怎么说/)
 
   const lecture = checkQuality({ ...baseDraft, body: '首先，灵感不重要。其次，系统才重要。总而言之，你要沉淀资产。' }, {})
   assert.match(issueItems(lecture).find(item => item.code === 'consulting_tone').message, /首先/)
@@ -334,7 +331,7 @@ test('句子级模板句判据拦得住，具体清单不误伤', () => {
 })
 
 test('同一问题只给一条建议：人设检查和质量门都报升华句也只写一遍', () => {
-  // 语言层命中现在按类别分组放在 reminders 里，改写指令也按类别各出一份。
+  // 语言层命中一个 code 一条放在 reminders 里，改写指令也一句一个 code。
   const toneHint = '把升华句、段尾金句和万能收尾换成具体的人和事：谁、在什么场合、发生了什么'
   const draft = {
     ...baseDraft,
@@ -342,8 +339,8 @@ test('同一问题只给一条建议：人设检查和质量门都报升华句�
     body: '正文内容足够长。'.repeat(20),
     version: 3,
     checks: {
-      persona: { draft_version: 3, status: 'failed', reminders: [{ category: 'tone_elevation', label: '升华句与金句收束', codes: ['ai_tone_phrase'], message: '正文出现升华式句式：不是A而是B', hint: toneHint }] },
-      quality: { draft_version: 3, status: 'failed', reminders: [{ category: 'tone_elevation', label: '升华句与金句收束', codes: ['ai_tone_phrase'], message: '正文出现升华式句式：不是A而是B', hint: toneHint }, { category: 'unsourced_case', label: '没主体的案例、来路不明的数字', codes: ['vague_case'], message: '正文出现没有主体的案例：某某人', hint: '把没有主体的例子和来路不明的数字换成你自己经历过的具体事，或直接删掉' }] },
+      persona: { draft_version: 3, status: 'failed', reminders: [{ code: 'ai_tone_phrase', label: '「不是 X 是 Y」高密度', message: '正文出现升华式句式：不是A而是B' }] },
+      quality: { draft_version: 3, status: 'failed', reminders: [{ code: 'ai_tone_phrase', label: '「不是 X 是 Y」高密度', message: '正文出现升华式句式：不是A而是B' }, { code: 'vague_case', label: '虚假的「讲个故事」', message: '正文出现没有主体的案例：某某人' }] },
     },
   }
   const note = draftCheckRewriteNote(draft)

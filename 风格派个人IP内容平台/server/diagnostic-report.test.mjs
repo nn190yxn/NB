@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import * as draftChecks from './draft-checks.mjs'
 import { aiFeatureSeverityLabels, aiFeatureCautions, aiFeatures } from './ai-features.mjs'
 import { diagnosticReport, diagnosticReportFooter, diagnosticSeverityLabels } from './draft-checks.mjs'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
@@ -79,13 +80,31 @@ test('一句话不硬配一条追问：对得上特征才带追问', () => {
   const structural = diagnosticReport({ body: '这版也发到小红书效果不错。\n大家好，我是 Agnes，关注我带你做内容。', platform: '抖音' })
   assert.ok(structural.entries.length >= 2)
   assert.ok(structural.entries.every(entry => !entry.feature), '结构问题不该被算成 AI 特征')
-  assert.ok(structural.entries.every(entry => !entry.question), '对不上特征的条目不硬配追问')
+  assert.ok(structural.entries.every(entry => !entry.followup), '对不上特征的条目不硬配追问')
 
   const tone = diagnosticReport({ body: '这不是方法，而是态度。', platform: '抖音' })
   const hit = tone.entries.find(entry => entry.code === 'ai_tone_phrase')
   assert.ok(hit, '「不是 X 是 Y」应当命中')
   assert.equal(hit.feature.id, 8, '应当对应特征 8')
-  assert.ok(hit.question, '命中特征就带追问')
+  assert.ok(hit.followup, '命中特征就带追问')
+})
+
+test('语言层不归并、不设条数上限：命中多少条就出多少条', () => {
+  // 归并版会把下面这些压成三四个类别，一个 code 一条就不该压。
+  const body = [
+    '大家好，我是 Agnes，关注我带你做内容。',
+    '这不是方法，而是态度。',
+    '拆成几块、裂变、多平台分发，一套流程跑通。',
+    '首先要想清楚，其次要执行，此外要坚持。',
+    '有个人做得很成功，赚了很多钱。',
+    '所以你要相信自己，你值得更好的。',
+  ].join('\n')
+  const report = diagnosticReport({ body, platform: '抖音' })
+  const codes = new Set(report.entries.map(entry => entry.code))
+  assert.ok(codes.size >= 5, `同时命中多种特征不该被归并掉，实际只出了：${[...codes].join('、')}`)
+  assert.ok(report.entries.every(entry => !Object.hasOwn(entry, 'category')), '条目里不该再有「类别」这个字段')
+  assert.ok(report.entries.every(entry => entry.label), '每条都要有名字，不能只剩 code')
+  assert.equal(Object.hasOwn(draftChecks, 'reminderCategories'), false, '7 类归并的代码要撤掉')
 })
 
 const llmMock = await startSharedLlmMock()

@@ -216,7 +216,7 @@ const checkRewriteHints = {
   format_leak: '删掉结构说明和其他平台建议',
   platform_mixup: '把其他平台名和分发说明换成这一条自己的具体内容，不要删掉就完事',
   length_severe: '把正文补到目标字数，保留已有判断和可执行的一步，不要另写一篇',
-  // 语言层（14 个 code）的改写指令统一在 reminderHints 里按 7 类各写一份，这里不再按 code 重复。
+  // 语言层（14 个 code）的改写指令统一在 languageFixes 里一句一个 code，这里不再重复。
 }
 
 export function draftCheckRewriteNote(draft) {
@@ -245,12 +245,14 @@ export function draftCheckRewriteNote(draft) {
     }
     // 语言层提醒也要进改写指令，否则「按检查意见改写」修不了升调、咨询腔这类问题。
     for (const reminder of item.reminders || []) {
-      const key = `reminder:${reminder.category}`
-      if (seen.has(key) || !reminder.hint) continue
+      const key = `reminder:${reminder.code}`
+      if (seen.has(key)) continue
       seen.add(key)
+      const fix = languageFixes[reminder.code]
+      if (!fix) continue
       const detail = String(reminder.message || '').split('：').slice(1).join('：').trim()
-      if ((reminder.category === 'consulting_tone' || reminder.category === 'unsourced_case') && detail) hints.push(`${reminder.hint}。点名原文：${detail}`)
-      else hints.push(reminder.hint)
+      if ((reminder.code === 'consulting_tone' || reminder.code === 'vague_case' || reminder.code === 'case_claim') && detail) hints.push(`${fix}。点名原文：${detail}`)
+      else hints.push(fix)
     }
   }
   return [...new Set(hints)].join('；')
@@ -273,7 +275,7 @@ function actionableIssueCodes({ body, platform }) {
   // 闸门 code 与提醒类别都要算进来：语言问题不拦生成，但用户点「按检查意见改写」时它们仍是可改项，
   // 少算会让 checkReviseOutcome 的「被点名的问题没减少」护栏失效。
   const issues = writingIssues({ body, platform })
-  const codes = [...issues.gate.map(item => item.code), ...issues.reminders.map(item => item.category)]
+  const codes = [...issues.gate.map(item => item.code), ...issues.reminders.map(item => item.code)]
   const max = Number(draftLengthTargetOf({ platform })?.max || 0)
   if (max && String(body || '').trim().length > max) codes.push('platform_length')
   return codes
@@ -376,17 +378,16 @@ function lacksConcreteSupport(body) {
 export const gateCodes = ['format_leak', 'platform_mixup', 'self_intro', 'length_severe']
 
 // 语言层提醒：审美类，不拦停、不触发自动重写、不影响 workflow_status。
-// 原 14 个 code 归并为 7 类，封顶 7 条，加一条必须先合并或删一条；
-// 上限由 server/draft-checks.test.mjs 的一条断言盯着。
-export const reminderCategories = [
-  { category: 'tone_elevation', label: '升华句与金句收束', codes: ['ai_tone_phrase', 'golden_tail', 'ing_tail', 'avoid_copula', 'generic_ending'] },
-  { category: 'template_filler', label: '凑数三连、假反驳、书面连接词', codes: ['triple_list', 'fake_rebuttal', 'connector_abuse'] },
-  { category: 'unsourced_case', label: '没主体的案例、来路不明的数字', codes: ['vague_case', 'case_claim'] },
-  { category: 'no_concrete_support', label: '整篇通用判断、没有落地', codes: ['no_concrete_support'] },
-  { category: 'method_talk', label: '方法骨架 / 分发说明', codes: ['method_talk'] },
-  { category: 'consulting_tone', label: '咨询腔与工程词', codes: ['consulting_tone'] },
-  { category: 'opening_question', label: '开头第一句是问句', codes: ['opening_question'] },
-]
+// 不再归并成类别，也不设条数上限（Requirement 11 第 6 条）：一个 code 一条，按正文顺序逐处呈现。
+// 对不上 dbs-ai-check 22 个特征的 code（整篇级判断、体裁类）名字只在这里给。
+const languageLabels = {
+  ing_tail: '「正在 / 越来越」式尾句',
+  avoid_copula: '少用「是」字句',
+  case_claim: '来路不明的具体案例',
+  no_concrete_support: '整篇通用判断',
+  method_talk: '方法骨架 / 分发说明',
+  opening_question: '开头第一句是问句',
+}
 
 // 现有检测码 → dbs-ai-check 特征编号。只接真正同一回事的：
 // 剩下 14 个特征还没有检测器，宁可空着，不硬凑对应关系。
@@ -403,13 +404,19 @@ const aiFeatureCodeOf = {
 
 const featureForCode = code => (aiFeatureCodeOf[code] ? aiFeatureByCode[aiFeatureCodeOf[code]] : null)
 
-const reminderCategoryOf = Object.fromEntries(reminderCategories.flatMap(group => group.codes.map(code => [code, group.category])))
-
-// 每类只留一份措辞，给「按检查意见改写」当指令；不再按原 code 各写一句，避免同一个问题两种说法。
-const reminderHints = {
-  tone_elevation: '把升华句、段尾金句和万能收尾换成具体的人和事：谁、在什么场合、发生了什么',
-  template_filler: '删掉凑数三连、没人提出的反驳和「首先 / 其次 / 此外」这类书面连接词，用口语顺序讲',
-  unsourced_case: '把没有主体的例子和来路不明的数字换成你自己经历过的具体事，或直接删掉',
+// 「按检查意见改写」的指令：一个 code 一句，不再按类别。
+// 句子沿用原来那几份，没有重写；条目结构上不再有类别，也就没有条数上限。
+const languageFixes = {
+  ai_tone_phrase: '把升华句、段尾金句和万能收尾换成具体的人和事：谁、在什么场合、发生了什么',
+  golden_tail: '把升华句、段尾金句和万能收尾换成具体的人和事：谁、在什么场合、发生了什么',
+  ing_tail: '把升华句、段尾金句和万能收尾换成具体的人和事：谁、在什么场合、发生了什么',
+  avoid_copula: '把升华句、段尾金句和万能收尾换成具体的人和事：谁、在什么场合、发生了什么',
+  generic_ending: '把升华句、段尾金句和万能收尾换成具体的人和事：谁、在什么场合、发生了什么',
+  triple_list: '删掉凑数三连、没人提出的反驳和「首先 / 其次 / 此外」这类书面连接词，用口语顺序讲',
+  fake_rebuttal: '删掉凑数三连、没人提出的反驳和「首先 / 其次 / 此外」这类书面连接词，用口语顺序讲',
+  connector_abuse: '删掉凑数三连、没人提出的反驳和「首先 / 其次 / 此外」这类书面连接词，用口语顺序讲',
+  vague_case: '把没有主体的例子和来路不明的数字换成你自己经历过的具体事，或直接删掉',
+  case_claim: '把没有主体的例子和来路不明的数字换成你自己经历过的具体事，或直接删掉',
   no_concrete_support: '补一个具体场景、数字或时间，让整篇有一个能落地的地方',
   method_talk: '把「拆成几块 / 裂变 / 多平台分发」换成一件具体的经历或判断，字数不要因此变少',
   consulting_tone: '改成跟熟人说话，删掉咨询腔和工程词',
@@ -420,7 +427,12 @@ function writingIssues(draft) {
   const hits = []
   // quote 是直接引用的原文，position 是它在正文里的位置：报告要按文本顺序呈现，不按特征归类。
   // 整篇级的问题（太短、通篇没有落地）没有单一位置，position 记 -1，排到最后，不假装它在开头。
-  const add = (code, message, suggestion = '', quote = '', wholeBody = false) => hits.push({ code, category: reminderCategoryOf[code] || null, feature: featureForCode(code), message, suggestion, severity: 'warning', quote, position: wholeBody || !quote ? -1 : String(draft?.body || '').indexOf(quote) })
+  const add = (code, message, suggestion = '', quote = '', wholeBody = false) => {
+    const feature = featureForCode(code)
+    // label / intent / followup 对齐 design.md 的语言层条目结构。
+    // severity 仍是内部的 warning：评分（100 - 15/10）和 blocked 判定读这个字段。
+    hits.push({ code, label: feature?.name || languageLabels[code] || code, intent: feature?.intent || '', followup: feature?.question || '', feature, message, suggestion, severity: 'warning', quote, position: wholeBody || !quote ? -1 : String(draft?.body || '').indexOf(quote) })
+  }
 
   const introHits = selfIntroHits(draft?.body)
   if (introHits.length) add('self_intro', `正文出现自我介绍或引导关注：${introHits.join('、')}`, '删掉自我介绍与引导关注，改成直给结论的开头', introHits[0])
@@ -449,13 +461,10 @@ function writingIssues(draft) {
   if (min && bodyLength && bodyLength < Math.round(min * 0.6)) add('length_severe', `正文只有 ${bodyLength} 字，${draft?.platform || ''}目标下限 ${min} 字，不到六成`, `把正文补到 ${draftLengthRangeFrom(target)} 字，保留已有判断`, openingSentence(draft?.body), true)
 
   const gate = hits.filter(item => gateCodes.includes(item.code))
-  const reminders = reminderCategories
-    .map(group => {
-      const items = hits.filter(item => item.category === group.category)
-      if (!items.length) return null
-      return { category: group.category, label: group.label, codes: items.map(item => item.code), message: items.map(item => item.message).join('；'), hint: reminderHints[group.category] }
-    })
-    .filter(Boolean)
+  // 语言层不归并：一个 code 一条，不设条数上限，且按正文顺序排（Requirement 11 第 2、6 条）。
+  const reminders = hits
+    .filter(item => !gateCodes.includes(item.code))
+    .sort((left, right) => (left.position < 0 ? Number.MAX_SAFE_INTEGER : left.position) - (right.position < 0 ? Number.MAX_SAFE_INTEGER : right.position))
   return { hits, gate, reminders, suggestions: gate.map(item => item.suggestion).filter(Boolean) }
 }
 
@@ -589,7 +598,7 @@ export function diagnosticReport(draft) {
   const { hits } = writingIssues(draft)
   const entries = hits
     // 不带 reminders 的七类归并：报告按文本顺序呈现，不按特征分类。
-    .map(item => ({ code: item.code, quote: item.quote, note: item.message, severity: item.feature?.severity || diagnosticSeverityOf[item.code] || 'weak', position: item.position, feature: item.feature ? { id: item.feature.id, name: item.feature.name, intent: item.feature.intent } : null, question: item.feature ? item.feature.question : '' }))
+    .map(item => ({ code: item.code, label: item.label, quote: item.quote, note: item.message, severity: item.feature?.severity || diagnosticSeverityOf[item.code] || 'weak', position: item.position, intent: item.intent, followup: item.followup, feature: item.feature ? { id: item.feature.id, name: item.feature.name } : null }))
     .sort((left, right) => (left.position < 0 ? Number.MAX_SAFE_INTEGER : left.position) - (right.position < 0 ? Number.MAX_SAFE_INTEGER : right.position))
   // 第 5 条：整体没特征就直说，不硬找。
   const summary = entries.length ? '' : '没有发现明显的 AI 特征。不硬找。'
