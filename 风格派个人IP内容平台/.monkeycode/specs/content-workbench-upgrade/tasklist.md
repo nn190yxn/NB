@@ -139,12 +139,12 @@
     - **落点**：`server/index.mjs:1194`（`/api/topics/generate`）与写作层简报组装处（`server/draft-writing.mjs`）。
     - **验收**：生成结果的 `source_refs` 覆盖全部实际使用的素材；未使用的不出现。
     - 2026-09-18 回填：测试「选中的角色素材进简报并进溯源；一条素材都没有也照样生成」。
-  - [ ] 9.2 案例位与数字位约束
+  - [x] 9.2 案例位与数字位约束
     - 只接受 `verified` / `sourced` 素材；`derived` 不得用于案例位与数字位。
     - 无可用素材时留空占位或改写为不含具体案例与数字的表述，不得编造。
     - **落点**：简报组装时按 `material_trust` 过滤，只放行 `verified` / `sourced`（`derived` 与演示数据被挡）。信度读取用 `materialTrustOf`（`server/validation.mjs`）。
     - **验收**：案例位与数字位只引 `verified`/`sourced`；只有 `derived` 素材时不得把它填进案例位。
-    - 已知缺口：`groupMaterialsByRole` 不按信度过滤，`derived` 仍进简报。闸门只拦正文数字不在素材文本里，没有把 derived 从案例位拿掉。本次不扩范围去改。
+    - 2026-09-18：`briefUsableMaterial` 用 `materialTrustOf`，`derived` 不进简报案例位/引用/经历，也不进 `source_refs`。缺字段仍按 verified。测试「derived 素材不进案例位，也不给数字当依据」。
   - [x] 9.3 无素材时允许生成并明确提示
     - **验收**：零素材时生成仍成功，返回体带明确提示说明「未使用素材」。
     - 2026-09-18 回填：简报 `material_gap` 匹配「没有可用素材」；测试「没有素材时简报明确说明在裸写」。
@@ -292,7 +292,7 @@
 
 - [ ] 19. 全量验收
   - [x] 19.1 运行全量测试、类型检查与生产构建
-    - 318 项测试全过、`tsc --noEmit` 无错、`npm run build` 成功产出 `dist/`。
+    - 319 项测试全过、`tsc --noEmit` 无错、`npm run build` 成功产出 `dist/`。
   - [x] 19.2 数据迁移演练
     - 用真实存量数据跑一次 `unit_type` 迁移，确认可重入、不丢记录。
     - 2026-09-18：`mysql-migration.test.mjs` 5/5；幂等与行数一致。`PROJECT_DB_*` 未设置。**本次未用生产副本演练。**

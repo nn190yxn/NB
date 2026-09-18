@@ -47,6 +47,38 @@ test('没有素材时简报明确说明在裸写，有素材时不提示', () =>
   assert.equal(withMaterial.material_roles.CAS[0].text, '真实案例')
 })
 
+test('derived 素材不进案例位，也不给数字当依据；缺信度的历史素材仍可用', () => {
+  const groups = groupMaterialsByRole([
+    { id: 1, unit_type: 'CAS', content: '核实过的案例', material_trust: 'verified' },
+    { id: 2, unit_type: 'CAS', content: '推出来的 2万 案例', material_trust: 'derived' },
+    { id: 3, unit_type: 'CAS', content: '有来源的案例', material_trust: 'sourced' },
+    { id: 4, unit_type: 'OPI', content: '推出来的判断', material_trust: 'derived' },
+  ])
+  assert.deepEqual(groups.CAS.map(item => item.text), ['核实过的案例', '有来源的案例'])
+  assert.deepEqual(groups.OPI, [])
+  assert.ok(groups.CAS.every(item => item.trust !== 'derived'))
+
+  const legacy = groupMaterialsByRole([{ id: 8, unit_type: 'CAS', content: '没有信度字段的老案例' }])
+  assert.equal(legacy.CAS[0].trust, 'verified', '历史素材缺字段按 verified 读，不能误伤成 derived')
+
+  const onlyDerived = buildDraftBrief({
+    topic: { title: '只有推的' },
+    materials: [{ id: 1, unit_type: 'CAS', content: '推出来的 2万 案例', material_trust: 'derived' }],
+    quotes: [{ content: '对标原话里的 2万', name: '对标', material_trust: 'derived' }],
+  })
+  assert.deepEqual(onlyDerived.material_roles.CAS, [])
+  assert.deepEqual(onlyDerived.quotes, [])
+  assert.match(onlyDerived.material_gap, /没有可用素材/)
+
+  const allowed = [
+    onlyDerived.title,
+    ...Object.values(onlyDerived.material_roles).flat().map(item => item.text),
+    ...onlyDerived.quotes.map(item => item.text),
+    ...onlyDerived.experiences,
+  ].join('\n')
+  assert.deepEqual(unbackedNumberHits('做到 2万 咨询', allowed), ['2万'], 'derived 里的数字不能给正文当依据')
+})
+
 test('只抓像数据声明的数字，个位数修辞不误伤', () => {
   assert.deepEqual(draftNumbers('发了半年没人问，786 条数据、3 个动作、涨了 30%'), ['786', '30%'])
   assert.deepEqual(draftNumbers('一步就好，三个动作，2 个方法'), [], '个位数且无单位的数字是修辞，当成数据只会误伤')

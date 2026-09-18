@@ -1,5 +1,6 @@
 // 草稿正文由大模型撰写：这里只负责组装写作简报、构造指令、解析模型返回，方便单独测试。
 // 简报里必须分开三件事：style 是创作者本人的表达习惯；mechanisms 是对标账号可照用的机制；quotes 是对标原话（只能当引用且要标来源）。
+import { materialTrustOf } from './validation.mjs'
 
 // 本期只生成抖音与视频号两条。小红书与公众号不再出新草稿，但体裁规划仍保留在 draftPlatformPlans 里：
 // 历史草稿要能继续读取、检查、适配，长度目标与体裁提示都得查得到。
@@ -149,6 +150,11 @@ export const defaultDraftStructure = [
 
 export const draftMaterialRoles = ['QST', 'CON', 'OPI', 'CAS', 'SOL']
 
+// 案例位与数字位只吃核实过或有来源的素材。derived 和演示数据进简报等于让模型把推出来的细节写成事实。
+export function briefUsableMaterial(item) {
+  return materialTrustOf(item) !== 'derived'
+}
+
 // 按认知角色取料，并按 id 升序：同一批素材每次生成的简报顺序必须一致，
 // 否则同一选题两次生成的简报不同，出了问题无法复现。
 export function groupMaterialsByRole(materials) {
@@ -156,9 +162,10 @@ export function groupMaterialsByRole(materials) {
   const ordered = [...(materials || [])].filter(Boolean).sort((left, right) => Number(left.id || 0) - Number(right.id || 0))
   ordered.forEach(item => {
     if (!draftMaterialRoles.includes(item.unit_type)) return
+    if (!briefUsableMaterial(item)) return
     const text = String(item.content || '').trim()
     if (!text) return
-    groups[item.unit_type].push({ text, source: String(item.name || '').trim(), trust: String(item.material_trust || 'derived') })
+    groups[item.unit_type].push({ text, source: String(item.name || '').trim(), trust: materialTrustOf(item) })
   })
   return groups
 }
@@ -174,8 +181,8 @@ export function buildDraftBrief({ topic, structure, quotes, experiences, materia
     hook: String(hookText || '').trim(),
     structure: usingLibrary ? librarySteps : [...defaultDraftStructure],
     structure_source: usingLibrary ? 'library' : 'default',
-    quotes: (quotes || []).map(item => ({ text: String(item.content || ''), source: String(item.name || '') })).filter(item => item.text),
-    experiences: (experiences || []).map(item => String(item.content || '')).filter(Boolean),
+    quotes: (quotes || []).filter(briefUsableMaterial).map(item => ({ text: String(item.content || ''), source: String(item.name || '') })).filter(item => item.text),
+    experiences: (experiences || []).filter(briefUsableMaterial).map(item => String(item.content || '')).filter(Boolean),
     style: (memories || []).map(item => String(item.content || '')).filter(Boolean),
     mechanisms: (mechanisms || []).map(item => ({ content: String(item.content || ''), source: String(item.source_label || '对标账号') })).filter(item => item.content),
     platforms: draftPlatforms,
