@@ -172,7 +172,8 @@ test('发布能力并入内容创作，侧栏不再单独列出发布中心', ()
 test('选题评估与决策入口用主按钮，关键动作不被当成正文', () => {
   const source = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8')
   assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => evaluateTopicItem\(topic\)\}>七维评估<\/button>/)
-  assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => decideTopic\(topic, 'do'\)\}>确认做<\/button>/)
+  // 「确认做」在把关拦停时必须不可点，并直接显示「不建议做」：这是内容层唯一允许拦停的位置。
+  assert.match(source, /<button className="primary-action" disabled=\{busy \|\| evaluation\.blocked\} onClick=\{\(\) => decideTopic\(topic, 'do'\)\}>\{evaluation\.blocked \? '不建议做' : '确认做'\}<\/button>/)
   assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => openComposeFor\(topic\)\}>查看这组草稿<\/button>/)
   assert.match(source, /topic_id: topic\.id/)
   assert.match(source, /选题已确认，但草稿生成失败/)
