@@ -490,6 +490,27 @@ function sameEssayHits(bodies) {
   return hits
 }
 
+// 只抓像数据声明的数字：两位数以上，或带 % 万 倍 元 块 单位的。
+// 个位数的「一步」「三个动作」是最常见的修辞用法，抓了只会误伤。
+const dataNumberPattern = /(\d+(?:\.\d+)?)\s*(%|％|万|倍|元|块)?/g
+
+// 正文里出现的、像数据声明的数字。返回去重后的原样写法（带单位）。
+export function draftNumbers(body) {
+  const found = new Map()
+  for (const match of String(body || '').matchAll(dataNumberPattern)) {
+    if (!match[2] && match[1].replace(/\D/g, '').length < 2) continue
+    found.set(match[1], match[2] ? `${match[1]}${match[2]}` : match[1])
+  }
+  return [...found.values()]
+}
+
+// 正文里素材和简报都没有的数字：只标记出来给人看，不拦停。
+// 内容层唯一允许拦停的位置是选题把关（见 topic-evaluation.mjs），这里不能破例。
+export function unbackedNumberHits(body, allowedText = '') {
+  const allowed = new Set([...String(allowedText || '').matchAll(/\d+(?:\.\d+)?/g)].map(match => match[0]))
+  return draftNumbers(body).filter(number => !allowed.has(number.replace(/[%％万倍元块]/g, '')))
+}
+
 // 生成阶段的拦停只看闸门：闸门 5 类（这里 4 类，same_essay 要看四篇）+ 四平台同一篇。
 // 语言层命中（审美）不拦停，进 reminders 等用户点「检查」或「重写」时再说。
 export function scanGeneratedBody(body, platform) {

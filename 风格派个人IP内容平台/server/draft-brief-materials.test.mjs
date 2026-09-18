@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { draftNumbers, unbackedNumberHits } from './draft-checks.mjs'
 import { buildDraftBrief, groupMaterialsByRole } from './draft-writing.mjs'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
 import { testPort } from './test-port.mjs'
@@ -46,6 +47,19 @@ test('没有素材时简报明确说明在裸写，有素材时不提示', () =>
   assert.equal(withMaterial.material_roles.CAS[0].text, '真实案例')
 })
 
+test('只抓像数据声明的数字，个位数修辞不误伤', () => {
+  assert.deepEqual(draftNumbers('发了半年没人问，786 条数据、3 个动作、涨了 30%'), ['786', '30%'])
+  assert.deepEqual(draftNumbers('一步就好，三个动作，2 个方法'), [], '个位数且无单位的数字是修辞，当成数据只会误伤')
+  assert.deepEqual(draftNumbers(''), [])
+})
+
+test('素材和简报里没有的数字才标记，有的不标记', () => {
+  const body = '我有个客户，发了半年没人问，后来做到 786 条数据、涨了 30%'
+  assert.deepEqual(unbackedNumberHits(body, '786 条数据'), ['30%'], '素材里有的不标，没有的才标')
+  assert.deepEqual(unbackedNumberHits(body, '素材里只有 786 和 30%'), [])
+  assert.deepEqual(unbackedNumberHits(body, ''), ['786', '30%'])
+})
+
 const llmMock = await startSharedLlmMock()
 const port = testPort(49000, 150)
 const baseUrl = `http://127.0.0.1:${port}`
@@ -84,4 +98,7 @@ test('选中的角色素材进简报并进溯源；一条素材都没有也照�
   assert.equal(bare.status, 201, '没有素材不是错误，必须能生成')
   const bareDrafts = await bare.json()
   assert.match(bareDrafts[0].generation_context.brief.material_gap, /没有可用素材/)
+  // 数字标记只记录、不拦停：干净的一版不该有误报，但字段必须在。
+  assert.deepEqual(drafts[0].generation_context.gate.unbacked_numbers, [], '正文里的数字都来自素材时不该误报')
+  assert.ok(Array.isArray(bareDrafts[0].generation_context.gate.unbacked_numbers), '标记字段不能因为没问题就不存在')
 })

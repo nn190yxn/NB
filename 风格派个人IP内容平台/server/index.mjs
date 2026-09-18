@@ -20,7 +20,7 @@ import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
 import { buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs } from './draft-writing.mjs'
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
-import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, draftCheckRewriteNote, scanGeneratedBodies, scanGeneratedBody } from './draft-checks.mjs'
+import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, draftCheckRewriteNote, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
 import { approveDraftRecord, defaultApproval, revokeDraftRecord, validateApprovalReadiness } from './draft-approval.mjs'
 
 const port = Number(process.env.PORT || 3001)
@@ -1380,9 +1380,12 @@ const server = createServer(async (request, response) => {
         return send(response, 502, { code: 'GENERATION_FAILED', error: '草稿生成失败，请检查模型配置后重试；本次未生成草稿。', retryable: true, detail: error instanceof Error ? error.message : undefined })
       }
       const variantGroupId = randomUUID()
+      // 素材侧的全部文字：正文里的数字只能来自这里，别的都标记出来。
+      const materialText = [brief.title, ...Object.values(brief.material_roles).flat().map(item => item.text), ...brief.quotes.map(item => item.text), ...brief.experiences, ...brief.structure].join('\n')
+      const unbackedByPlatform = Object.fromEntries(draftPlatforms.map(platform => [platform, unbackedNumberHits(bodies?.[platform], materialText)]))
       const atomRefs = [...new Map([...quoteMaterials, ...experienceMaterials, ...roleMaterials].map(item => [item.id, item])).values()].map(item => sourceRef('material', item.id))
       const sourceRefs = [...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs]
-      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), summary: gateFailure ? gateFailure.summary : null } }, created_at: new Date().toISOString() }))
+      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateFailure ? gateFailure.summary : null } }, created_at: new Date().toISOString() }))
       if (persistedTopic?.id) {
         const archivedAt = new Date().toISOString()
         for (const draft of supersededDraftsForRegenerate(state.drafts, { ownerId: userId(request), topicId: persistedTopic.id })) {
