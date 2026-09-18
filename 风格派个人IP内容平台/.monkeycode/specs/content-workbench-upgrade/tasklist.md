@@ -173,6 +173,7 @@
     - **验收**：五条各一——排序、去重、缺省兼容、非否决、确认门禁。
 
 - [ ] 11. 标记式改稿
+  - 已知缺口：不在 918 收官八项范围内，保持未勾选。
   - [ ] 11.1 实现标记式改稿
     - 保留原文与改后文字对比，只作用于当前草稿，不影响其他平台草稿。
   - [ ] 11.2 改动清单
@@ -266,17 +267,17 @@
 
 - [ ] 19. 全量验收
   - [x] 19.1 运行全量测试、类型检查与生产构建
-    - 299 项测试全过、`tsc --noEmit` 无错、`npm run build` 成功（提交 c11e89d 之后复跑确认）。
+    - 318 项测试全过、`tsc --noEmit` 无错、`npm run build` 成功产出 `dist/`。
   - [x] 19.2 数据迁移演练
     - 用真实存量数据跑一次 `unit_type` 迁移，确认可重入、不丢记录。
-    - 既有 `server/mysql-migration.test.mjs`（迁移幂等、行数不符退出 1、不删遗留行）与 `legacy JSON workflow records receive safe defaults and remain operable`（老记录缺新字段走默认值仍可用）在全量里通过；本次没有另外拿生产库跑演练，如实标注。
+    - 2026-09-18：`mysql-migration.test.mjs` 5/5；幂等与行数一致。`PROJECT_DB_*` 未设置。**本次未用生产副本演练。**
   - [x] 19.3 端到端走一条真选题
     - 从取材层走到发布与回流，确认各环节衔接。
-    - `cross-platform-e2e.test.mjs` 覆盖生成→适配链路；`server/return-flow.test.mjs` 覆盖生成 → 定稿 → 改稿 → 再定稿 → 回流候选 → 确认。没有手动在真实界面里从头走完一条，如实标注。
+    - 2026-09-18：e2e / 回流 / 拍摄自动化 8/8。**没有在真实界面里从头走完 12 步。**
   - [x] 19.4 更新文档
-    - README 测试数量漂移修正（149 → 299，收官后若变动需再改）、README 补四个新章节、新增 `checkpoints.md`。
+    - README 测试数量改为 318；单步路由章节补上 `NextStepCard` 已做。
     - `ARCHITECTURE.md`、`INTERFACES.md`、`DEVELOPER_GUIDE.md` 三份用「附录」方式同步本轮新增（模块、接口表、测试跑法与端口规矩），正文未逐段改写；`judgment-layering` spec 已标注 Requirement 2 被本特性取代。
   - [x] 19.5 登记任务记忆与任务注册册
-    - `任务记忆.md` 每阶段登记；`E:\Claude Code\TASK_REGISTRY.md` 已首次登记（状态 🔶，收官后改 ✅）。
+    - `任务记忆.md` 每阶段登记；`TASK_REGISTRY.md` 仍 🔶（生产副本演练和真实界面 12 步未做，不改 ✅）。
   - [x] 19.6 交接文档
     - `918任务.md`：最终阶段（收官）定义 + 逐项操作/回测/审核标准 + 硬性规矩 + 已知缺口。后续工作交给另一个 Agent 按此执行。
