@@ -8,6 +8,11 @@ const DIMENSIONS = [
   { key: 'compliance_risk', label: '合规风险' },
 ]
 
+// 单个维度的及格线。全部维度都低于它，才算「不建议做」。
+export const dimensionPassScore = 60
+
+const conclusionLabels = { do: '建议做', revise: '建议改方向', defer: '建议暂缓' }
+
 const riskyTerms = ['第一', '最好', '最佳', '国家级', '绝对', '100%', '根治', '包赚', '稳赚', '史上最']
 
 const clamp = value => Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)))
@@ -85,15 +90,25 @@ export function scoreTopic(topic, context) {
 export function evaluateTopic(topic, context, now = new Date().toISOString()) {
   const dimensions = scoreTopic(topic, context)
   const score = clamp(dimensions.reduce((sum, item) => sum + item.score, 0) / dimensions.length)
-  const decision = score >= 70 ? 'do' : score >= 50 ? 'revise' : 'defer'
+  // 全部维度都不达标才叫「不建议做」。这是内容层唯一允许拦停的位置：
+  // 宁可少拦也不要误杀——误杀一条能做的选题，比放过一条差的贵。
+  const failed = dimensions.filter(item => item.score < dimensionPassScore)
+  const blocked = failed.length === dimensions.length
+  const decision = blocked ? 'defer' : score >= 70 ? 'do' : score >= 50 ? 'revise' : 'defer'
   const evidence = dimensions.flatMap(item => item.evidence.map(message => ({ dimension: item.key, message })))
   const suggestions = [...new Set(dimensions.flatMap(item => item.suggestions))]
+  const weakest = [...failed].sort((left, right) => left.score - right.score)[0]
+  const first_step = blocked ? '先别做这一条：换一条选题，或把定位、素材、来源补齐之后再回来。' : weakest?.suggestions[0] || suggestions[0] || '先按当下判断写一版，用真实反馈再定去留。'
+  const conclusion = blocked ? `不建议做：${dimensions.length} 个维度全部未达标（每个都低于 ${dimensionPassScore} 分），换一条比硬做便宜。` : `${conclusionLabels[decision]}（总分 ${score}）`
   return {
     score,
     decision,
     dimensions: Object.fromEntries(dimensions.map(item => [item.key, { score: item.score, evidence: item.evidence, suggestions: item.suggestions }])),
     evidence,
     suggestions,
+    blocked,
+    first_step,
+    conclusion,
     evaluated_at: now,
   }
 }
