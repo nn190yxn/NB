@@ -118,6 +118,14 @@ export function finalDraftCandidates(draft) {
   return candidates
 }
 
+// Requirement 17 第 2 条：把确认过的表现数据拼成一句能进选题生成指令的话。
+// 没有任何确认过的快照时返回空串，调用方原样生成，不多说一句。
+export function performanceSignalNote(snapshots = []) {
+  const lines = performanceCandidates(snapshots).map(candidate => [candidate.observation, candidate.proposal].filter(Boolean).join(' '))
+  if (!lines.length) return ''
+  return `【上一轮已确认的发布表现】${lines.join(' ')}据此调整选题方向；没有数据支撑的方向不要照搬。`
+}
+
 // 数据回流：只认用户确认过的快照。待确认的表现数据不算数，免得拿着没核过的数字去改选题。
 export function performanceCandidates(snapshots = []) {
   const confirmed = snapshots.filter(item => item?.status === 'confirmed' && typeof item?.metrics?.views === 'number')

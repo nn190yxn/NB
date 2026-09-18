@@ -115,7 +115,7 @@ export function checkPersona(draft, profile = {}) {
   return result(evidence.length ? 'warning' : 'passed', { score, evidence, suggestions, draftVersion: currentVersion(draft) })
 }
 
-export function checkQuality(draft, profile = {}) {
+export function checkQuality(draft, profile = {}, options = {}) {
   const body = text(draft?.body)
   // 段落判据必须用未折叠换行的原文：body 走过 text()，换行已被替成空格，
   // 再 split(/\n\s*\n/) 永远是 1 段 —— 实测 32 条真实草稿 100% 命中 structure_weak，这一维从来没得过 100 分。
@@ -170,7 +170,12 @@ export function checkQuality(draft, profile = {}) {
   const writing = writingIssues(draft)
   evidence.push(...writing.gate)
   suggestions.push(...writing.suggestions)
-  reminders = writing.reminders
+  // Requirement 17 第 4 条：已在回流里被用户偏好替换掉的特征，不再按通用特征提醒。
+  // 只作用于语言层；结构层闸门（格式泄漏、串台）不受影响。
+  const replacedFeatureIds = options.replacedFeatureIds
+  reminders = replacedFeatureIds && replacedFeatureIds.size
+    ? writing.reminders.filter(item => { const feature = featureForCode(item.code); return !(feature && replacedFeatureIds.has(Number(feature.id))) })
+    : writing.reminders
   const scoreBlocked = score < 60
   if (scoreBlocked) evidence.push(evidenceItem('score_low', '质量综合分低于 60 分', 'blocked'))
   const blocked = evidence.some(item => item.severity === 'blocked') || scoreBlocked

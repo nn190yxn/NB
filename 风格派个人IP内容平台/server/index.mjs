@@ -24,7 +24,7 @@ import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, s
 import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, openingSentence, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
 import { hookMethodSource, hookMethods } from './hook-diagnosis.mjs'
 import { coreMechanismCheck, parseResonanceResponse, resonancePrompt } from './resonance.mjs'
-import { activeFeatureReplacements, buildPreferenceRecords, draftVersions, finalDraftCandidates, isFeatureId, performanceCandidates } from './return-flow.mjs'
+import { activeFeatureReplacements, buildPreferenceRecords, draftVersions, finalDraftCandidates, isFeatureId, performanceCandidates, performanceSignalNote } from './return-flow.mjs'
 import { guideState } from './guide.mjs'
 import { hookIdeasPrompt, hookReadiness, ideaKinds, parseHookIdeas, parseTitleIdeas, titleIdeasPrompt } from './ideas.mjs'
 import { titleFormulaSource } from './title-formulas.mjs'
@@ -1274,7 +1274,9 @@ const server = createServer(async (request, response) => {
           const record = owned(ref.type === 'research' ? 'research' : 'materials', request).find(item => String(item.id) === String(ref.id))
           return { index, title: String(record?.title || record?.name || '').slice(0, 300), content: String(record?.content || record?.summary || '').slice(0, 4000) }
         })
-        const content = await generateStructured(request, '依据档案及来源生成三个可验证的选题，返回数组，每项为 {"title":"标题","rationale":"依据","content_job":"内容任务","strategy_layer":"reach|trust|conversion","source_indexes":[0]}。只能引用提供的来源编号。', { profile: { role: profile.role, audiences: profile.audiences, problems: profile.problems, pillars: profile.pillars }, sources })
+        // Requirement 17 第 2 条：确认过的发布表现要影响下一轮选题；待确认的不参与。
+        const signalNote = performanceSignalNote(owned('performance_snapshots', request))
+        const content = await generateStructured(request, `依据档案及来源生成三个可验证的选题，返回数组，每项为 {"title":"标题","rationale":"依据","content_job":"内容任务","strategy_layer":"reach|trust|conversion","source_indexes":[0]}。只能引用提供的来源编号。${signalNote ? `\n${signalNote}` : ''}`, { profile: { role: profile.role, audiences: profile.audiences, problems: profile.problems, pillars: profile.pillars }, sources })
         topics = parseTopics(content, sourceRefs).map((item, index) => defaultTopicFields({ ...item, id: nextId(state.topics) + index, owner_id: userId(request), fact_risk: 'needs_review', goal_refs: ['positioning'], generation_context: { profile_version: profile.version, source_count: item.source_refs.length } }))
       } catch (error) { return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '选题生成失败，请检查模型配置并重试；历史选题保留。', retryable: true }) }
       state.topics.push(...topics)
@@ -1350,7 +1352,7 @@ const server = createServer(async (request, response) => {
       if (checkName === 'quality' && (!draft.checks?.persona || draft.checks.persona.draft_version !== currentVersion)) return send(response, 409, { error: '请先完成当前版本的人设检查', code: 'invalid_transition' })
       if (checkName === 'publish' && (!draft.checks?.quality || draft.checks.quality.draft_version !== currentVersion || draft.checks.quality.status !== 'passed')) return send(response, 409, { error: '请先通过当前版本的质量门', code: 'invalid_transition' })
       // 质量诊断同时给出按文本顺序的报告：界面直接呈现，不用自己拼顺序。
-      const check = checkName === 'persona' ? checkPersona(draft, profile) : checkName === 'quality' ? { ...checkQuality(draft, profile), report: diagnosticReport(draft) } : checkPublishChecklist(draft)
+      const check = checkName === 'persona' ? checkPersona(draft, profile) : checkName === 'quality' ? { ...checkQuality(draft, profile, { replacedFeatureIds: new Set(activeFeatureReplacements(state.preferences.filter(item => item.owner_id === userId(request))).keys()) }), report: diagnosticReport(draft) } : checkPublishChecklist(draft)
       draft.checks = { ...(draft.checks || {}), [checkKey]: check }
       draft.workflow_status = checkName === 'persona' ? 'persona_checked' : check.status === 'blocked' ? 'needs_revision' : checkName === 'quality' ? 'quality_checked' : 'publish_ready'
       draft.updated_at = new Date().toISOString()

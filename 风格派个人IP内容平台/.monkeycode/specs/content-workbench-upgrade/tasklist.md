@@ -242,6 +242,7 @@
   - [x] 16.2 数据回流
     - 发布表现数据进入复盘，并能影响下一轮选题。
     - `performanceCandidates`：只认 `status: 'confirmed'` 的快照，按平台比最好/最差，产出下一轮选题该往哪偏的候选。
+    - 已接进选题生成：`performanceSignalNote` 把已确认表现的观察 + 提议拼成一段话，拼进 `/api/topics/generate` 的生成指令；没有已确认数据时拼空串，指令一字不变（老行为不受影响）。待确认的快照不参与。
   - [x] 16.3 判据替换
     - 语言层通用特征逐步由回流产出替换，替换过程可回溯。
     - 确认时可选 `replaces_feature`（必须是 22 个通用特征里真实存在的编号，否则 422），`GET /api/preferences` 回 `replaced_features`，可直接查回哪条偏好替换了哪个特征。
@@ -272,8 +273,10 @@
   - [x] 19.3 端到端走一条真选题
     - 从取材层走到发布与回流，确认各环节衔接。
     - `cross-platform-e2e.test.mjs` 覆盖生成→适配链路；`server/return-flow.test.mjs` 覆盖生成 → 定稿 → 改稿 → 再定稿 → 回流候选 → 确认。没有手动在真实界面里从头走完一条，如实标注。
-  - [ ] 19.4 更新文档
-    - 已做：README 测试数量漂移修正（149 → 299）、README 补四个新章节、新增 `checkpoints.md`。
-    - 未做：`.monkeycode/docs/ARCHITECTURE.md`、`INTERFACES.md`、`DEVELOPER_GUIDE.md` 三份未同步，`judgment-layering` spec 还没标注 Requirement 2 已被本特性取代。
-  - [ ] 19.5 登记任务记忆与任务注册册
-    - 已做：`任务记忆.md` 每阶段登记。未做：`E:\Claude Code\TASK_REGISTRY.md` 的统一登记。
+  - [x] 19.4 更新文档
+    - README 测试数量漂移修正（149 → 299，收官后若变动需再改）、README 补四个新章节、新增 `checkpoints.md`。
+    - `ARCHITECTURE.md`、`INTERFACES.md`、`DEVELOPER_GUIDE.md` 三份用「附录」方式同步本轮新增（模块、接口表、测试跑法与端口规矩），正文未逐段改写；`judgment-layering` spec 已标注 Requirement 2 被本特性取代。
+  - [x] 19.5 登记任务记忆与任务注册册
+    - `任务记忆.md` 每阶段登记；`E:\Claude Code\TASK_REGISTRY.md` 已首次登记（状态 🔶，收官后改 ✅）。
+  - [x] 19.6 交接文档
+    - `918任务.md`：最终阶段（收官）定义 + 逐项操作/回测/审核标准 + 硬性规矩 + 已知缺口。后续工作交给另一个 Agent 按此执行。
