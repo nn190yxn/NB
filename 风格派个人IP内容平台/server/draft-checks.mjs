@@ -379,6 +379,37 @@ function lacksConcreteSupport(body) {
   return text.length >= 120 && !concreteSignalPatterns.some(pattern => pattern.test(text))
 }
 
+// 源技能特征 4：同一个让步模板走三遍。只认「虽然/尽管/…但是」这种一眼能数清的形态。
+function concessionHits(body) {
+  return String(body || '').match(/(?:虽然|尽管|固然|不可否认|不得不承认|诚然)[^。！？\n]{0,30}(?:但是|可是|然而|却)/g) || []
+}
+
+// 源技能特征 5 误伤表：同一句式 2 次以上才算起名仪式，用一次是正常修辞。
+function namingRitualHit(body) {
+  const text = String(body || '')
+  const patterns = [/我称之为/g, /我把这(?:个|件事|一套|一招)?叫做/g, /我给它起了个名字/g, /称之为[「"]/g]
+  for (const pattern of patterns) {
+    const found = text.match(pattern) || []
+    if (found.length >= 2) return found[0]
+  }
+  return ''
+}
+
+// 源技能特征 10 点名的形态：「1.7 秒」「2.3 秒」。整数秒不判。
+function fakePreciseEmotionHit(body) {
+  return String(body || '').match(/\d+\.\d+\s*秒/)?.[0] || ''
+}
+
+// 源技能特征 15 点名的收束：「身体知道答案」。身体不舒服这类身体状态不判。
+function bodyFeelingHit(body) {
+  return String(body || '').match(/身体(?:知道|记得|告诉我)(?:答案|对的|怎么做|该怎么)?/)?.[0] || ''
+}
+
+// 源技能特征 22：出现「本质上 / 归根结底」且后面接更大号命题。实操总结不判。
+function profundityHit(body) {
+  return String(body || '').match(/(?:本质上|归根结底|归根到底)[^。！？\n]{0,30}(?:意义|人生|人性|命运|存在|哲学|宇宙|终极)/)?.[0] || ''
+}
+
 // ── 判据分层 ────────────────────────────────────────────────────────────────
 // 闸门：客观可判定，命中即拦停生成结果。封顶 5 条，加一条必须先删一条。
 // 第 5 条 same_essay 在 scanGeneratedBodies 里判——它要看四篇正文，单篇判不了。
@@ -410,9 +441,9 @@ const languageLabels = {
   opening_question: '开头第一句是问句',
 }
 
-// 现有检测码 → dbs-ai-check 特征编号。只接真正同一回事的：
-// 剩下 14 个特征还没有检测器，宁可空着，不硬凑对应关系。
-const aiFeatureCodeOf = {
+// 现有检测码 → dbs-ai-check 特征编号。只接真正同一回事、且源技能给了可扫形态的。
+// 其余特征在 ai-features.mjs 里写 not_applicable，不在这里硬凑。
+export const aiFeatureCodeOf = {
   ai_tone_phrase: 'not_x_but_y',
   golden_tail: 'every_paragraph_punchline',
   generic_ending: 'you_deserve_ending',
@@ -421,6 +452,11 @@ const aiFeatureCodeOf = {
   triple_list: 'even_parallelism',
   vague_case: 'fake_story',
   consulting_tone: 'translationese',
+  repeated_concession: 'repeated_concession',
+  naming_ritual: 'naming_ritual',
+  fake_precise_emotion: 'fake_precise_emotion',
+  body_feeling_over_logic: 'body_feeling_over_logic',
+  overfitting_profundity: 'overfitting_profundity',
 }
 
 const featureForCode = code => (aiFeatureCodeOf[code] ? aiFeatureByCode[aiFeatureCodeOf[code]] : null)
@@ -442,6 +478,11 @@ const languageFixes = {
   method_talk: '把「拆成几块 / 裂变 / 多平台分发」换成一件具体的经历或判断，字数不要因此变少',
   consulting_tone: '改成跟熟人说话，删掉咨询腔和工程词',
   opening_question: '第一句直给冲突或结论，不要问句',
+  repeated_concession: '同一个让步结构只用一遍，后面换说法或跳过',
+  naming_ritual: '概念只起一个名字，第二次删掉起名仪式',
+  fake_precise_emotion: '把量过的假精确数字换成嘴里会说的感受',
+  body_feeling_over_logic: '别用身体感受收束，讲不下去就直说讲不下去',
+  overfitting_profundity: '删掉「本质上 / 归根结底」后面那句更大的命题，回到具体事情',
   // Requirement 13 第 3、4 条：自介与字数不足降为提醒后，改写指令不能跟着丢。
   self_intro: '删掉自我介绍和引导关注，直接说内容本身',
   length_severe: '把正文补到目标字数，保留已有的判断，不要另写一篇更简单的',
@@ -476,6 +517,16 @@ function writingIssues(draft) {
   if (caseHits.length) add('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`, '', caseHits[0])
   const toneHits = consultingToneWords.filter(word => String(draft?.body || '').includes(word)).slice(0, 6)
   if (toneHits.length) add('consulting_tone', `正文出现咨询腔或工程词：${toneHits.join('、')}`, '', toneHits[0])
+  const concessions = concessionHits(draft?.body)
+  if (concessions.length >= 3) add('repeated_concession', `正文把同一个让步模板用了 ${concessions.length} 遍：${concessions[0]}`, '', concessions[0])
+  const naming = namingRitualHit(draft?.body)
+  if (naming) add('naming_ritual', `正文反复给概念起名字：${naming}`, '', naming)
+  const precise = fakePreciseEmotionHit(draft?.body)
+  if (precise) add('fake_precise_emotion', `正文出现量过的假精确时间：${precise}`, '', precise)
+  const feeling = bodyFeelingHit(draft?.body)
+  if (feeling) add('body_feeling_over_logic', `正文用身体感受收束：${feeling}`, '', feeling)
+  const profundity = profundityHit(draft?.body)
+  if (profundity) add('overfitting_profundity', `正文把事情升维：${profundity}`, '', profundity)
   const opening = openingSentence(draft?.body)
   if (opening && (opening.endsWith('？') || opening.endsWith('?'))) add('opening_question', `开头第一句是问句：${opening.length > 26 ? `${opening.slice(0, 26)}…` : opening}`, '', opening)
   // 字数严重不足：低于目标下限的六成。没有下限的目标不判。
