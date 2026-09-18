@@ -105,7 +105,7 @@ test('闭环链路：适配、复盘入记忆、日历与匹配排序', async t 
 
   const deai = await post(`/api/drafts/${draft.id}/deai`, {})
   assert.equal(deai.status, 200)
-  assert.equal((await deai.json()).content, '去 AI 感之后的正文')
+  assert.equal((await deai.json()).content, '改成自己说法之后的正文')
 
   const snapshot = await (await post('/api/performance-snapshots', { draft_id: draft.id, platform: '抖音', metrics: { 播放量: 2000, 点赞数: 120, 评论数: 60, 收藏数: 90 }, status: 'confirmed' })).json()
   const retro = await (await post(`/api/performance-snapshots/${snapshot.id}/retrospect`, {})).json()

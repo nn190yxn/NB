@@ -87,8 +87,10 @@ test('写作简报与模型输出解析保持纯函数行为', () => {
   assert.equal(parseReviseBody('```\n口播正文\n```'), '口播正文')
   assert.ok(consultingToneWords.every(word => prompt.includes(word)), '提示词必须带上整份咨询腔词表')
   const deai = draftDeaiPrompt()
-  assert.match(deai, /去 AI 味/)
-  assert.ok(consultingToneWords.every(word => deai.includes(word)), '去 AI 感必须按同一份词表改写')
+  // Requirement 11 第 4 条：不以「去 AI 味」为目标表述，目标是让作者把话说回自己。
+  assert.equal(/去 ?AI ?味|去 ?AI ?感/.test(deai), false, '提示词里不许出现「去 AI 味 / 去 AI 感」这类目标表述')
+  assert.match(deai, /说回自己/, '要说清真正的目标是把话说回自己')
+  assert.ok(consultingToneWords.every(word => deai.includes(word)), '改写必须按同一份词表')
 
   const bodies = parseDraftBodies('前言 {"master":"母版","抖音":"只给了抖音"} 结尾')
   assert.equal(bodies['抖音'], '只给了抖音')

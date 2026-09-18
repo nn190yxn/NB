@@ -1465,7 +1465,7 @@ const server = createServer(async (request, response) => {
       const draft = owned('drafts', request).find(item => item.id === Number(draftDeaiMatch[1]))
       if (!draft) return send(response, 404, { error: '草稿不存在' })
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
-      if (!configs.primary && !configs.fallback) return send(response, 422, { error: '去 AI 感改写需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      if (!configs.primary && !configs.fallback) return send(response, 422, { error: '按自己的说法改写需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
       if (usesSharedPrimaryLlm(request)) {
         const quota = await consumeQuota(request, 'llm', llmDailyLimit)
         if (!quota.allowed) return send(response, 429, { error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false })

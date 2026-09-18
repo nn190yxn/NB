@@ -41,7 +41,7 @@ export const draftPlatformForms = Object.fromEntries(
 
 // 平台长度目标：提示词与发布前检查共用这一份，避免两处数字各说各话。
 // 修改这里的数字后，draft-writing.test.mjs 会让提示词文案不同步这件事直接挂掉。
-// 咨询腔 / 工程词：提示词、去 AI 感、质量门共用这一份。
+// 咨询腔 / 工程词：提示词、改写、质量门共用这一份。
 // 不要把产品内部用语（钩子、语义块、颗粒度）写给读者看。
 export const consultingToneWords = [
   '赋能', '闭环', '抓手', '颗粒度', '底层逻辑', '升维',
@@ -223,7 +223,7 @@ export function draftBriefPrompt(profile = {}) {
 
 export function draftDeaiPrompt() {
   return [
-    '你是去 AI 味的文案改写助手。',
+    '你是帮作者把话说回自己的改写助手：不是删掉 AI 痕迹，是用作者自己的方式说同一件事。',
     '改成真人会发出去的口吻：像跟一个熟人说话，短句、有停顿、有态度。',
     `删掉咨询腔和工程词：${consultingToneWords.join('、')}。`,
     '拆掉排比、名词解释、「一、二、三」说明书，以及「你不是A，你是B」这种收束。',

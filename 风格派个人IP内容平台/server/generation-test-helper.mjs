@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { after } from 'node:test'
 
-// 测试用上游大模型：按系统提示词分派，覆盖定位、选题、草稿正文、适配、去 AI 感、记忆提炼与复盘。
+// 测试用上游大模型：按系统提示词分派，覆盖定位、选题、草稿正文、适配、改写、记忆提炼与复盘。
 
 // 首轮正文按真实模型的量级给足字数。生成闸门里有「字数严重不足（低于目标下限六成）」一条，
 // 正文只写十几个字的话生成会直接走重写路径，测试就看不到首轮正文了。
@@ -70,7 +70,7 @@ export async function startGenerationMock({ adaptBody } = {}) {
       if (payload.slot === 'ending') return reply('改写后的结尾段')
       return reply('整篇重排后的正文')
     }
-    if (system.includes('去 AI 味')) return reply('去 AI 感之后的正文')
+    if (system.includes('说回自己')) return reply('改成自己说法之后的正文')
     if (system.includes('记忆')) return reply(JSON.stringify([{ memory_type: 'style', content: '共享模型提炼的记忆' }]))
     if (system.includes('复盘')) return reply(JSON.stringify({ verdict: 'winner', summary: '表现优于往常', lessons: ['真实案例更受欢迎'], drivers: ['真实案例'] }))
 

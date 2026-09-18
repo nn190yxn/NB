@@ -305,7 +305,7 @@ export function checkReviseOutcome({ before, after, platform, format = '', note 
 
 // 生成入库前的硬门：提示词拦不住的那几条。不复用 checkQuality——那边会因还没选开头句、还没补来源直接 blocked。
 
-// 去 AI 味：只认能一眼确认的形态，宁可漏也不误伤正常口语。
+// 语言层特征识别：只认能一眼确认的形态，宁可漏也不误伤正常口语。
 const aiTonePatterns = [
   /不是[^。！？\n]{1,20}而是/,
   /不仅仅是[^。！？\n]{1,20}(更是|而是)/,
