@@ -402,33 +402,35 @@ const reminderHints = {
 
 function writingIssues(draft) {
   const hits = []
-  const add = (code, message, suggestion = '') => hits.push({ code, category: reminderCategoryOf[code] || null, message, suggestion, severity: 'warning' })
+  // quote 是直接引用的原文，position 是它在正文里的位置：报告要按文本顺序呈现，不按特征归类。
+  // 整篇级的问题（太短、通篇没有落地）没有单一位置，position 记 -1，排到最后，不假装它在开头。
+  const add = (code, message, suggestion = '', quote = '', wholeBody = false) => hits.push({ code, category: reminderCategoryOf[code] || null, message, suggestion, severity: 'warning', quote, position: wholeBody || !quote ? -1 : String(draft?.body || '').indexOf(quote) })
 
   const introHits = selfIntroHits(draft?.body)
-  if (introHits.length) add('self_intro', `正文出现自我介绍或引导关注：${introHits.join('、')}`, '删掉自我介绍与引导关注，改成直给结论的开头')
+  if (introHits.length) add('self_intro', `正文出现自我介绍或引导关注：${introHits.join('、')}`, '删掉自我介绍与引导关注，改成直给结论的开头', introHits[0])
   const leakHits = formatLeakHits(draft?.body)
-  if (leakHits.length) add('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`, '删掉结构说明、占位符与其他平台建议，只留给读者看的正文')
+  if (leakHits.length) add('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`, '删掉结构说明、占位符与其他平台建议，只留给读者看的正文', leakHits[0])
   const aiToneList = aiToneHits(draft?.body)
-  if (aiToneList.length) add('ai_tone_phrase', `正文出现升华式句式：${aiToneList.join('、')}`)
+  if (aiToneList.length) add('ai_tone_phrase', `正文出现升华式句式：${aiToneList.join('、')}`, '', aiToneList[0])
   const vagueList = vagueCaseHits(draft?.body)
-  if (vagueList.length) add('vague_case', `正文出现没有主体的案例：${vagueList.join('、')}`)
-  if (lacksConcreteSupport(draft?.body)) add('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断')
-  for (const [code, hit] of templateSentenceHits(draft?.body)) add(code, `正文出现模板句：${hit}`)
+  if (vagueList.length) add('vague_case', `正文出现没有主体的案例：${vagueList.join('、')}`, '', vagueList[0])
+  if (lacksConcreteSupport(draft?.body)) add('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断', '', openingSentence(draft?.body), true)
+  for (const [code, hit] of templateSentenceHits(draft?.body)) add(code, `正文出现模板句：${hit}`, '', hit)
   const mixupHits = platformMixupHits(draft?.body, draft?.platform)
-  if (mixupHits.length) add('platform_mixup', `正文提到别的平台：${mixupHits.join('、')}`, '把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话')
+  if (mixupHits.length) add('platform_mixup', `正文提到别的平台：${mixupHits.join('、')}`, '把其他平台名和分发说明换成这一条自己的具体内容，不要只删掉那句话', mixupHits[0])
   const methodHits = methodTalkHits(draft?.body)
-  if (methodHits.length) add('method_talk', `正文在讲方法或分发骨架：${methodHits.join('、')}`)
+  if (methodHits.length) add('method_talk', `正文在讲方法或分发骨架：${methodHits.join('、')}`, '', methodHits[0])
   const caseHits = caseClaimHits(draft?.body)
-  if (caseHits.length) add('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`)
+  if (caseHits.length) add('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`, '', caseHits[0])
   const toneHits = consultingToneWords.filter(word => String(draft?.body || '').includes(word)).slice(0, 6)
-  if (toneHits.length) add('consulting_tone', `正文出现咨询腔或工程词：${toneHits.join('、')}`)
+  if (toneHits.length) add('consulting_tone', `正文出现咨询腔或工程词：${toneHits.join('、')}`, '', toneHits[0])
   const opening = openingSentence(draft?.body)
-  if (opening && (opening.endsWith('？') || opening.endsWith('?'))) add('opening_question', `开头第一句是问句：${opening.length > 26 ? `${opening.slice(0, 26)}…` : opening}`)
+  if (opening && (opening.endsWith('？') || opening.endsWith('?'))) add('opening_question', `开头第一句是问句：${opening.length > 26 ? `${opening.slice(0, 26)}…` : opening}`, '', opening)
   // 字数严重不足：低于目标下限的六成。没有下限的目标不判。
   const target = draftLengthTargetOf(draft)
   const min = Number(target?.min || 0)
   const bodyLength = String(draft?.body || '').trim().length
-  if (min && bodyLength && bodyLength < Math.round(min * 0.6)) add('length_severe', `正文只有 ${bodyLength} 字，${draft?.platform || ''}目标下限 ${min} 字，不到六成`, `把正文补到 ${draftLengthRangeFrom(target)} 字，保留已有判断`)
+  if (min && bodyLength && bodyLength < Math.round(min * 0.6)) add('length_severe', `正文只有 ${bodyLength} 字，${draft?.platform || ''}目标下限 ${min} 字，不到六成`, `把正文补到 ${draftLengthRangeFrom(target)} 字，保留已有判断`, openingSentence(draft?.body), true)
 
   const gate = hits.filter(item => gateCodes.includes(item.code))
   const reminders = reminderCategories
@@ -543,6 +545,36 @@ export function scanGeneratedBodies(bodies) {
     ...gateHits,
   ].slice(0, 8).join('；')
   return { failed, issues, reminders, same_essay, summary }
+}
+
+// Requirement 9：诊断报告要按正文顺序逐处呈现，每处给原文引用、一句人话和严重度。
+// 严重度三档只用于排序和提示，不带否决权——没有任何一档能单独把正文拦下来。
+const diagnosticSeverityOf = {
+  format_leak: 'serious',
+  platform_mixup: 'serious',
+  self_intro: 'serious',
+  length_severe: 'serious',
+  no_concrete_support: 'notable',
+  vague_case: 'notable',
+  case_claim: 'notable',
+  method_talk: 'notable',
+  ai_tone_phrase: 'notable',
+  consulting_tone: 'slight',
+  opening_question: 'slight',
+}
+
+export const diagnosticSeverityLabels = { serious: '明显问题', notable: '值得改', slight: '可选' }
+
+// 第 6 条：结尾要明确说明这只是检测结果，并问一句要不要改。
+export const diagnosticReportFooter = '以上是检测结果，不涉及修改。要按这些改一版吗？'
+
+export function diagnosticReport(draft) {
+  const { hits } = writingIssues(draft)
+  const entries = hits
+    // 不带 reminders 的七类归并：报告按文本顺序呈现，不按特征分类。
+    .map(item => ({ code: item.code, quote: item.quote, note: item.message, severity: diagnosticSeverityOf[item.code] || 'slight', position: item.position }))
+    .sort((left, right) => (left.position < 0 ? Number.MAX_SAFE_INTEGER : left.position) - (right.position < 0 ? Number.MAX_SAFE_INTEGER : right.position))
+  return { entries, severity_labels: diagnosticSeverityLabels, footer: diagnosticReportFooter }
 }
 
 export { qualityKeys }
