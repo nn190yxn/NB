@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { aiFeatureSeverityLabels, aiFeatureCautions, aiFeatures } from './ai-features.mjs'
 import { diagnosticReport, diagnosticReportFooter, diagnosticSeverityLabels } from './draft-checks.mjs'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
 import { testPort } from './test-port.mjs'
@@ -44,7 +45,7 @@ test('每一处都有原文引用、一句人话和严重度标签', () => {
 test('严重度分三档但不带否决权，结尾要说明这是检测结果并问要不要改', () => {
   const report = diagnosticReport(draft)
   const levels = new Set(report.entries.map(entry => entry.severity))
-  assert.ok([...levels].every(level => ['serious', 'notable', 'slight'].includes(level)))
+  assert.ok([...levels].every(level => ['strong', 'medium', 'weak'].includes(level)))
   assert.equal(Object.keys(diagnosticSeverityLabels).length, 3, '严重度就是三档，不加第四档')
   assert.equal(report.entries.some(entry => entry.blocked || entry.veto), false, '严重度不带否决权：没有任何一档能拦下正文')
   assert.equal(report.footer, diagnosticReportFooter)
@@ -57,6 +58,34 @@ test('干净的正文出空报告，不硬凑条目', () => {
   assert.equal(clean.entries.some(entry => entry.code === 'self_intro'), false)
   assert.equal(clean.entries.some(entry => entry.code === 'platform_mixup'), false)
   assert.ok(clean.footer, '没有条目也要给结尾声明')
+})
+
+test('22 个特征骨架照搬 dbs-ai-check：每条都有名字、背后意图和追问', () => {
+  assert.equal(aiFeatures.length, 22, '规格要求的是移植源技能的 22 个特征')
+  assert.deepEqual(aiFeatures.map(feature => feature.id), Array.from({ length: 22 }, (unused, index) => index + 1), '编号要不重不漏')
+  assert.equal(new Set(aiFeatures.map(feature => feature.code)).size, 22, '特征码不能重复')
+  aiFeatures.forEach(feature => {
+    assert.ok(feature.name, `#${feature.id} 缺特征名`)
+    assert.ok(feature.intent, `#${feature.id} 缺背后意图`)
+    assert.ok(feature.question, `#${feature.id} 缺追问`)
+    assert.ok(Object.hasOwn(aiFeatureSeverityLabels, feature.severity), `#${feature.id} 的严重度不在三档里：${feature.severity}`)
+  })
+  // 误伤警告是源技能的核心防误判机制，不能只抄特征名把这块丢了。
+  assert.ok(aiFeatureCautions.length >= 5, '源技能标了五条误伤警告')
+})
+
+test('一句话不硬配一条追问：对得上特征才带追问', () => {
+  // 这两处是结构问题（平台名、自我介绍），不是 22 特征里的任何一条。
+  const structural = diagnosticReport({ body: '这版也发到小红书效果不错。\n大家好，我是 Agnes，关注我带你做内容。', platform: '抖音' })
+  assert.ok(structural.entries.length >= 2)
+  assert.ok(structural.entries.every(entry => !entry.feature), '结构问题不该被算成 AI 特征')
+  assert.ok(structural.entries.every(entry => !entry.question), '对不上特征的条目不硬配追问')
+
+  const tone = diagnosticReport({ body: '这不是方法，而是态度。', platform: '抖音' })
+  const hit = tone.entries.find(entry => entry.code === 'ai_tone_phrase')
+  assert.ok(hit, '「不是 X 是 Y」应当命中')
+  assert.equal(hit.feature.id, 8, '应当对应特征 8')
+  assert.ok(hit.question, '命中特征就带追问')
 })
 
 const llmMock = await startSharedLlmMock()
@@ -91,6 +120,9 @@ test('质量诊断把报告挂进检查结果，界面不用自己拼顺序', as
   const report = updated.checks.quality.report
   assert.ok(report, '质量诊断要带报告')
   assert.ok(Array.isArray(report.entries))
+  assert.ok(report.severity_labels && report.footer, '报告要带严重度词汇和结尾声明')
+  // 说明：固定 mock 正文不产生语言层命中，这里只验证接线和形状；
+  // 带命中时的渲染由上面的单元测试盯。别把 entries 为空当成绿。
   assert.match(report.footer, /以上是检测结果，不涉及修改/)
   const known = report.entries.map(entry => entry.position).filter(position => position >= 0)
   assert.deepEqual(known, [...known].sort((left, right) => left - right), '报告条目要按正文顺序返回')

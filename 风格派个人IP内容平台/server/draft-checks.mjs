@@ -1,6 +1,7 @@
 import { prohibitedHits } from './redfox.mjs'
 import { validateSourceRefs } from './validation.mjs'
 import { openingReadiness } from './draft-workflow.mjs'
+import { aiFeatureByCode } from './ai-features.mjs'
 import { consultingToneWords, draftFormatOf, draftLengthRangeFrom, draftLengthTargetFor, draftLengthTargetOf, draftPlatforms } from './draft-writing.mjs'
 
 const riskWordHits = value => prohibitedHits(value).map(item => item.word)
@@ -387,6 +388,21 @@ export const reminderCategories = [
   { category: 'opening_question', label: '开头第一句是问句', codes: ['opening_question'] },
 ]
 
+// 现有检测码 → dbs-ai-check 特征编号。只接真正同一回事的：
+// 剩下 14 个特征还没有检测器，宁可空着，不硬凑对应关系。
+const aiFeatureCodeOf = {
+  ai_tone_phrase: 'not_x_but_y',
+  golden_tail: 'every_paragraph_punchline',
+  generic_ending: 'you_deserve_ending',
+  connector_abuse: 'connector_overuse',
+  fake_rebuttal: 'strawman_reader',
+  triple_list: 'even_parallelism',
+  vague_case: 'fake_story',
+  consulting_tone: 'translationese',
+}
+
+const featureForCode = code => (aiFeatureCodeOf[code] ? aiFeatureByCode[aiFeatureCodeOf[code]] : null)
+
 const reminderCategoryOf = Object.fromEntries(reminderCategories.flatMap(group => group.codes.map(code => [code, group.category])))
 
 // 每类只留一份措辞，给「按检查意见改写」当指令；不再按原 code 各写一句，避免同一个问题两种说法。
@@ -404,7 +420,7 @@ function writingIssues(draft) {
   const hits = []
   // quote 是直接引用的原文，position 是它在正文里的位置：报告要按文本顺序呈现，不按特征归类。
   // 整篇级的问题（太短、通篇没有落地）没有单一位置，position 记 -1，排到最后，不假装它在开头。
-  const add = (code, message, suggestion = '', quote = '', wholeBody = false) => hits.push({ code, category: reminderCategoryOf[code] || null, message, suggestion, severity: 'warning', quote, position: wholeBody || !quote ? -1 : String(draft?.body || '').indexOf(quote) })
+  const add = (code, message, suggestion = '', quote = '', wholeBody = false) => hits.push({ code, category: reminderCategoryOf[code] || null, feature: featureForCode(code), message, suggestion, severity: 'warning', quote, position: wholeBody || !quote ? -1 : String(draft?.body || '').indexOf(quote) })
 
   const introHits = selfIntroHits(draft?.body)
   if (introHits.length) add('self_intro', `正文出现自我介绍或引导关注：${introHits.join('、')}`, '删掉自我介绍与引导关注，改成直给结论的开头', introHits[0])
@@ -550,20 +566,21 @@ export function scanGeneratedBodies(bodies) {
 // Requirement 9：诊断报告要按正文顺序逐处呈现，每处给原文引用、一句人话和严重度。
 // 严重度三档只用于排序和提示，不带否决权——没有任何一档能单独把正文拦下来。
 const diagnosticSeverityOf = {
-  format_leak: 'serious',
-  platform_mixup: 'serious',
-  self_intro: 'serious',
-  length_severe: 'serious',
-  no_concrete_support: 'notable',
-  vague_case: 'notable',
-  case_claim: 'notable',
-  method_talk: 'notable',
-  ai_tone_phrase: 'notable',
-  consulting_tone: 'slight',
-  opening_question: 'slight',
+  format_leak: 'strong',
+  platform_mixup: 'strong',
+  self_intro: 'strong',
+  length_severe: 'strong',
+  no_concrete_support: 'medium',
+  vague_case: 'medium',
+  case_claim: 'medium',
+  method_talk: 'medium',
+  ai_tone_phrase: 'medium',
+  consulting_tone: 'weak',
+  opening_question: 'weak',
 }
 
-export const diagnosticSeverityLabels = { serious: '明显问题', notable: '值得改', slight: '可选' }
+// 三档词汇直接用 dbs-ai-check 的：强信号 / 中信号 / 弱信号。
+export const diagnosticSeverityLabels = { strong: '强信号', medium: '中信号', weak: '弱信号' }
 
 // 第 6 条：结尾要明确说明这只是检测结果，并问一句要不要改。
 export const diagnosticReportFooter = '以上是检测结果，不涉及修改。要按这些改一版吗？'
@@ -572,9 +589,11 @@ export function diagnosticReport(draft) {
   const { hits } = writingIssues(draft)
   const entries = hits
     // 不带 reminders 的七类归并：报告按文本顺序呈现，不按特征分类。
-    .map(item => ({ code: item.code, quote: item.quote, note: item.message, severity: diagnosticSeverityOf[item.code] || 'slight', position: item.position }))
+    .map(item => ({ code: item.code, quote: item.quote, note: item.message, severity: item.feature?.severity || diagnosticSeverityOf[item.code] || 'weak', position: item.position, feature: item.feature ? { id: item.feature.id, name: item.feature.name, intent: item.feature.intent } : null, question: item.feature ? item.feature.question : '' }))
     .sort((left, right) => (left.position < 0 ? Number.MAX_SAFE_INTEGER : left.position) - (right.position < 0 ? Number.MAX_SAFE_INTEGER : right.position))
-  return { entries, severity_labels: diagnosticSeverityLabels, footer: diagnosticReportFooter }
+  // 第 5 条：整体没特征就直说，不硬找。
+  const summary = entries.length ? '' : '没有发现明显的 AI 特征。不硬找。'
+  return { entries, summary, severity_labels: diagnosticSeverityLabels, footer: diagnosticReportFooter }
 }
 
 export { qualityKeys }
