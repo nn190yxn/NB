@@ -21,6 +21,28 @@ import { buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPromp
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
 import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, draftCheckRewriteNote, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
+
+// Requirement 19（冷启动降级路径）：定位、素材库、对标为空时不许把人卡在第一步。
+// 说清缺什么、补上能得到什么，并至少给一条现在就能走的路：小样本 / 收缩边界 / 纯选题无素材初稿。
+const coldStartFieldLabels = { role: '身份定位', audiences: '服务对象', pillars: '内容支柱' }
+const coldStartPaths = [
+  { key: 'small_sample', label: '先做小样本', detail: '只把缺的这几项填上，用最小信息量先生成几条选题看方向。' },
+  { key: 'narrow_scope', label: '先收缩边界', detail: '把服务对象收窄到一类具体的人再生成，比写「所有人」更容易出能用的选题。' },
+  { key: 'bare_draft', label: '先用纯选题生成无素材初稿', detail: '直接给一个标题，先生成一版没有素材的初稿；没有素材时系统不会替你编案例和数字。' },
+]
+function coldStartPayload(missing, baseError) {
+  const labels = missing.map(key => coldStartFieldLabels[key] || key)
+  const gain = `补上 ${labels.join('、')} 之后，系统才能按你的定位生成选题、跑七维评估、写成母版。`
+  return {
+    code: 'COLD_START',
+    error: `${baseError}：还缺 ${labels.join('、')}。${gain}想现在就往下走，可以：先做小样本 / 先收缩边界 / 直接用纯选题生成一版没有素材的初稿。`,
+    missing_fields: missing,
+    missing_labels: labels,
+    gain,
+    paths: coldStartPaths,
+    retryable: true,
+  }
+}
 import { approveDraftRecord, defaultApproval, revokeDraftRecord, validateApprovalReadiness } from './draft-approval.mjs'
 
 const port = Number(process.env.PORT || 3001)
@@ -1236,7 +1258,7 @@ const server = createServer(async (request, response) => {
       if (!validateSourceRefs(sourceRefs) || !sourceRefs.length) return send(response, 422, { error: '选题生成至少需要一个有效来源' })
       const profile = userDocument('profile', request)
       const gaps = profileGaps(profile)
-      if (gaps.length) return send(response, 422, { error: 'IP 档案资料不足', missing_fields: gaps, retryable: true })
+      if (gaps.length) return send(response, 422, coldStartPayload(gaps, 'IP 档案资料不足'))
       let topics
       try {
         const sources = sourceRefs.map((ref, index) => {
@@ -1276,7 +1298,7 @@ const server = createServer(async (request, response) => {
       const refs = Array.isArray(topic.source_refs) ? topic.source_refs : []
       const context = buildContentContext(state, { ownerId: userId(request), topicId: topic.id, task: { researchIds: refs.filter(ref => ref.type === 'research').map(ref => Number(ref.id)), materialIds: refs.filter(ref => ref.type === 'material').map(ref => Number(ref.id)) } })
       const missing = profileGaps(context.profile)
-      if (missing.length) return send(response, 422, { status: 'failed', code: 'missing_context', error: '选题评估缺少 IP 档案资料', message: '选题评估缺少 IP 档案资料', missing_fields: missing, retryable: true })
+      if (missing.length) return send(response, 422, { status: 'failed', message: '选题评估缺少 IP 档案资料', ...coldStartPayload(missing, '选题评估缺少 IP 档案资料'), code: 'missing_context' })
       topic.evaluation = evaluateTopic(topic, context)
       topic.workflow_status = 'evaluated'
       topic.decision = topic.evaluation.decision

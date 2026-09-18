@@ -194,7 +194,13 @@ test('session 支持创建、复用和注销', async t => {
   })
   assert.equal(incompleteProfile.status, 422)
   const incompleteProfileBody = await incompleteProfile.json()
-  assert.equal(incompleteProfileBody.error, 'IP 档案资料不足')
+  // 冷启动不给死路：要说清缺什么、补上能得到什么，并给出至少一条现在就能走的路。
+  assert.match(incompleteProfileBody.error, /^IP 档案资料不足：还缺 身份定位、服务对象、内容支柱/)
+  assert.match(incompleteProfileBody.error, /补上 .* 之后，系统才能按你的定位生成选题/)
+  assert.match(incompleteProfileBody.error, /纯选题生成一版没有素材的初稿/)
+  assert.deepEqual(incompleteProfileBody.missing_labels, ['身份定位', '服务对象', '内容支柱'])
+  assert.ok(incompleteProfileBody.gain, '要说清补上之后能得到什么')
+  assert.deepEqual(incompleteProfileBody.paths.map(path => path.key), ['small_sample', 'narrow_scope', 'bare_draft'], '降级路径三条都要在')
   assert.deepEqual(incompleteProfileBody.missing_fields, ['role', 'audiences', 'pillars'])
 
   const profileResponse = await fetch(`${baseUrl}/api/profile`, {
