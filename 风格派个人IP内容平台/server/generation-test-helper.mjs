@@ -71,6 +71,21 @@ export async function startGenerationMock({ adaptBody } = {}) {
       return reply('整篇重排后的正文')
     }
     if (system.includes('说回自己')) return reply('改成自己说法之后的正文')
+    // Requirement 14：标题与开头的多方案输出。各带一条不合规的，测溯源校验真会丢掉。
+    if (system.includes('挑标题')) {
+      return reply(JSON.stringify({ plans: [
+        { formula_id: 34, title: '90 天把内容做成能成交的系统', why: '结果承诺型，时间和结果都具体' },
+        { formula_id: 17, title: '警告！这 3 件事让你的内容白写', why: '损失规避，制造不看就亏' },
+        { formula_id: 999, title: '这条公式编号不存在', why: '故意给一个不存在的编号' },
+      ] }))
+    }
+    if (system.includes('写开头')) {
+      return reply(JSON.stringify({ plans: [
+        { method: '素材提取', opening: '去年我发了 1200 条，咨询只有 3 个。', note: '用了结果数字', used_material: '去年我发了 1200 条' },
+        { method: '悬念制造', opening: '发了半年没人问，为什么？', note: '把结论改成问题' },
+        { method: '凭空编法', opening: '这个方法不存在', note: '故意给一个不认识的方法名' },
+      ] }))
+    }
     if (system.includes('记忆')) return reply(JSON.stringify([{ memory_type: 'style', content: '共享模型提炼的记忆' }]))
     if (system.includes('复盘')) return reply(JSON.stringify({ verdict: 'winner', summary: '表现优于往常', lessons: ['真实案例更受欢迎'], drivers: ['真实案例'] }))
 

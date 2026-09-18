@@ -11,13 +11,16 @@ export const structureDimensions = { transition: '逻辑衔接', density: '信�
 // 段间承接信号：连接词、指代、回指。都没有就可能是跳跃。
 const transitionPattern = /^(?:所以|但是|可是|不过|而且|然后|接下来|这就|这时候|因此|因为|另外|其实|说白了|问题是|结果|后来|最后|第一|第二|第三)|(?:前面|上面|刚刚|刚才|这一点|这件事)/
 // 源技能：超过 30 字的单句要警惕（一口气念不出来）。
-const longSentenceLimit = 30
+// 导出给 hook-diagnosis 用：口播友好是同一把尺子，不抄第二份。
+export const longSentenceLimit = 30
 // 源技能给的书面语例子。
-const writtenPhrasePattern = /(?:针对|鉴于|基于以上|综上所述|与此同时|值得注意的是|众所周知)/
+export const writtenPhrasePattern = /(?:针对|鉴于|基于以上|综上所述|与此同时|值得注意的是|众所周知)/
 // 自问自答：问句后紧跟一句解释。源技能说偶尔可以、连续用会烦，所以一段里出现两次才标。
 const selfAnswerPattern = /[？?][^。？！?！\n]{0,40}(?:其实|而是|只因)/g
 const sentenceSplit = /(?<=[。！？!?])/
 const riskRank = { strong: 3, medium: 2, weak: 1 }
+
+export const structureSentencesOf = text => String(text || '').split(sentenceSplit).map(item => item.trim()).filter(Boolean)
 
 export const structureSegmentsOf = body => String(body || '').split(/\n\s*\n/).map(text => text.trim()).filter(Boolean)
 
@@ -54,7 +57,7 @@ export function structureReport({ body } = {}) {
     const start = bodyText.indexOf(text, cursor)
     const position = start >= 0 ? start : cursor
     cursor = position + text.length
-    return { index: index + 1, text, position, role: structureRoleOf(index, all.length), sentences: text.split(sentenceSplit).map(item => item.trim()).filter(Boolean) }
+    return { index: index + 1, text, position, role: structureRoleOf(index, all.length), sentences: structureSentencesOf(text) }
   })
 
   segments.forEach((segment, index) => {

@@ -21,7 +21,10 @@ import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
 import { buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthRangeFrom, draftLengthTargetOf, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs } from './draft-writing.mjs'
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
-import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
+import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, openingSentence, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
+import { hookMethodSource, hookMethods } from './hook-diagnosis.mjs'
+import { hookIdeasPrompt, hookReadiness, ideaKinds, parseHookIdeas, parseTitleIdeas, titleIdeasPrompt } from './ideas.mjs'
+import { titleFormulaSource } from './title-formulas.mjs'
 
 // Requirement 19（冷启动降级路径）：定位、素材库、对标为空时不许把人卡在第一步。
 // 说清缺什么、补上能得到什么，并至少给一条现在就能走的路：小样本 / 收缩边界 / 纯选题无素材初稿。
@@ -1615,12 +1618,86 @@ const server = createServer(async (request, response) => {
         draft.updated_at = now
         draft.workflow_status = 'content_ready'
         draft.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
+        // 正文变了，之前那批按旧正文出的标题/开头方案就不能再摆着了。
+        draft.ideas = null
         draft.generation_context = { ...(draft.generation_context || {}), content_format: draft.content_format || format, revise: { note, format, rewritten, at: now } }
         await saveState('drafts')
         return send(response, 200, draft)
       } catch (error) {
         return send(response, 502, { error: error?.message || '按意见改写失败，请稍后重试', retryable: true })
       }
+    }
+    // Requirement 14 第 3 条：标题与开头各出多个方案，每条带溯源，不给单一结论。
+    const draftIdeasMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/ideas$/)
+    if (draftIdeasMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftIdeasMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      const body = await readJson(request)
+      const kind = String(body.kind || '').trim()
+      if (!ideaKinds.includes(kind)) return send(response, 422, { error: '方案类型只能是标题或开头', code: 'validation_failed' })
+      if (body.version !== undefined && body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', code: 'version_conflict', current: draft })
+      const count = Math.min(Math.max(Number(body.count || 6) || 6, 1), 10)
+      const materialIds = (draft.generation_context?.material_ids || []).map(Number)
+      const materialText = owned('materials', request).filter(item => materialIds.includes(Number(item.id)) && !item.deleted_at).map(item => String(item.content || '')).filter(Boolean).join('\n')
+      const ideas = { ...(draft.ideas || {}) }
+      // 开头先过源技能 Phase 2 的素材检查：素材为零就直接停，不拿大模型去补一个没有素材的开头。
+      const readiness = kind === 'hook' ? hookReadiness({ body: draft.body, materialText }) : null
+      if (readiness && !readiness.canGenerate) {
+        ideas.hook = { blocked: readiness.blocked, readiness, plans: [], generated_at: new Date().toISOString(), draft_version: draft.version }
+        draft.ideas = ideas
+        await saveState('drafts')
+        return send(response, 200, draft)
+      }
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      if (!configs.primary && !configs.fallback) return send(response, 422, { error: '出方案需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      if (usesSharedPrimaryLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) return send(response, 429, { code: 'QUOTA_EXCEEDED', error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false })
+      }
+      try {
+        const prompt = kind === 'title'
+          ? titleIdeasPrompt({ platform: draft.platform, topic: draft.title, body: draft.body, currentTitle: draft.title, count })
+          : hookIdeasPrompt({ platform: draft.platform, topic: draft.title, body: draft.body, diagnosis: readiness, count })
+        const result = await callLlmWithFallback(configs, [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }])
+        const plans = kind === 'title' ? parseTitleIdeas(result.content, draft.platform) : parseHookIdeas(result.content)
+        // 一条能溯源的方案都没有就不落库：宁可不给，不给编的。
+        if (!plans.length) return send(response, 502, { code: 'IDEAS_UNTRACEABLE', error: '这一轮没给出能溯源的方案（公式编号不存在或方法名不认识），没有落库。可以再试一次。', retryable: true })
+        ideas[kind] = { plans, readiness, generated_at: new Date().toISOString(), draft_version: draft.version, provider: result.provider, source: kind === 'title' ? titleFormulaSource : hookMethodSource, methods: kind === 'hook' ? hookMethods : null }
+        draft.ideas = ideas
+        await saveState('drafts')
+        return send(response, 200, draft)
+      } catch (error) {
+        return send(response, 502, { error: error?.message || '出方案失败，请稍后重试', retryable: true })
+      }
+    }
+    // Requirement 14 第 3 条：用户从多个方案里挑一条，服务端负责落进草稿，并记下选的是哪条。
+    const draftIdeaApplyMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/ideas\/apply$/)
+    if (draftIdeaApplyMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftIdeaApplyMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撕回人工确认，再改草稿', code: 'invalid_transition' })
+      const body = await readJson(request)
+      const kind = String(body.kind || '').trim()
+      const entry = ideaKinds.includes(kind) ? draft.ideas?.[kind] : null
+      const plan = entry?.plans?.[Number(body.plan_index)]
+      if (!plan) return send(response, 422, { error: '这条方案不存在，草稿可能已经改过，请重新出方案', code: 'validation_failed' })
+      // 方案是按某一版草稿出的，版本对不上就不能再往新正文上套。
+      if (entry.draft_version !== draft.version) return send(response, 409, { error: '草稿改过了，这批方案对不上，请重新出方案', code: 'version_conflict' })
+      // 开头方案只换第一句，先确认这句找得到；找不到就不动库。
+      if (kind === 'hook' && !openingSentence(draft.body)) return send(response, 422, { error: '这条正文里找不到开头第一句，没法只换开头', code: 'validation_failed' })
+      const now = new Date().toISOString()
+      draft.history ||= []
+      draft.history.push({ ...structuredClone(draft), history: undefined, version: draft.version, snapshot_at: now })
+      if (kind === 'title') draft.title = String(plan.title || '')
+      else draft.body = String(draft.body).replace(openingSentence(draft.body), String(plan.opening || ''))
+      draft.version += 1
+      draft.updated_at = now
+      // 用了其中一条，整批方案作废：剩下的方案配的是改之前的正文，不能再摆着让人挑。
+      draft.ideas = null
+      draft.selected_idea = { kind, ...(kind === 'title' ? { formula_id: plan.formula_id, category: plan.category, formula_source: titleFormulaSource } : { method: plan.method, method_source: hookMethodSource }), text: kind === 'title' ? plan.title : plan.opening, applied_at: now, draft_version: draft.version }
+      draft.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
+      await saveState('drafts')
+      return send(response, 200, draft)
     }
     const draftSlotMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/slots\/(title|opening|structure|ending)$/)
     if (draftSlotMatch && request.method === 'POST') { const body = await readJson(request); const draft = owned('drafts', request).find(item => item.id === Number(draftSlotMatch[1])); if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' }); const slot = draftSlotMatch[2]; if (!slotIds.includes(slot)) return send(response, 422, { error: '不支持的槽位', code: 'validation_failed' }); if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撕回人工确认，再修改草稿', code: 'invalid_transition' }); const option = findSlotOption(buildSlotOptions({ structures: owned('structures', request), platform: draft.platform }), slot, body.option_id); if (!option) return send(response, 422, { error: '槽位选项不存在', code: 'validation_failed' }); const slotConfigs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }; if (!slotConfigs.primary && !slotConfigs.fallback) return send(response, 422, { error: '槽位改写需要先在 API 中心配置大模型', reason: 'llm_not_configured' }); if (usesSharedPrimaryLlm(request)) { const quota = await consumeQuota(request, 'llm', llmDailyLimit); if (!quota.allowed) return send(response, 429, { error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false }) }

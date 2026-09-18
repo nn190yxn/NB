@@ -18,7 +18,8 @@ function result(status, { score = null, dimensions = {}, evidence = [], suggesti
 function sourceCount(draft) { return Array.isArray(draft?.source_refs) ? draft.source_refs.length : 0 }
 function currentVersion(draft) { return Number(draft?.version || 1) }
 // 取「开头第一句」：跳过镜头提示行与「标题：」「正文：」这类结构行，再去掉行首的（…）提示，按句末标点截断。
-function openingSentence(body) {
+// 导出给「选用开头顶案」用：替换开头时要以同一把尺子认第一句。
+export function openingSentence(body) {
   for (const rawLine of String(body || '').split('\n')) {
     const line = rawLine.trim().replace(/^[（(][^）)]*[）)]\s*/, '')
     if (!line || /^(#{1,6}\s*|标题[:：]|正文[:：])/.test(line) || /^[^，。！？；]{1,6}[:：]$/.test(line)) continue
