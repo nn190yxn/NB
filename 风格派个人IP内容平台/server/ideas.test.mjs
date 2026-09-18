@@ -45,7 +45,7 @@ const postIdeas = async (base, headers, draft, kind) => {
 }
 
 test('标题方案要多个，每条带公式编号与分类，编的编号被丢掉', async t => {
-  const port = testPort(49600, 150)
+  const port = testPort(42100, 150)
   const workspace = makeWorkspace()
   const server = await startServer(port, workspace.dataFile)
   t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })
@@ -89,7 +89,7 @@ test('标题方案要多个，每条带公式编号与分类，编的编号被�
 })
 
 test('素材为零时开头不出方案，直接照源技能停下来让人去补', async t => {
-  const port = testPort(49700, 150)
+  const port = testPort(42200, 150)
   const workspace = makeWorkspace()
   const server = await startServer(port, workspace.dataFile)
   t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })
@@ -110,7 +110,7 @@ test('素材为零时开头不出方案，直接照源技能停下来让人去�
 })
 
 test('有素材时开头出多个方案，每条溯源到三种方法之一', async t => {
-  const port = testPort(49800, 150)
+  const port = testPort(42300, 150)
   const workspace = makeWorkspace()
   const server = await startServer(port, workspace.dataFile)
   t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })

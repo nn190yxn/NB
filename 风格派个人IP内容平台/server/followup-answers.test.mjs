@@ -36,7 +36,7 @@ test('回写素材带上可信度、来源与草稿关联', () => {
 })
 
 const llmMock = await startSharedLlmMock()
-const port = testPort(49300, 150)
+const port = testPort(41900, 150)
 const baseUrl = `http://127.0.0.1:${port}`
 const dataFile = join(mkdtempSync(join(tmpdir(), 'followup-test-')), 'data.json')
 writeFileSync(dataFile, '{}')
@@ -86,7 +86,7 @@ test('回答要用户点了才入库，进去就是 verified 并挂着草稿', a
 })
 
 test('补写入口把目标字数拼进改写指令，只有用户点了才走', async t => {
-  const extendPort = testPort(49500, 150)
+  const extendPort = testPort(42000, 150)
   const server = await startServer(extendPort)
   t.after(() => server.kill())
   const base = `http://127.0.0.1:${extendPort}`

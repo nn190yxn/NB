@@ -47,7 +47,7 @@ async function createCheckedDraft(base, headers, title) {
 const approve = (base, headers, draft) => fetch(`${base}/api/drafts/${draft.id}/approve`, { method: 'POST', headers, body: JSON.stringify({ version: draft.version }) })
 
 test('没确认定稿就没有拍摄项，确认后才进拍摄且冻的是定稿正文', async t => {
-  const port = testPort(49900, 150)
+  const port = testPort(42400, 150)
   const workspace = makeWorkspace()
   const server = await startServer(port, workspace.dataFile)
   t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })
@@ -80,7 +80,7 @@ test('没确认定稿就没有拍摄项，确认后才进拍摄且冻的是定�
 })
 
 test('定稿进拍摄后再改草稿，提词器读到的还是那一版定稿', async t => {
-  const port = testPort(50000, 150)
+  const port = testPort(42500, 150)
   const workspace = makeWorkspace()
   const server = await startServer(port, workspace.dataFile)
   t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })
@@ -108,7 +108,7 @@ test('定稿进拍摄后再改草稿，提词器读到的还是那一版定稿',
 })
 
 test('撤回定稿把拍摄项退回待改，不留在可拍状态', async t => {
-  const port = testPort(50100, 150)
+  const port = testPort(42600, 150)
   const workspace = makeWorkspace()
   const server = await startServer(port, workspace.dataFile)
   t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })

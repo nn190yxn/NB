@@ -261,6 +261,7 @@ function App() {
             {showSyncManager && <SyncManagementPanel onClose={() => setShowSyncManager(false)} onSync={syncNow} syncing={syncing} />}
             {showShooting && <ShootingWorkspace onClose={() => setShowShooting(false)} />}
             {activeNav === '今日工作台' ? <>
+           <NextStepCard onGo={setActiveNav} />
            <div className="page-heading"><div><p className="eyebrow">YOUR CONTENT WORKSPACE</p><h1>欢迎回来<span className="accent">。</span></h1><p className="lede">从定位、研究到创作，建立属于你的内容工作流。</p></div><button className="primary-action" onClick={() => openResearch()}><Plus size={17} /> 新建研究</button></div>
 
           <div className="signal-strip"><div className="signal-icon"><Radio size={18} /></div><div><strong>从你的定位开始</strong><span>完善 IP 档案后，研究、选题和创作会更贴近你的真实目标。</span></div><button onClick={() => setShowOnboarding(true)}>继续定位 <ArrowUpRight size={15} /></button></div>
@@ -2132,6 +2133,44 @@ function PerformanceTimeline({ shooting, refreshKey }: { shooting: ShootingItem;
 type CalendarEntry = { type: string; id: number; title: string; platform: string; status: string; date: string }
 
 // Requirement 14：标题与开头各出多个方案，每条带溯源（公式编号或方法名），用户点「用这个」才落进草稿。
+// Requirement 18：单步路由卡片。只把下一个动作摆到最前面，其余环节列出来可以自己跳。
+const stageNavOf: Record<string, string> = { positioning: '定位发现', materials: '素材库', research: '热点研究', structures: '爆款方法库', topics: '选题助手', draft: '内容创作', diagnosis: '内容创作', approval: '内容创作', shooting: '内容创作', publish: '内容创作', return_flow: '内容创作' }
+type GuideStage = { id: string; label: string; question: string; action: string; needs: string; gain: string; done: boolean }
+type GuideState = { mode: string; stages: GuideStage[]; done_count: number; total: number; next: (GuideStage & { index: number }) | null; completed: string[]; degraded: { active: boolean; missing: string[]; paths: { id: string; label: string; detail: string }[]; gain: string } }
+
+function NextStepCard({ onGo }: { onGo: (nav: string) => void }) {
+  const [guide, setGuide] = useState<GuideState | null>(null)
+  const [open, setOpen] = useState(false)
+  useEffect(() => { void apiJson<GuideState>('/api/guide').then(setGuide).catch(() => setGuide(null)) }, [])
+  if (!guide) return null
+  return <section className="next-step-card">
+    <div className="next-step-head"><span className="next-step-mode">{guide.mode}</span><small>{guide.done_count}/{guide.total} 个环节已完成</small></div>
+    {guide.next ? <>
+      <h2>下一步：{guide.next.label}</h2>
+      <p className="next-step-question">{guide.next.question}</p>
+      <p className="next-step-action">{guide.next.action}</p>
+      <p className="next-step-needs">还缺：{guide.next.needs} —— 补上能得到：{guide.next.gain}</p>
+      <div className="next-step-actions">
+        <button className="primary-action" onClick={() => onGo(stageNavOf[guide.next!.id] || '内容创作')}>去做这一步</button>
+        <button className="chip" onClick={() => setOpen(!open)}>{open ? '收起全部环节' : '看全部环节'}</button>
+      </div>
+    </> : <>
+      <h2>链路走完了</h2>
+      <p className="next-step-action">下一轮从选题重新开始，或者去回流里录一次表现数据。</p>
+      <div className="next-step-actions"><button className="primary-action" onClick={() => onGo('选题助手')}>开始新一轮选题</button></div>
+    </>}
+    {guide.degraded.active && <div className="next-step-degraded">
+      <strong>手上的东西还空着：{guide.degraded.missing.join('、')}</strong>
+      <p>{guide.degraded.gain}</p>
+      <ul>{guide.degraded.paths.map(path => <li key={path.id}><strong>{path.label}</strong><span>{path.detail}</span></li>)}</ul>
+    </div>}
+    {open && <div className="next-step-stages">
+      {guide.stages.map(stage => <button key={stage.id} className={stage.done ? 'chip done' : 'chip'} title={stage.question} onClick={() => onGo(stageNavOf[stage.id] || '内容创作')}>{stage.done ? '✓ ' : ''}{stage.label}</button>)}
+      <small>环节可以随便跳，不按顺序也成。</small>
+    </div>}
+  </section>
+}
+
 function DraftIdeasPanel({ draft, busy, onUpdated }: { draft: DraftItem; busy: boolean; onUpdated: (next: DraftItem) => void }) {
   const [running, setRunning] = useState<'title' | 'hook' | null>(null)
   const [error, setError] = useState('')

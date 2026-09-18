@@ -108,7 +108,7 @@ test('语言层不归并、不设条数上限：命中多少条就出多少条',
 })
 
 const llmMock = await startSharedLlmMock()
-const port = testPort(49200, 150)
+const port = testPort(41800, 150)
 const baseUrl = `http://127.0.0.1:${port}`
 const dataFile = join(mkdtempSync(join(tmpdir(), 'diagnostic-report-test-')), 'data.json')
 writeFileSync(dataFile, '{}')

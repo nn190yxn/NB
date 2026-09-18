@@ -143,6 +143,21 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .publish-body { width: 100%; min-height: 160px; resize: vertical; border-radius: 10px; border: 1px solid var(--border-color, rgba(0,0,0,.1)); padding: 10px; font: inherit; background: transparent; color: inherit; }
 .publish-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .publish-checklist { display: flex; flex-direction: column; gap: 8px; }
+.next-step-card { display: flex; flex-direction: column; gap: 8px; padding: 18px; border-radius: 14px; border: 1px solid var(--border-color, rgba(0,0,0,.08)); background: var(--panel-bg, rgba(255,255,255,.04)); margin-bottom: 16px; }
+.next-step-head { display: flex; justify-content: space-between; align-items: baseline; }
+.next-step-head small { opacity: .6; }
+.next-step-mode { font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; opacity: .75; }
+.next-step-card h2 { margin: 0; font-size: 1.15rem; }
+.next-step-question { margin: 0; opacity: .8; }
+.next-step-action { margin: 0; font-weight: 600; }
+.next-step-needs { margin: 0; opacity: .65; font-size: .86rem; }
+.next-step-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.next-step-degraded { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color, rgba(0,0,0,.12)); }
+.next-step-degraded p { margin: 0; opacity: .8; }
+.next-step-degraded ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.next-step-degraded li span { opacity: .7; margin-left: 6px; }
+.next-step-stages { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.next-step-stages small { opacity: .6; width: 100%; }
 .publish-resonance { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-color, rgba(0,0,0,.08)); }
 .publish-resonance-note { margin: 0; opacity: .65; font-size: .85rem; }
 .resonance-core { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
