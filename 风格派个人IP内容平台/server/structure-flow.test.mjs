@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { structureReport, structureRoleOf } from './structure-flow.mjs'
-import { diagnosticReport, diagnosticSeverityLabels, gateCodes, scanGeneratedBody } from './draft-checks.mjs'
+import { diagnosticReport, diagnosticSeverityLabels, gateCodes, generationGate, scanGeneratedBody } from './draft-checks.mjs'
 
 test('分段按空行，段号与功能照 dbs-script-flow', () => {
   const report = structureReport({ body: '第一段讲背景。\n\n第二段是中间的论证。\n\n第三段收尾。' })
@@ -78,4 +78,23 @@ test('结构层并进同一份报告，按文本顺序，不硬配追问', () =>
   // 干净且连贯的正文两层都没命中时，直接说没发现。
   const clean = diagnosticReport({ body: '我上个月带过一个学员。所以我把过程写下来。', platform: '抖音' })
   if (clean.entries.length === 0) assert.match(clean.summary, /没有发现明显的 AI 特征/)
+})
+
+test('不可溯源数字单独也能拦停生成，不用等验收失败', () => {
+  // 验收全过的稿子，只要案例位/数字位用了素材里没有的数字，这道闸门一样拦。
+  const clean = { failed: false, summary: '' }
+  const blocked = generationGate({ scan: clean, unbacked: { 公众号: ['2万'], 抖音: [] } })
+  assert.equal(blocked.triggered, true, '数字不可溯源要单独构成闸门')
+  assert.match(blocked.summary, /公众号/)
+  assert.match(blocked.summary, /2万/, '提示词要点名是哪个数字，模型才知道改哪里')
+  assert.match(blocked.summary, /素材里没有的数字/)
+
+  // 素材里有的数字不算，验收也过的话就不拦。
+  assert.equal(generationGate({ scan: clean, unbacked: { 公众号: [], 抖音: [] } }).triggered, false)
+  assert.equal(generationGate({ scan: clean, unbacked: {} }).summary, null)
+  // 验收失败本来就拦，两条理由要合在一份 summary 里给重写提示词。
+  const both = generationGate({ scan: { failed: true, summary: '串台' }, unbacked: { 抖音: ['30%'] } })
+  assert.equal(both.triggered, true)
+  assert.match(both.summary, /串台/)
+  assert.match(both.summary, /30%/, '两条理由都要串进 summary')
 })

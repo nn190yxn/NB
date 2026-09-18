@@ -18,10 +18,10 @@ import { callLlmWithFallback, callVision, testApiCapability } from './llm.mjs'
 import { interviewInput, interviewDigest, parsePositioning, fillProfile, parseTopics } from './positioning-generation.mjs'
 import { buildContentContext } from './content-context.mjs'
 import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
-import { buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs } from './draft-writing.mjs'
+import { buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthRangeFrom, draftLengthTargetOf, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs } from './draft-writing.mjs'
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
-import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
+import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
 
 // Requirement 19（冷启动降级路径）：定位、素材库、对标为空时不许把人卡在第一步。
 // 说清缺什么、补上能得到什么，并至少给一条现在就能走的路：小样本 / 收缩边界 / 纯选题无素材初稿。
@@ -1380,6 +1380,12 @@ const server = createServer(async (request, response) => {
       let provider
       let rewritten = false
       let gateFailure = null
+      let gateSummary = null
+      // Requirement 13 第 3 条：素材侧的全部文字。正文里的数字只能来自这里，别的都是不可溯源。
+      // 必须在首次扫描之前算好：不可溯源数字本身也是一道闸门，不能等扫完再补判。
+      const materialText = [brief.title, ...Object.values(brief.material_roles).flat().map(item => item.text), ...brief.quotes.map(item => item.text), ...brief.experiences, ...brief.structure].join('\n')
+      const unbackedNumbersOf = source => Object.fromEntries(draftPlatforms.map(platform => [platform, unbackedNumberHits(source?.[platform], materialText)]))
+      let unbackedByPlatform = {}
       try {
         const result = await callLlmWithFallback(configs, [
           { role: 'system', content: draftBriefPrompt(userDocument('profile', request)) },
@@ -1388,28 +1394,31 @@ const server = createServer(async (request, response) => {
         bodies = parseDraftBodies(result.content)
         provider = result.provider
         let scan = scanGeneratedBodies(bodies)
-        if (scan.failed) {
+        unbackedByPlatform = unbackedNumbersOf(bodies)
+        let gateResult = generationGate({ scan, unbacked: unbackedByPlatform })
+        // 闸门 = 生成验收 + 不可溯源数字：案例位/数字位用了素材里没有的内容，就是「根本没做出来」。
+        if (gateResult.triggered) {
           rewritten = true
           const retry = await callLlmWithFallback(configs, [
-            { role: 'system', content: draftGateRewritePrompt(scan.summary) },
-            { role: 'user', content: JSON.stringify({ brief, previous: bodies, issues: { summary: scan.summary, same_essay: scan.same_essay } }) },
+            { role: 'system', content: draftGateRewritePrompt(gateResult.summary) },
+            { role: 'user', content: JSON.stringify({ brief, previous: bodies, issues: { summary: gateResult.summary, same_essay: scan.same_essay, unbacked_numbers: unbackedByPlatform } }) },
           ])
           bodies = parseDraftBodies(retry.content)
           provider = retry.provider
           scan = scanGeneratedBodies(bodies)
+          unbackedByPlatform = unbackedNumbersOf(bodies)
+          gateResult = generationGate({ scan, unbacked: unbackedByPlatform })
           // A 方案：不再 502 丢弃。记下验收结果，稿子照常入库但标成待修改，用户可直接在草稿页「定位替换」按句改。
           gateFailure = scan
+          gateSummary = gateResult.summary
         }
       } catch (error) {
         return send(response, 502, { code: 'GENERATION_FAILED', error: '草稿生成失败，请检查模型配置后重试；本次未生成草稿。', retryable: true, detail: error instanceof Error ? error.message : undefined })
       }
       const variantGroupId = randomUUID()
-      // 素材侧的全部文字：正文里的数字只能来自这里，别的都标记出来。
-      const materialText = [brief.title, ...Object.values(brief.material_roles).flat().map(item => item.text), ...brief.quotes.map(item => item.text), ...brief.experiences, ...brief.structure].join('\n')
-      const unbackedByPlatform = Object.fromEntries(draftPlatforms.map(platform => [platform, unbackedNumberHits(bodies?.[platform], materialText)]))
       const atomRefs = [...new Map([...quoteMaterials, ...experienceMaterials, ...roleMaterials].map(item => [item.id, item])).values()].map(item => sourceRef('material', item.id))
       const sourceRefs = [...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs]
-      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateFailure ? gateFailure.summary : null } }, created_at: new Date().toISOString() }))
+      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateSummary } }, created_at: new Date().toISOString() }))
       if (persistedTopic?.id) {
         const archivedAt = new Date().toISOString()
         for (const draft of supersededDraftsForRegenerate(state.drafts, { ownerId: userId(request), topicId: persistedTopic.id })) {
@@ -1559,7 +1568,10 @@ const server = createServer(async (request, response) => {
       const checkNote = fromChecks ? draftCheckRewriteNote(draft) : ''
       if (fromChecks && !checkNote) return send(response, 422, { error: '当前检查没有能改正文的意见。开头范式、来源和档案短词要你自己点。', code: 'validation_failed' })
       const extraNote = String(body.note || '').trim()
-      const note = extraNote && checkNote ? `${checkNote}。补充：${extraNote}` : extraNote || checkNote || (requestedFormat ? `改成${requestedFormat}` : '')
+      // Requirement 13 第 3 条：字数严重不足降为提醒后，用户要有一个「补写」入口。
+      // 目标字数只有服务端知道，所以补写指令在这里拼，不让界面再复制一份长度规则。
+      const extendNote = body.extend ? `正文只有 ${String(draft.body || '').trim().length} 字，补到 ${draftLengthRangeFrom(draftLengthTargetOf(draft))} 字，保留已有判断和可执行的一步，不要另写一篇` : ''
+      const note = extraNote && checkNote ? `${checkNote}。补充：${extraNote}` : extraNote || checkNote || extendNote || (requestedFormat ? `改成${requestedFormat}` : '')
       if (!note) return send(response, 422, { error: '修改意见不能为空', code: 'validation_failed' })
       if (body.version !== undefined && body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', code: 'version_conflict', current: draft })
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }

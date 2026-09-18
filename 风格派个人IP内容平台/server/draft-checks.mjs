@@ -382,6 +382,16 @@ function lacksConcreteSupport(body) {
 // 它们落在 reminders 里，不再触发生成阶段的自动重写，也不拦停发布。
 export const gateCodes = ['format_leak', 'platform_mixup']
 
+// 生成闸门的判据：验收失败，或案例位/数字位用了不可溯源的素材（Requirement 13 第 3 条）。
+// 两者都算「初稿根本没做出来」，触发同一次重写；summary 给重写提示词和草稿记录看。
+export function generationGate({ scan, unbacked } = {}) {
+  const unbackedSummary = Object.entries(unbacked || {})
+    .filter(([, numbers]) => (numbers || []).length)
+    .map(([platform, numbers]) => `${platform}：正文用了素材里没有的数字（${numbers.join('、')}）`)
+    .join('；')
+  return { triggered: Boolean(scan?.failed || unbackedSummary), summary: [scan?.summary, unbackedSummary].filter(Boolean).join('；') || null }
+}
+
 // 语言层提醒：审美类，不拦停、不触发自动重写、不影响 workflow_status。
 // 不再归并成类别，也不设条数上限（Requirement 11 第 6 条）：一个 code 一条，按正文顺序逐处呈现。
 // 对不上 dbs-ai-check 22 个特征的 code（整篇级判断、体裁类）名字只在这里给。
@@ -539,8 +549,9 @@ export function draftNumbers(body) {
   return [...found.values()]
 }
 
-// 正文里素材和简报都没有的数字：只标记出来给人看，不拦停。
-// 内容层唯一允许拦停的位置是选题把关（见 topic-evaluation.mjs），这里不能破例。
+// 正文里素材和简报都没有的数字：这些数字不可溯源。
+// Requirement 13 第 3 条把它列为闸门：生成阶段命中就重写一次并标成待修改（见 index.mjs 生成路由）。
+// 这里只负责把不可溯源的数字算出来，拦不拦由调用方决定。
 export function unbackedNumberHits(body, allowedText = '') {
   const allowed = new Set([...String(allowedText || '').matchAll(/\d+(?:\.\d+)?/g)].map(match => match[0]))
   return draftNumbers(body).filter(number => !allowed.has(number.replace(/[%％万倍元块]/g, '')))

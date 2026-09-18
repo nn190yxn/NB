@@ -41,8 +41,8 @@ const baseUrl = `http://127.0.0.1:${port}`
 const dataFile = join(mkdtempSync(join(tmpdir(), 'followup-test-')), 'data.json')
 writeFileSync(dataFile, '{}')
 
-function startServer() {
-  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...llmMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+function startServer(listenPort = port) {
+  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...llmMock.env, PORT: String(listenPort), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 5000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve(child) } })
@@ -83,4 +83,28 @@ test('回答要用户点了才入库，进去就是 verified 并挂着草稿', a
   assert.equal((await again.json()).duplicate, true)
   const after = await (await fetch(`${baseUrl}/api/materials`, { headers })).json()
   assert.equal(after.filter(item => item.source === '改稿追问').length, 1, '重复提交不能写第二条')
+})
+
+test('补写入口把目标字数拼进改写指令，只有用户点了才走', async t => {
+  const extendPort = testPort(49500, 150)
+  const server = await startServer(extendPort)
+  t.after(() => server.kill())
+  const base = `http://127.0.0.1:${extendPort}`
+  const headers = { 'x-user-id': 'extend-owner', 'content-type': 'application/json' }
+  const drafts = await (await fetch(`${base}/api/drafts/generate`, { method: 'POST', headers, body: JSON.stringify({ topic: { title: '内容要按成交写', strategy_layer: 'trust', goal_refs: [] } }) })).json()
+  // 生成只产出抖音与视频号两条，取第一条即可。
+  const draft = drafts[0]
+  // 生成只产出抖音与视频号两条，取第一条即可。
+  assert.ok(draft?.id)
+
+  // Requirement 13 第 4 条：字数不足降为提醒后，补写要由用户点，不自动跑。
+  // 刚生成完不应该有一版改写后的正文。
+  assert.equal(draft.version, 1, '降级后不该自动重写')
+
+  const response = await fetch(`${base}/api/drafts/${draft.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ extend: true, version: draft.version }) })
+  assert.equal(response.status, 200)
+  const revised = await response.json()
+  // 服务端拼的指令带着具体目标字数，用户不用自己算。
+  assert.match(revised.body, /补到 \d+(-\d+)? 字/, '补写指令要带目标字数')
+  assert.match(revised.body, /保留已有判断/, '补写不是另写一篇')
 })
