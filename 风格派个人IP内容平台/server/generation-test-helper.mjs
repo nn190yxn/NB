@@ -17,12 +17,14 @@ export const mockBodies = title => ({
 
 export async function startGenerationMock({ adaptBody } = {}) {
   let mode = 'success'
+  let lastSystem = ''
   const server = createServer(async (req, res) => {
     if (mode === 'failed') { res.writeHead(503); res.end('test failure'); return }
     let raw = ''
     for await (const chunk of req) raw += chunk
     const payload = JSON.parse(raw)
     const system = String(payload.messages?.[0]?.content || '')
+    lastSystem = system
     const last = String(payload.messages?.at(-1)?.content || '')
     const reply = content => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: mode === 'invalid' ? 'invalid JSON' : content } }] })) }
 
@@ -135,6 +137,7 @@ export async function startGenerationMock({ adaptBody } = {}) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const mock = {
     setMode: value => { mode = value },
+    lastSystem: () => lastSystem,
     env: { PROJECT_LLM_BASE_URL: `http://127.0.0.1:${server.address().port}`, PROJECT_LLM_API_KEY: 'test-only', PROJECT_LLM_MODEL: 'mock', LLM_DAILY_LIMIT: '100' },
     close: () => { server.closeAllConnections(); server.close() },
   }

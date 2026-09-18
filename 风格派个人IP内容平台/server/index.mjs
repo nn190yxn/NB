@@ -288,6 +288,15 @@ function nextId(collection) {
 function sourceRef(type, id) {
   return { type, id, captured_at: new Date().toISOString() }
 }
+function uniqueSourceRefs(refs = []) {
+  const seen = new Set()
+  return refs.filter(ref => {
+    const key = `${ref?.type}:${ref?.id}`
+    if (!ref?.type || ref.id == null || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
 
 function activeMemories(userId) {
   return (state.memories || []).filter(item => item.owner_id === userId && item.status === 'active')
@@ -1277,7 +1286,10 @@ const server = createServer(async (request, response) => {
         // Requirement 17 第 2 条：确认过的发布表现要影响下一轮选题；待确认的不参与。
         const signalNote = performanceSignalNote(owned('performance_snapshots', request))
         const content = await generateStructured(request, `依据档案及来源生成三个可验证的选题，返回数组，每项为 {"title":"标题","rationale":"依据","content_job":"内容任务","strategy_layer":"reach|trust|conversion","source_indexes":[0]}。只能引用提供的来源编号。${signalNote ? `\n${signalNote}` : ''}`, { profile: { role: profile.role, audiences: profile.audiences, problems: profile.problems, pillars: profile.pillars }, sources })
-        topics = parseTopics(content, sourceRefs).map((item, index) => defaultTopicFields({ ...item, id: nextId(state.topics) + index, owner_id: userId(request), fact_risk: 'needs_review', goal_refs: ['positioning'], generation_context: { profile_version: profile.version, source_count: item.source_refs.length } }))
+        topics = parseTopics(content, sourceRefs).map((item, index) => {
+          const refs = uniqueSourceRefs([...(item.source_refs || []), ...sourceRefs])
+          return defaultTopicFields({ ...item, id: nextId(state.topics) + index, owner_id: userId(request), source_refs: refs, fact_risk: 'needs_review', goal_refs: ['positioning'], generation_context: { profile_version: profile.version, source_count: refs.length } })
+        })
       } catch (error) { return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '选题生成失败，请检查模型配置并重试；历史选题保留。', retryable: true }) }
       state.topics.push(...topics)
       try { await saveState('topics') } catch (error) {
@@ -1426,9 +1438,10 @@ const server = createServer(async (request, response) => {
         return send(response, 502, { code: 'GENERATION_FAILED', error: '草稿生成失败，请检查模型配置后重试；本次未生成草稿。', retryable: true, detail: error instanceof Error ? error.message : undefined })
       }
       const variantGroupId = randomUUID()
-      const atomRefs = [...new Map([...quoteMaterials, ...experienceMaterials, ...roleMaterials].filter(briefUsableMaterial).map(item => [item.id, item])).values()].map(item => sourceRef('material', item.id))
-      const sourceRefs = [...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs]
-      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: [...quoteMaterials, ...experienceMaterials].map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateSummary } }, created_at: new Date().toISOString() }))
+      const usableAtoms = [...new Map([...quoteMaterials, ...experienceMaterials, ...roleMaterials].filter(briefUsableMaterial).map(item => [item.id, item])).values()]
+      const atomRefs = usableAtoms.map(item => sourceRef('material', item.id))
+      const sourceRefs = uniqueSourceRefs([...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs])
+      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: usableAtoms.map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateSummary } }, created_at: new Date().toISOString() }))
       if (persistedTopic?.id) {
         const archivedAt = new Date().toISOString()
         for (const draft of supersededDraftsForRegenerate(state.drafts, { ownerId: userId(request), topicId: persistedTopic.id })) {
@@ -1928,6 +1941,11 @@ const server = createServer(async (request, response) => {
       return send(response, 200, item)
     }
     const draftMatch = url.pathname.match(/^\/api\/drafts\/(\d+)$/)
+    if (draftMatch && request.method === 'GET') {
+      const draft = owned('drafts', request).find(existing => existing.id === Number(draftMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      return send(response, 200, draft)
+    }
     if (draftMatch && request.method === 'PUT') {
       const body = await readJson(request)
       const draft = owned('drafts', request).find(existing => existing.id === Number(draftMatch[1]))

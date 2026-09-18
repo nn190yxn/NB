@@ -139,3 +139,26 @@ test('有素材时开头出多个方案，每条溯源到三种方法之一', as
   const revised = await (await fetch(`${base}/api/drafts/${draft.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ note: '把开头改得更具体', version: draft.version }) })).json()
   assert.equal(revised.ideas, null, '正文改了，旧方案要清掉')
 })
+
+test('用 material_ids 挂上 CAS 经历后，开头方案不再按零素材停', async t => {
+  const port = testPort(42400, 150)
+  const workspace = makeWorkspace()
+  const server = await startServer(port, workspace.dataFile)
+  t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })
+  const base = `http://127.0.0.1:${port}`
+  const headers = bearer('ideas-cas-role')
+
+  const materialResponse = await fetch(`${base}/api/materials/atoms`, { method: 'POST', headers, body: JSON.stringify({ kind: 'experience', unit_type: 'CAS', name: '询盘比点赞诚实', text: '去年有个做咨询的客户，账号发了半年没人问。改完第一条讲询盘，当周就有人来问价。' }) })
+  const material = await materialResponse.json()
+  assert.ok(material.id, `建素材失败：${materialResponse.status}`)
+  const drafts = await generateDrafts(base, headers, { topic: { title: '内容要按成交写', strategy_layer: 'trust', goal_refs: [] }, material_ids: [material.id] })
+  const draft = drafts[0]
+  assert.deepEqual(draft.generation_context.material_ids, [material.id])
+
+  const updated = await postIdeas(base, headers, draft, 'hook')
+  const hook = updated.ideas.hook
+  assert.equal(hook.blocked, undefined, '有真实经历不该按零素材停')
+  assert.notEqual(hook.readiness.richness.verdict, 'stop')
+  assert.ok(hook.readiness.richness.count >= 1)
+  assert.ok(hook.plans.length >= 1)
+})

@@ -108,7 +108,7 @@
 
 ## 当前状态
 
-当前内测版本已完成红狐官网 API、多用户账号与数据隔离、服务器共享 API Key 及每日额度、发布适配/复盘闭环、记忆自动提炼和用户反馈通道。账号首次登录会自动进入 4 步定位访谈，可稍后填写并从“定位发现”继续；首页不再展示固定演示身份和示例选题。质量门当前为 319 项自动化测试、TypeScript 检查和生产构建。
+当前内测版本已完成红狐官网 API、多用户账号与数据隔离、服务器共享 API Key 及每日额度、发布适配/复盘闭环、记忆自动提炼和用户反馈通道。账号首次登录会自动进入 4 步定位访谈，可稍后填写并从“定位发现”继续；首页不再展示固定演示身份和示例选题。质量门当前为 322 项自动化测试、TypeScript 检查和生产构建。
 
 ## 内测数据状态
 
@@ -131,7 +131,7 @@ public/sw.js          # Service Worker（缓存版本 dingweipai-shell-v3）
 server/index.mjs      # 全部 API 路由 + 业务逻辑 + 静态托管
 server/mysql.mjs      # MySQL 适配层（collection 读写）
 server/redfox.mjs     # 红狐官网 API 适配（服务端读取账号加密 Key 或项目共享 Key）
-server/*.test.mjs     # Node 原生测试（当前全量 319 个，含 desktop）
+server/*.test.mjs     # Node 原生测试（当前全量 322 个，含 desktop）
 desktop/              # 桌面壳（Electron）
 scripts/import-benchmark.mjs # 对标账号资料包导入器（方法库/素材原子/AI 记忆）
 scripts/benchmarks/   # 对标账号资料包（如 dontbesilent.json）
@@ -165,7 +165,7 @@ npm run dev
 npm run verify
 ```
 
-完整链 = `node --test`（当前 319 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
+完整链 = `node --test`（当前 322 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
 
 新增后端功能必须在 `server/*.test.mjs` 补测试；新增前端能力在 `server/web-assets.test.mjs` 加特征断言（该测试读取 src 源码验证关键类名/组件存在）。
 

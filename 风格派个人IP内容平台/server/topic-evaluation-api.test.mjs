@@ -86,3 +86,28 @@ test('topic evaluation and decision are isolated, bounded and idempotent', async
   assert.equal(invalidTransition.status, 409)
   assert.equal((await invalidTransition.json()).code, 'invalid_transition')
 })
+
+test('选题会挂上用户选中的经历，不因模型只点了研究而丢掉', async t => {
+  const port = testPort(41300, 150)
+  const dataFile = join(mkdtempSync(join(tmpdir(), 'topic-source-test-')), 'data.json')
+  writeFileSync(dataFile, '{}')
+  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...generationMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 5000)
+    child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve() } })
+    child.once('error', reject)
+    child.once('exit', code => { if (code !== null) reject(new Error(`测试 API 异常退出: ${code}`)) })
+  })
+  t.after(() => child.kill())
+  const owner = 'topic-source-owner'
+  const base = `http://127.0.0.1:${port}`
+  await fetch(`${base}/api/profile`, { method: 'PUT', headers: headers(owner), body: JSON.stringify({ role: '创业顾问', audiences: ['创业者'], pillars: ['真实复盘'] }) })
+  const material = await (await fetch(`${base}/api/materials/atoms`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ kind: 'experience', unit_type: 'CAS', name: '询盘', text: '去年发了半年没人问，改完第一条讲询盘就有人来问价。' }) })).json()
+  const research = await (await fetch(`${base}/api/research/refresh`, { method: 'POST', headers: headers(owner), body: '{}' })).json()
+  const researchId = research.items[0].id
+  const generated = await fetch(`${base}/api/topics/generate`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ material_ids: [material.id], research_ids: [researchId] }) })
+  assert.equal(generated.status, 201)
+  const topic = (await generated.json())[0]
+  assert.ok(topic.source_refs.some(ref => ref.type === 'research' && ref.id === researchId), '研究来源要在')
+  assert.ok(topic.source_refs.some(ref => ref.type === 'material' && ref.id === material.id), '用户选中的经历不能丢')
+})

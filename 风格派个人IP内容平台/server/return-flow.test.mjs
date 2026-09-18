@@ -167,3 +167,30 @@ test('回流候选要用户确认才生效，确认过程不碰草稿', async t 
   assert.deepEqual(after.checks, before.checks)
   assert.deepEqual(after.approval, before.approval)
 })
+
+test('待确认的表现数据不进选题指令，确认过的两轮对比才会进', async t => {
+  const port = testPort(41250, 150)
+  const workspace = makeWorkspace()
+  const server = await startServer(port, workspace.dataFile)
+  t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })
+  const base = `http://127.0.0.1:${port}`
+  const headers = { 'x-user-id': 'signal-owner', 'content-type': 'application/json' }
+
+  await fetch(`${base}/api/profile`, { method: 'PUT', headers, body: JSON.stringify({ role: '创业顾问', audiences: ['创业者'], pillars: ['真实复盘'] }) })
+  const material = await (await fetch(`${base}/api/materials/atoms`, { method: 'POST', headers, body: JSON.stringify({ kind: 'experience', unit_type: 'CAS', name: '询盘', text: '去年发了半年没人问，改完第一条讲询盘就有人来问价。' }) })).json()
+  const drafts = await (await fetch(`${base}/api/drafts/generate`, { method: 'POST', headers, body: JSON.stringify({ topic: { title: '内容要按成交写', strategy_layer: 'trust', goal_refs: [] }, material_ids: [material.id] }) })).json()
+  const draft = drafts[0]
+
+  await fetch(`${base}/api/performance-snapshots`, { method: 'POST', headers, body: JSON.stringify({ draft_id: draft.id, platform: '抖音', metrics: { views: 9000 } }) })
+  await fetch(`${base}/api/performance-snapshots`, { method: 'POST', headers, body: JSON.stringify({ draft_id: draft.id, platform: '抖音', metrics: { views: 300 } }) })
+  const pendingTopics = await fetch(`${base}/api/topics/generate`, { method: 'POST', headers, body: JSON.stringify({ material_ids: [material.id] }) })
+  assert.equal(pendingTopics.status, 201)
+  assert.equal(llmMock.lastSystem().includes('上一轮已确认的发布表现'), false, '待确认的快照不许进选题指令')
+
+  await fetch(`${base}/api/performance-snapshots`, { method: 'POST', headers, body: JSON.stringify({ draft_id: draft.id, platform: '抖音', metrics: { views: 9000 }, status: 'confirmed' }) })
+  await fetch(`${base}/api/performance-snapshots`, { method: 'POST', headers, body: JSON.stringify({ draft_id: draft.id, platform: '抖音', metrics: { views: 300 }, status: 'confirmed' }) })
+  const confirmedTopics = await fetch(`${base}/api/topics/generate`, { method: 'POST', headers, body: JSON.stringify({ material_ids: [material.id] }) })
+  assert.equal(confirmedTopics.status, 201)
+  assert.match(llmMock.lastSystem(), /上一轮已确认的发布表现/)
+  assert.match(llmMock.lastSystem(), /9000/)
+})
