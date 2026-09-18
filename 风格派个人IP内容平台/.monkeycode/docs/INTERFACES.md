@@ -164,3 +164,24 @@
 - 旧拍摄记录没有 `approval_required` 时继续按历史规则可用；Task 5 新建拍摄项必须校验关联草稿仍处于当前版本已确认状态。
 - 任务 1–5 的选题、草稿、检查、确认、撤回及拍摄接口均按 `owner_id` 隔离，越权资源统一返回 `404 resource_not_found`。
 - 内容上下文不得包含 `api_configs` 或嵌套的 Key、密码、Token、私钥字段；公开 API 配置只返回掩码和固定能力角色。
+
+
+---
+
+## 附录：工作台升级新增内容（2026-09-18）
+
+> 本节是本轮新增内容的同步附录，正文未逐段改写。
+
+新增接口（均在既有鉴权与 \`owner_id\` 隔离之下）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | \`/api/drafts/:id/resonance\` | 产出发布前共鸣报告（五维 + 核心机制 + 改法），挂在草稿上，不写 checks、不改工作流状态；报告全被丢掉时 502 且不落库 |
+| POST | \`/api/drafts/:id/preferences\` | 终稿回流：无两版可比时 422；同一条候选不重复产出 |
+| POST | \`/api/preferences/data-flow\` | 数据回流：只读 \`status: 'confirmed'\` 的表现快照 |
+| GET | \`/api/preferences\` | 返回 \`preferences\` 与 \`replaced_features\`（哪条偏好替换了哪个通用特征，可回溯） |
+| POST | \`/api/preferences/:id/confirm\` | 确认生效。可选 \`replaces_feature\`，必须是 22 个特征里真实存在的编号，否则 422 |
+| POST | \`/api/preferences/:id/reject\` | 拒绝，留痕，同一件事不重复问 |
+| GET | \`/api/guide\` | 单步路由状态：\`mode\`、\`stages\`（含 \`done\`）、\`next\`、\`degraded\`（缺什么、降级路径、补上能得到什么） |
+
+定稿与拍摄：确认定稿时把那一版正文冻进拍摄项 \`script\`；撤回定稿把拍摄项退回待改，已冻的稿不动。

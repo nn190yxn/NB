@@ -71,3 +71,20 @@ API 启动时读取 `server/data.json`。该文件属于本地运行数据，已
 - Hook 与草稿流程位于 `server/draft-workflow.mjs`；修改候选生成、校验、版本组或人工选择逻辑后运行 `node --test server/draft-workflow.test.mjs server/draft-workflow-api.test.mjs`，再运行 `npm run verify`。
 - 三道草稿检查位于 `server/draft-checks.mjs`，接口专项测试为 `server/draft-checks.test.mjs` 和 `server/draft-checks-api.test.mjs`；修改检查规则、状态前置或重试逻辑后先运行 `node --test server/draft-checks.test.mjs server/draft-checks-api.test.mjs`，再运行 `npm run verify`。
 - 人工确认规则位于 `server/draft-approval.mjs`，只能通过 `POST /api/drafts/:id/approve` 和 `POST /api/drafts/:id/revoke-approval` 改变确认状态；不要通过通用草稿更新写入 `approval`、`checks` 或 `workflow_status`。修改确认、撤回或拍摄衔接后先运行 `node --test server/draft-approval.test.mjs server/draft-approval-api.test.mjs`，再运行 `npm run verify`。
+
+
+---
+
+## 附录：工作台升级新增内容（2026-09-18）
+
+> 本节是本轮新增内容的同步附录，正文未逐段改写。
+
+本轮新增测试文件与跑法：
+
+\`\`\`
+node --test server/shooting.test.mjs server/resonance.test.mjs server/return-flow.test.mjs server/guide.test.mjs
+\`\`\`
+
+**端口选择有一条硬规矩**：Windows 的动态端口范围从 **49152** 开始，测试端口一律取 49152 以下。历史上 49xxx-51xxx 的测试在并行跑全量时会被系统当客户端端口分走，报 \`EADDRINUSE\`（现象是「服务退出：1」，且时好时坏、单独跑又正常）。现在这批端口都在 41xxx-42xxx。
+
+排查同类问题看 \`logs/crash.log\`，里面会记 \`listen EADDRINUSE\` 的端口号，能直接定位是谁占了。
