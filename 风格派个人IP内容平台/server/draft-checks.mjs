@@ -410,6 +410,96 @@ function profundityHit(body) {
   return String(body || '').match(/(?:本质上|归根结底|归根到底)[^。！？\n]{0,30}(?:意义|人生|人性|命运|存在|哲学|宇宙|终极)/)?.[0] || ''
 }
 
+// 源技能特征 1：堵住所有反驳。自媒体适用。一条稻草人是特征 7；两条以上预判反驳才算「全堵上」。
+function blockAllRebuttalsHit(body) {
+  const text = String(body || '')
+  const cues = ['你可能会说', '你可能会觉得', '你是不是觉得', '有人会反驳', '我知道你要问', '常见的质疑', '无论你怎么', '别急着反驳', '也许你会说']
+  const found = cues.filter(cue => text.includes(cue))
+  return found.length >= 2 ? found[0] : ''
+}
+
+// 源技能特征 2：知识全部输出。三条以上术语标签才算堆，用一次框架不判。
+function dumpAllKnowledgeHit(body) {
+  const text = String(body || '')
+  const terms = ['心智模型', '方法论', 'SOP', '模型', '框架', '理论', '体系', '范式']
+  const found = []
+  for (const term of terms) {
+    if (!text.includes(term)) continue
+    if (found.some(item => item.includes(term) || term.includes(item))) continue
+    found.push(term)
+  }
+  return found.length >= 3 ? found[0] : ''
+}
+
+// 源技能特征 6：情绪曲线太光滑。只认「从痛到燃」这种修圆了的弧线，不猜作者想没想通。
+function smoothEmotionHit(body) {
+  const text = String(body || '')
+  return text.match(/从.{0,8}(?:迷茫|焦虑|痛苦|低谷|崩溃).{0,10}到.{0,8}(?:清晰|释然|成长|爆发|燃)/)?.[0]
+    || text.match(/情绪.{0,8}(?:从|由).{0,12}(?:到|再到)/)?.[0]
+    || ''
+}
+
+// 源技能特征 9：没有任何犹豫。两条以上绝对判断才算，单次「一定」是口播正常说法。
+function noHesitationHit(body) {
+  const text = String(body || '')
+  const cues = ['毫无疑问', '百分百', '没有任何例外', '永远都是', '所有人都会']
+  const found = cues.filter(cue => text.includes(cue))
+  return found.length >= 2 ? found[0] : ''
+}
+
+// 源技能特征 11：脆弱感服务于论点。经历后立刻接到「所以你 / 这证明」。
+function vulnerabilityServesHit(body) {
+  return String(body || '').match(/我(?:也)?曾经[^。！？]{0,24}(?:崩溃|失败|自卑|走投无路)[^。！？]{0,8}[。！？]?\s*(?:所以你|这证明|这让我明白)/)?.[0] || ''
+}
+
+// 源技能特征 12：把结论包装成协议。只认「当成协议 / 记住这几条 / 军规」，口播里的「下一步」不判。
+function conclusionAsProtocolHit(body) {
+  const text = String(body || '')
+  return text.match(/把这(?:个|件事|一套)?当成(?:你的)?(?:协议|口诀|公式|军规)/)?.[0]
+    || text.match(/记住这[两三四五几\d]+条/)?.[0]
+    || text.match(/三条军规/)?.[0]
+    || ''
+}
+
+// 源技能特征 14：句子节奏过于均匀。推文才不适用；口播五句字数几乎一样才算。短句或缺句不判。
+function evenSentenceRhythmHit(body) {
+  const sentences = String(body || '')
+    .split(/[。！？\n]/)
+    .map(item => item.replace(/\s+/g, '').trim())
+    .filter(item => item.length >= 6)
+  if (sentences.length < 5) return ''
+  const sample = sentences.slice(0, 5).map(item => item.length)
+  return Math.max(...sample) - Math.min(...sample) <= 4 ? sentences[0].slice(0, 14) : ''
+}
+
+// 源技能特征 16：短视频更突出。前三句同时有钩子和承诺才算三件套，单句设问不算。
+function hookPainPromiseHit(body) {
+  const sentences = []
+  for (const rawLine of String(body || '').split('\n')) {
+    const line = rawLine.trim().replace(/^[（(][^）)]*[）)]\s*/, '')
+    if (!line || /^(#{1,6}\s*|标题[:：]|正文[:：])/.test(line)) continue
+    for (const piece of line.split(/(?<=[。！？；])/)) {
+      const sentence = piece.trim()
+      if (sentence) sentences.push(sentence)
+      if (sentences.length >= 3) break
+    }
+    if (sentences.length >= 3) break
+  }
+  const opening = sentences.join('')
+  const hook = opening.match(/你是不是|还在为|有没有发现|先别划走|停一下/)
+  const promise = opening.match(/看完.{0,8}(?:你就|就能)|我告诉你|我教你|三分钟(?:让你|教会)|这篇(?:教你|告诉你)|你将学会|给你一个方法/)
+  if (!hook || !promise) return ''
+  return hook[0]
+}
+
+// 源技能特征 18：同义词刻意替换。认「或者说 / 也可以叫 / 换个说法」叠着用，单次换说法不判。
+function synonymSwappingHit(body) {
+  const text = String(body || '')
+  const markers = ['或者说', '也可以叫', '换个说法']
+  const found = markers.filter(marker => text.includes(marker))
+  return found.length >= 2 ? found[0] : ''
+}
+
 // ── 判据分层 ────────────────────────────────────────────────────────────────
 // 闸门：客观可判定，命中即拦停生成结果。封顶 5 条，加一条必须先删一条。
 // 第 5 条 same_essay 在 scanGeneratedBodies 里判——它要看四篇正文，单篇判不了。
@@ -441,8 +531,7 @@ const languageLabels = {
   opening_question: '开头第一句是问句',
 }
 
-// 现有检测码 → dbs-ai-check 特征编号。只接真正同一回事、且源技能给了可扫形态的。
-// 其余特征在 ai-features.mjs 里写 not_applicable，不在这里硬凑。
+// 现有检测码 → dbs-ai-check 特征编号。自媒体口播 22 条都适用，只认能指到原句的形态。
 export const aiFeatureCodeOf = {
   ai_tone_phrase: 'not_x_but_y',
   golden_tail: 'every_paragraph_punchline',
@@ -457,6 +546,15 @@ export const aiFeatureCodeOf = {
   fake_precise_emotion: 'fake_precise_emotion',
   body_feeling_over_logic: 'body_feeling_over_logic',
   overfitting_profundity: 'overfitting_profundity',
+  block_all_rebuttals: 'block_all_rebuttals',
+  dump_all_knowledge: 'dump_all_knowledge',
+  smooth_emotion_curve: 'smooth_emotion_curve',
+  no_hesitation: 'no_hesitation',
+  vulnerability_serves_point: 'vulnerability_serves_point',
+  conclusion_as_protocol: 'conclusion_as_protocol',
+  even_sentence_rhythm: 'even_sentence_rhythm',
+  hook_pain_promise: 'hook_pain_promise',
+  synonym_swapping: 'synonym_swapping',
 }
 
 const featureForCode = code => (aiFeatureCodeOf[code] ? aiFeatureByCode[aiFeatureCodeOf[code]] : null)
@@ -483,6 +581,15 @@ const languageFixes = {
   fake_precise_emotion: '把量过的假精确数字换成嘴里会说的感受',
   body_feeling_over_logic: '别用身体感受收束，讲不下去就直说讲不下去',
   overfitting_profundity: '删掉「本质上 / 归根结底」后面那句更大的命题，回到具体事情',
+  block_all_rebuttals: '只留你真被人问过的那一条反驳，剩下想象出来的删掉',
+  dump_all_knowledge: '术语只留一个你真正用来想事情的，剩下的删掉',
+  smooth_emotion_curve: '留一个你自己也没想通的地方，别修成从痛到燃的弧线',
+  no_hesitation: '写一处你其实也不太确定的地方',
+  vulnerability_serves_point: '经历里跟论点无关、但你还记得的那截留下，别只用它证明观点',
+  conclusion_as_protocol: '结尾不要再给一份协议或口诀，事情说到哪收到哪',
+  even_sentence_rhythm: '加一句两三个字的短句，或一句明显更长的话，打断均匀节奏',
+  hook_pain_promise: '前三句别卖焦虑，从你真正想让人知道的那件事说起',
+  synonym_swapping: '同一个词觉得准就重复用，不要连着换说法',
   // Requirement 13 第 3、4 条：自介与字数不足降为提醒后，改写指令不能跟着丢。
   self_intro: '删掉自我介绍和引导关注，直接说内容本身',
   length_severe: '把正文补到目标字数，保留已有的判断，不要另写一篇更简单的',
@@ -527,6 +634,24 @@ function writingIssues(draft) {
   if (feeling) add('body_feeling_over_logic', `正文用身体感受收束：${feeling}`, '', feeling)
   const profundity = profundityHit(draft?.body)
   if (profundity) add('overfitting_profundity', `正文把事情升维：${profundity}`, '', profundity)
+  const rebuttals = blockAllRebuttalsHit(draft?.body)
+  if (rebuttals) add('block_all_rebuttals', `正文连着堵住多处反驳：${rebuttals}`, '', rebuttals)
+  const knowledge = dumpAllKnowledgeHit(draft?.body)
+  if (knowledge) add('dump_all_knowledge', `正文在堆术语：${knowledge}`, '', knowledge)
+  const emotion = smoothEmotionHit(draft?.body)
+  if (emotion) add('smooth_emotion_curve', `正文把情绪修成光滑弧线：${emotion}`, '', emotion)
+  const certainty = noHesitationHit(draft?.body)
+  if (certainty) add('no_hesitation', `正文没有任何犹豫：${certainty}`, '', certainty)
+  const vulnerability = vulnerabilityServesHit(draft?.body)
+  if (vulnerability) add('vulnerability_serves_point', `正文用脆弱感证明论点：${vulnerability}`, '', vulnerability)
+  const protocol = conclusionAsProtocolHit(draft?.body)
+  if (protocol) add('conclusion_as_protocol', `正文把结论包装成协议：${protocol}`, '', protocol)
+  const rhythm = evenSentenceRhythmHit(draft?.body)
+  if (rhythm) add('even_sentence_rhythm', `正文句子节奏过于均匀：${rhythm}`, '', rhythm)
+  const trio = hookPainPromiseHit(draft?.body)
+  if (trio) add('hook_pain_promise', `开头在卖钩子加承诺：${trio}`, '', trio)
+  const synonyms = synonymSwappingHit(draft?.body)
+  if (synonyms) add('synonym_swapping', `正文刻意替换同义词：${synonyms}`, '', synonyms)
   const opening = openingSentence(draft?.body)
   if (opening && (opening.endsWith('？') || opening.endsWith('?'))) add('opening_question', `开头第一句是问句：${opening.length > 26 ? `${opening.slice(0, 26)}…` : opening}`, '', opening)
   // 字数严重不足：低于目标下限的六成。没有下限的目标不判。

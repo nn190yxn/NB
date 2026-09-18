@@ -7,14 +7,12 @@ const reportOf = body => diagnosticReport({ body, platform: '抖音' })
 const hasCode = (body, code) => reportOf(body).entries.some(entry => entry.code === code)
 const quoteOf = (body, code) => reportOf(body).entries.find(entry => entry.code === code)?.quote
 
-test('22 个特征每条要么有检测器，要么有不适用理由，没有第三种状态', () => {
+test('22 个特征每条都有检测器，自媒体口播没有不适用逃生门', () => {
   const mapped = new Set(Object.values(aiFeatureCodeOf))
   assert.equal(aiFeatures.length, 22)
   for (const feature of aiFeatures) {
-    const detected = mapped.has(feature.code)
-    const reason = String(feature.not_applicable || '').trim()
-    assert.equal(detected && reason ? 'both' : detected || reason ? 'one' : 'none', 'one', `#${feature.id} ${feature.code} 必须二选一`)
-    if (reason) assert.ok(reason.length > 12, `#${feature.id} 的不适用理由太短`)
+    assert.equal(mapped.has(feature.code), true, `#${feature.id} ${feature.code} 缺检测器`)
+    assert.equal(feature.not_applicable, undefined)
   }
 })
 
@@ -60,3 +58,70 @@ test('升维深刻：本质上接人生命中，本质上接报价不命中', ()
   const miss = '报价说不清，本质上就是你没把数字写上。'
   assert.equal(hasCode(miss, 'overfitting_profundity'), false)
 })
+
+test('堵住反驳：两条预判命中，一条不命中', () => {
+  const hit = '你可能会说没时间。我知道你要问从哪开始。先改报价。'
+  assert.equal(hasCode(hit, 'block_all_rebuttals'), true)
+  assert.equal(quoteOf(hit, 'block_all_rebuttals'), '你可能会说')
+  const miss = '有人可能会说没时间。先改报价。'
+  assert.equal(hasCode(miss, 'block_all_rebuttals'), false)
+})
+
+test('知识倾倒：三个术语命中，一个框架不命中', () => {
+  const hit = '先上增长模型，再套转化框架，配一套方法论。询盘还是不来。'
+  assert.equal(hasCode(hit, 'dump_all_knowledge'), true)
+  const miss = '我用这个框架把报价写清楚。'
+  assert.equal(hasCode(miss, 'dump_all_knowledge'), false)
+})
+
+test('情绪弧线：从痛到燃命中，改报价过程不命中', () => {
+  const hit = '情绪从迷茫到清晰再到爆发，故事就圆了。'
+  assert.equal(hasCode(hit, 'smooth_emotion_curve'), true)
+  const miss = '去年十月询盘很少，后来改了报价。'
+  assert.equal(hasCode(miss, 'smooth_emotion_curve'), false)
+})
+
+test('毫无犹豫：两条绝对判断命中，单次一定不命中', () => {
+  const hit = '毫无疑问所有人都会先改报价。'
+  assert.equal(hasCode(hit, 'no_hesitation'), true)
+  const miss = '询盘一定来自报价说清。'
+  assert.equal(hasCode(miss, 'no_hesitation'), false)
+})
+
+test('脆弱感为论点服务：失败后立刻所以你命中，失败过程不命中', () => {
+  const hit = '我曾经崩溃过。所以你一定要坚持。'
+  assert.equal(hasCode(hit, 'vulnerability_serves_point'), true)
+  const miss = '我去年失败过，中间试错过三次，后来才改报价。'
+  assert.equal(hasCode(miss, 'vulnerability_serves_point'), false)
+})
+
+test('结论包装成协议：当成协议命中，下一步不命中', () => {
+  const hit = '说到这里，把这当成你的协议。'
+  assert.equal(hasCode(hit, 'conclusion_as_protocol'), true)
+  const miss = '下一步你就先改报价。'
+  assert.equal(hasCode(miss, 'conclusion_as_protocol'), false)
+})
+
+test('句子节奏均匀：五句差不多长命中，长短混用不命中', () => {
+  const hit = '先把报价写清。再把案例备好。然后去问一句。接着看谁回复。最后再约咨询。'
+  assert.equal(hasCode(hit, 'even_sentence_rhythm'), true)
+  const miss = '报价说不清。询盘就不会来，因为对方不知道你能干什么，也不知道找你要花多少钱。'
+  assert.equal(hasCode(miss, 'even_sentence_rhythm'), false)
+})
+
+test('钩子痛点承诺：前三句钩子加承诺命中，单句结论不命中', () => {
+  const hit = '你是不是拆完爆款还是用不出来？每天发了没人看。看完这条你就知道下一步。'
+  assert.equal(hasCode(hit, 'hook_pain_promise'), true)
+  assert.equal(quoteOf(hit, 'hook_pain_promise'), '你是不是')
+  assert.equal(scanGeneratedBody(hit, '抖音').failed, false)
+  const miss = '报价说不清，询盘就不会来。我把报价改成先给一次免费诊断。'
+  assert.equal(hasCode(miss, 'hook_pain_promise'), false)
+})
+
+test('同义词替换：或者说叠也可以叫命中，单次或者说不命中', () => {
+  const hit = '这叫增长，或者说爆发，也可以叫起飞。'
+  assert.equal(hasCode(hit, 'synonym_swapping'), true)
+  const miss = '或者说你先改报价。'
+  assert.equal(hasCode(miss, 'synonym_swapping'), false)
+})
+
