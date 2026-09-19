@@ -512,7 +512,25 @@
 - **不许拿某一模式的测试通过，替代另一模式的验证**（上一轮就因为用 JSON 模式测过、掩盖了 MySQL 模式的持久化缺口）。
 - **测试通过不等于缺口不存在**——报告里要单独说明「这些测试没覆盖哪些路径」。
 
-- [ ] 25.1 维度一：端到端形状一致性（**本次 bug 的类别，优先**）
+- [~] 25.1 维度一：端到端形状一致性（**2026-09-19 推进了一部分：草稿检查一族已核，其余三项报告未确认**） **方法**：脚本从 `src/main.tsx` 抽出类型的字段名（括号配对 + 按 `;` 与换行切字段，
+    处理类型写在一行的情况），再回头核测试有没有断言这些字段。
+  - **抽到的字段名（备查）**：
+    - `DraftCheck`：`checked_at, dimensions, draft_version, evidence, message, quote, report, scope, score, severity, suggestions`
+    - `DraftResonanceReport`：`claim_count, compress, core, detail, draft_version, evidence, fixes, from, generated_at, label, measured, note, provider, strengthen, synthesis, text, theory, verdict, verdict_counts`
+    - `DraftScriptFlowReport`：`axis_counts, axis_label, detail, draft_version, evidence, fix, fixes, generated_at, long_sentence_count, measured, merge, provider, repeated_count, rewrite, segment, transition, verdict, written_style_count`
+    - `DraftPublishRiskReport`：`action, claim_count, contact_count, digits_count, draft_version, evidence, drive_action_count, false_positive, generated_at, kind_counts, kind_label, location, measured, medical_count, overlay, overlay_rejected, problem, provider, qrcode_count, substance, summary, url_count`
+    - `DraftIdeaGroup`：`blocked, dimensions, formula_total, found, judged, label, methods, opening, problem, readiness, shown_formula_ids, source, source_note`
+    - `TopicItem`：`all_weak, conclusion, content_format, content_format_reason, content_job, decision, decision_reason, dimensions, evaluated_at, evaluation, evidence, first_step, gain, generation_context, message, missing_labels, rationale, strategy_layer, suggestions, title, workflow_status`
+  - **共同点**：**六种类型里都有 `evidence`**——**正是 `c793d20` 出事的那个字段**。
+    所以这个字段的形状确实是这一维度最该盯的地方。
+  - **已确认（可信）**：**草稿检查这一族（`persona`/`quality`/`publish`）的 `evidence` 形状是被测试盯住的**——
+    `server/draft-checks.test.mjs` 里大量断言 `evidence.severity`、`evidence.message`（还核对文案内容）、`evidence.label`。
+    **这解释了 25.2 里那个不对称**：老三项测试文件多（8/8/5），**而且真的在断言形状**，
+    不是数量堆出来的；逻辑检查现在也有形状契约测试（`draft-logic.test.mjs` + `logic-check-route.test.mjs`）。
+  - **未确认（不要当成通过了）**：`DraftResonanceReport`、`DraftScriptFlowReport`、`DraftPublishRiskReport`
+    这三份的 `evidence` 形状**没核**——我的检索输出被截断，没有逐份确认它们的测试是否断言了
+    `evidence` 的元素结构（是对象还是字符串）。**这三份要单独看，不能因为老三项没问题就默认它们没问题。**
+  - **仍未做**：`DraftIdeaGroup`、`TopicItem` 的形状比对。
   - **已完成一次（2026-09-19，Monkeycode）**：核了 `DraftCheck` 这条线。`evidence` 的形状 bug 已在 `c793d20` 修掉；`report` 字段逻辑检查不产出（`item.report` 为 undefined），界面那几段 `item.report &&` 会自然跳过，不会报错——**这条是安全的**。结论：`DraftCheck` 线上界面与实现一致。
   - 顺带纠正了一处我自己写错的判断（原 22.1，已改）：通用列表本来就渲染 `message` 和 `MarkerScope`，**不存在「用户看不出效果」**。教训：**判断界面缺口前必须先读渲染代码，不能只看类型声明反推。**
   - **仍未核**：`DraftResonanceReport`、`DraftScriptFlowReport`、`DraftPublishRiskReport`、`DraftIdeaGroup`、`TopicItem` 这几条线。
