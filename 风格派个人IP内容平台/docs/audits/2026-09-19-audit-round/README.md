@@ -134,7 +134,7 @@
 
 | 维度 | 状态 |
 |---|---|
-| 25.1 端到端形状一致性 | **部分**（`DraftCheck` 线已核；`DraftResonanceReport`/`DraftScriptFlowReport`/`DraftPublishRiskReport`/`DraftIdeaGroup`/`TopicItem` 未核。**注意：本轮抽过一份字段清单，但那个抽取会把嵌套类型拍平、不可靠，已作废——重做时必须重新按顶层核对**） |
+| 25.1 端到端形状一致性 | **完成**（直接读 `src/main.tsx` 的权威类型定义，不用会拍平的抽取器）。**结论：`c793d20` 那类错配只存在于 `DraftCheck` 一处，而它是安全的**——795 行的 `DraftCheck.evidence` 是唯一的顶层对象数组，渲染代码（805-809 `MarkerScope`）用 `scope`/`code` 与类型对得上，且已被 `draft-checks.test.mjs` 大量断言。三份报告（`DraftResonanceReport` 831 / `DraftScriptFlowReport` 834 / `DraftPublishRiskReport` 837）的 `evidence` 是 `dimensions[]`/`findings[]` **内部**的 `string`，**顶层没有这个字段**，不存在数组/对象错配空间；结构也已被测试整条比对（如 `resonance.test.mjs:63`）。`DraftIdeaGroup`（842）根本没有 `evidence` 字段。 |
 | 25.2 测试覆盖真实性 | 完成，无真缺口 |
 | 25.3 持久化与重启 | 完成，**查出 P1** |
 | 25.4 所有者隔离 | 完成，**无发现**（启发式得出，非证明，三条限制见上） |
