@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { checkPersona, checkPublishChecklist, checkQuality, draftCheckRewriteNote, hasBlockedCheck, scanGeneratedBodies } from './draft-checks.mjs'
+import { checkPersona, checkPublishChecklist, checkQuality, draftCheckRewriteNote, hasBlockedCheck, markableIssues, scanGeneratedBodies } from './draft-checks.mjs'
 import { draftBriefPrompt, draftLengthTargets } from './draft-writing.mjs'
 
 // 语言层命中不再归并成类别：reminders 里已经是一个 code 一条，和 evidence 摊平成同一种条目。
@@ -12,6 +12,60 @@ const fillTo = (seed, min) => { let out = ''; while (out.length < min) out += se
 const opening = { option_id: 'structure-2', name: '开头范式一：预测攻击式', source: '对标dbs', applied_at: '2026-09-14T00:00:00.000Z' }
 const baseDraft = { id: 4, version: 2, title: '真实创业复盘', body: '很多人以为这件事靠技巧，其实关键是先把真实过程讲清楚。\n\n我记录一次真实过程，说明问题、证据和可执行步骤。\n\n最后给出方法和复盘建议，帮助读者完成下一步行动。', platform: '抖音', opening_ref: opening, source_refs: [{ type: 'topic', id: 4 }], fact_check_status: 'needs_review', variant_group_id: 'group-1', checks: {} }
 
+// 阶段 4.3：定点替换原来只收语言层命中，人设/质量里能定位的标记捞不到，
+// 界面上标了「能单独改」却改不动。这里验证它们真的进了替换清单。
+test('定点替换的清单收人设/质量里能定位的标记，不收全篇级和档案级的', () => {
+  const draft = {
+    version: 3,
+    body: '我亲自复盘了整个过程。第一，稳赚不赔。',
+    checks: {
+      persona: {
+        draft_version: 3,
+        evidence: [
+          { code: 'prohibited_pattern', message: '命中档案表达边界：稳赚不赔', scope: 'locatable', quote: '稳赚不赔' },
+          { code: 'low_personal_signal', message: '正文缺少明显的个人经历或第一人称信号', scope: 'whole_body', quote: '' },
+          { code: 'missing_role', message: 'IP 档案缺少角色定位', scope: 'elsewhere', quote: '' },
+        ],
+      },
+      quality: {
+        draft_version: 3,
+        evidence: [
+          { code: 'risk_words', message: '正文命中风险表达：100% 保证', scope: 'locatable', quote: '100% 保证' },
+          { code: 'structure_weak', message: '正文长度或段落结构仍需加强', scope: 'whole_body', quote: '' },
+        ],
+      },
+    },
+  }
+  const scan = { evidence: [{ code: 'ai_tone_phrase', message: '咨询腔', quote: '其实高频迭代才是长期主义。' }] }
+  const markable = markableIssues(draft, scan)
+  const codes = markable.map(item => item.code)
+  assert.ok(codes.includes('ai_tone_phrase'), '语言层命中照旧要收')
+  assert.ok(codes.includes('prohibited_pattern'), '人设里能定位的要收进来')
+  assert.ok(codes.includes('risk_words'), '质量里能定位的要收进来')
+  // 全篇级和档案级收进来只会让模型瞎改一句：它没有哪一处可改。
+  assert.equal(codes.includes('low_personal_signal'), false, '全篇级的不许收')
+  assert.equal(codes.includes('missing_role'), false, '档案级的不许收')
+  assert.equal(codes.includes('structure_weak'), false, '全篇级的不许收')
+  // 每条都得带得出原句，否则模型不知道该改哪一句。
+  assert.ok(markable.every(item => item.quote), '收进来的每条都要有原句')
+
+  // 检查是做在旧版本上的：版本对不上就不该拿来改现在的正文。
+  assert.deepEqual(markableIssues({ ...draft, version: 4 }, { evidence: [] }), [], '版本对不上的标记不许进清单')
+  // 检查还没做过时，只有语言层命中能进来。
+  assert.deepEqual(markableIssues({ version: 3, body: draft.body }, scan).map(item => item.code), ['ai_tone_phrase'])
+  // 同一个位置上的两条规则归成一条：稳赚不赔 既是档案禁忌又是风险词（两份检查都列了它），
+  // 但只能改一次——改两遍第二遍就找不到原句了。去重后该条只留先登记的那份（人设先查）。
+  const sameSpot = markableIssues({
+    ...draft,
+    checks: {
+      persona: { draft_version: 3, evidence: [{ code: 'prohibited_pattern', message: '档案禁忌', scope: 'locatable', quote: '稳赚不赔' }] },
+      quality: { draft_version: 3, evidence: [{ code: 'risk_words', message: '风险词', scope: 'locatable', quote: '稳赚不赔' }] },
+    },
+  }, { evidence: [] })
+  assert.equal(sameSpot.length, 1, `同一处只该留一条，实际留了 ${sameSpot.length} 条`)
+  assert.equal(sameSpot[0].code, 'prohibited_pattern')
+})
+
 test('persona check warns without blocking and quality returns bounded dimensions', () => {
   const persona = checkPersona(baseDraft, { role: '', audiences: [], pillars: [], prohibited_patterns: [] })
   assert.equal(persona.status, 'warning')
@@ -20,6 +74,43 @@ test('persona check warns without blocking and quality returns bounded dimension
   assert.equal(quality.status, 'passed')
   assert.deepEqual(Object.keys(quality.dimensions), ['opening_clarity', 'audience_fit', 'core_point', 'evidence', 'structure_and_risk'])
   assert.ok(Object.values(quality.dimensions).every(score => score >= 0 && score <= 100))
+})
+
+// 阶段 4「标记式改稿」的地基：每个标记得能回答「该去哪改」。
+// 不分类就直接挂「改这一处」，会出现「正文缺少个人经历信号」后面跟一个按钮的情况——
+// 但那是「缺了什么」，根本没有哪一处可改。
+test('每个诊断标记都带 scope，只有可定位的才带 quote', () => {
+  const fullProfile = { role: '创业教练', audiences: ['想副业的人'], pillars: ['真实复盘'], prohibited_patterns: ['稳赚不赔'] }
+  const riskyBody = fillTo('我亲自复盘了整个过程。第一，稳赚不赔。', 300)
+  const riskBody = fillTo('我亲自复盘了整个过程。第一，100% 保证有效。', 300)
+  const cases = [
+    ['persona-空档案', checkPersona(baseDraft, { role: '', audiences: [], pillars: [], prohibited_patterns: [] })],
+    ['quality-基础', checkQuality(baseDraft, { audiences: [], pillars: [], viewpoints: [], problems: [] })],
+    ['persona-命中禁忌', checkPersona({ ...baseDraft, body: riskyBody }, fullProfile)],
+    ['quality-命中风险词', checkQuality({ ...baseDraft, body: riskBody }, fullProfile)],
+  ]
+  const scopes = { locatable: 0, whole_body: 0, elsewhere: 0 }
+  const seen = []
+  for (const [where, checked] of cases) {
+    for (const item of issueItems(checked)) {
+      seen.push(`${where}/${item.code}=${item.scope}`)
+      assert.ok(['locatable', 'whole_body', 'elsewhere'].includes(item.scope), `${where} 的 ${item.code} 没给 scope`)
+      scopes[item.scope] += 1
+      // 说能「改这一处」的，就必须真指得出是哪一处，否则界面高亮不了。
+      if (item.scope === 'locatable') assert.ok(item.quote, `${item.code} 说可以逐处改，却没给出原句`)
+      // 反过来，不当成可定位的就不能声称有单一位置。
+      // （quote 本身可以留着——诊断报告用它展示原文引用，那是另一回事。）
+      if (item.scope !== 'locatable' && item.position !== undefined) assert.equal(item.position, -1, `${item.code} 是 ${item.scope}，却给了正文位置`)
+    }
+  }
+  // 三类都必须真实存在：哪类空了就说明分类错了或登记表过期了。
+  assert.ok(scopes.locatable > 0, `没有任何可定位的标记：${seen.join(' | ')}`)
+  assert.ok(scopes.whole_body > 0, `没有任何全篇级标记：${seen.join(' | ')}`)
+  assert.ok(scopes.elsewhere > 0, `没有任何「去别处改」的标记：${seen.join(' | ')}`)
+
+  // 命中的词要能定位到正文，才能真的把那一句换掉。
+  const prohibited = issueItems(checkPersona({ ...baseDraft, body: riskyBody }, fullProfile)).find(item => item.code === 'prohibited_pattern')
+  assert.equal(prohibited.quote, '稳赚不赔', '命中档案边界的词要作为原句带出来')
 })
 
 test('段落结构判据用未折叠的原文，口播稿不按分段要求', () => {

@@ -24,7 +24,7 @@ import { materialPoolOf, materialPoolSummary, materialUseTags, poolFieldsForNew,
 import { briefUsableMaterial, buildDraftBrief, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthRangeFrom, draftLengthTargetOf, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs, resolveVideoFormat } from './draft-writing.mjs'
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
-import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, openingSentence, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
+import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, markableIssues, openingSentence, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
 import { hookMethodSource, hookMethods } from './hook-diagnosis.mjs'
 import { coreMechanismCheck, parseResonanceResponse, resonancePrompt } from './resonance.mjs'
 import { parseScriptFlowResponse, scriptFlowPrompt, scriptFlowSignals } from './script-flow.mjs'
@@ -1606,7 +1606,10 @@ const server = createServer(async (request, response) => {
       const body = await readJson(request)
       if (body.version !== undefined && body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', code: 'version_conflict', current: draft })
       const scan = scanGeneratedBody(draft.body, draft.platform)
-      const live = [...new Set(scan.evidence.map(item => item.code))]
+      // 阶段 4.3：定点替换要改哪些地方，交给 markableIssues 统一决定
+      // （语言层命中 + 人设/质量里能定位的标记）。只收能定位的，全篇级和档案级的不放进来。
+      const markable = markableIssues(draft, scan)
+      const live = [...new Set(markable.map(item => item.code))]
       // 定点替换管的是语言层提醒（审美），不再看 scan.failed：闸门收窄后，只有升调/咨询腔、不踩闸门的正文
       // 会被判成「没问题」，而那正是最需要定点替换的稿子。
       if (live.length === 0) return send(response, 200, { pairs: [], dropped: [], remaining: 0, message: '这条正文当前没有能定点替换的问题。' })
@@ -1619,7 +1622,7 @@ const server = createServer(async (request, response) => {
       try {
         const result = await callLlmWithFallback(configs, [
           { role: 'system', content: draftReplacePrompt({ platform: draft.platform, format: draftFormatOf(draft), body: draft.body, issues: live }) },
-          { role: 'user', content: scan.evidence.map(item => item.message).join('；') },
+          { role: 'user', content: markable.map(item => item.quote ? `${item.message}｜要改的原句：${item.quote}` : item.message).join('\n') },
         ])
         const { accepted, dropped } = validateReplacePairs({ body: draft.body, pairs: parseReplacePairs(result.content) })
         if (!accepted.length) return send(response, 502, { code: 'REPLACE_EMPTY', error: '模型没给出能落地的替换：要么原句对不上，要么改完更短。再试一次，或在「修改意见」里写清要保留哪几句。', retryable: true })

@@ -11,7 +11,36 @@ const qualityKeys = ['opening_clarity', 'audience_fit', 'core_point', 'evidence'
 function text(value) { return String(value || '').replace(/\s+/g, ' ').trim() }
 function list(value) { return Array.isArray(value) ? value.map(text).filter(Boolean) : [] }
 function hitsFor(value, words) { const body = text(value); return words.filter(word => body.includes(word)) }
-function evidenceItem(code, message, severity = 'warning') { return { code, message, severity } }
+// 阶段 4「标记式改稿」的地基：每个标记先得说清「该去哪改」。
+// 不分清楚就动手，界面会给错按钮——比如「正文缺少个人经历信号」后面挂一个「改这一处」，
+// 但它是「缺了什么」，根本没有哪一处可改。
+//   locatable  —— 指向正文里的具体词句，可以「改这一处」（要带 quote）
+//   whole_body —— 正文的问题，但错在缺了什么（缺信号、缺连接、太长），没有单一位置，只能补/删
+//   elsewhere  —— 正文里改不动：要去 IP 档案、开头句槽位、来源引用那里补
+const evidenceScopes = {
+  // 人设检查
+  missing_role: 'elsewhere',
+  missing_audience: 'elsewhere',
+  audience_mismatch: 'whole_body',
+  pillar_mismatch: 'whole_body',
+  prohibited_pattern: 'locatable',
+  low_personal_signal: 'whole_body',
+  // 质量检查
+  body_missing: 'elsewhere',
+  opening_missing: 'elsewhere',
+  source_missing: 'elsewhere',
+  risk_words: 'locatable',
+  structure_weak: 'whole_body',
+  audience_weak: 'whole_body',
+  point_weak: 'whole_body',
+  platform_length: 'whole_body',
+}
+// 新加标记时忘了登记就走这个：归到全篇级而不是可定位，宁可少给一个按钮，不给一个改不动的。
+const defaultEvidenceScope = 'whole_body'
+function evidenceItem(code, message, severity = 'warning', quote = '') {
+  const scope = evidenceScopes[code] || defaultEvidenceScope
+  return { code, message, severity, scope, quote: scope === 'locatable' ? quote : '' }
+}
 function result(status, { score = null, dimensions = {}, evidence = [], suggestions = [], reminders = [], draftVersion = 1 } = {}) {
   return { status, score, dimensions, evidence, suggestions, reminders, draft_version: draftVersion, checked_at: new Date().toISOString() }
 }
@@ -108,7 +137,7 @@ export function checkPersona(draft, profile = {}) {
     if (profileMatchable(pillars)) { evidence.push(evidenceItem('pillar_mismatch', '正文未明显对应内容支柱')); suggestions.push('补充一个与内容支柱直接相关的观点或案例') }
     else { const only = profileFirstOverlong(pillars); if (only) suggestions.push(profileOverlongHint(only)) }
   }
-  if (prohibitedHits.length) { evidence.push(evidenceItem('prohibited_pattern', `命中档案表达边界：${prohibitedHits.join('、')}`)); suggestions.push('替换为符合个人表达边界的说法') }
+  if (prohibitedHits.length) { evidence.push(evidenceItem('prohibited_pattern', `命中档案表达边界：${prohibitedHits.join('、')}`, 'warning', prohibitedHits[0])); suggestions.push('替换为符合个人表达边界的说法') }
   const firstPerson = /我|我的|我们|亲自|经历|复盘/.test(body)
   if (!firstPerson) { evidence.push(evidenceItem('low_personal_signal', '正文缺少明显的个人经历或第一人称信号')); suggestions.push('加入一个本人经历、过程或明确判断') }
   const score = Math.max(0, 100 - evidence.reduce((sum, item) => sum + (item.severity === 'warning' ? 15 : 10), 0))
@@ -149,7 +178,7 @@ export function checkQuality(draft, profile = {}, options = {}) {
   // 没选开头范式、缺来源引用、综合分低，都是「我的看法」，不是「你做不到」。
   if (!openingReady) { evidence.push(evidenceItem('opening_missing', '尚未用「开头句」槽位确定开头范式')); suggestions.push('点草稿的「开头句」槽位，从方法库选一个开头范式') }
   if (!sourceValid || sourceCount(draft) === 0) { evidence.push(evidenceItem('source_missing', '草稿缺少有效来源引用')); suggestions.push('补回选题、素材或方法来源；自己心里有数也可以不补') }
-  if (riskHits.length) { evidence.push(evidenceItem('risk_words', `正文命中风险表达：${riskHits.join('、')}`, 'blocked')); suggestions.push('修改风险表达后重新检查') }
+  if (riskHits.length) { evidence.push(evidenceItem('risk_words', `正文命中风险表达：${riskHits.join('、')}`, 'blocked', riskHits[0])); suggestions.push('修改风险表达后重新检查') }
   if (body && structureScore < 100) { evidence.push(evidenceItem('structure_weak', '正文长度或段落结构仍需加强')); suggestions.push('补充真实过程、证据和可执行步骤') }
   // 受众/支柱的命中靠「正文里出现档案里的原话」。档案里写成了整句时（实测他现在的受众是 17 字整句），
   // 正文不可能原样出现，这条就永远命中（真实草稿 1/32）；把原因写进建议，别让人以为正文真有问题。
@@ -616,7 +645,10 @@ function writingIssues(draft) {
     const feature = featureForCode(code)
     // label / intent / followup 对齐 design.md 的语言层条目结构。
     // severity 仍是内部的 warning：评分（100 - 15/10）和 blocked 判定读这个字段。
-    hits.push({ code, label: feature?.name || languageLabels[code] || code, intent: feature?.intent || '', followup: feature?.question || '', feature, message, suggestion, severity: 'warning', quote, position: wholeBody || !quote ? -1 : String(draft?.body || '').indexOf(quote) })
+    // scope 只加不改：quote 与 position 保持原样，诊断报告靠它们展示（每条都要有原文引用）。
+    // scope 回答的是另一个问题——这一处能不能单独改，界面拿它决定给不给「改这一处」。
+    const locatable = !wholeBody && Boolean(quote)
+    hits.push({ code, label: feature?.name || languageLabels[code] || code, intent: feature?.intent || '', followup: feature?.question || '', feature, message, suggestion, severity: 'warning', scope: locatable ? 'locatable' : 'whole_body', quote, position: wholeBody || !quote ? -1 : String(draft?.body || '').indexOf(quote) })
   }
 
   const introHits = selfIntroHits(draft?.body)
@@ -862,14 +894,39 @@ export const diagnosticSeverityLabels = { strong: '强信号', medium: '中信�
 // 第 6 条：结尾要明确说明这只是检测结果，并问一句要不要改。
 export const diagnosticReportFooter = '以上是检测结果，不涉及修改。要按这些改一版吗？'
 
+// 阶段 4.3：定点替换到底要改哪些地方。
+// 原来只收语言层命中，人设/质量里同样指得出具体词句的标记（命中档案表达边界、命中风险表达）
+// 界面上标了「能单独改」却改不动，所以在这里并成一份清单。
+// 只收 scope === 'locatable'：全篇级和档案级的没有哪一处可改，放进去只会让模型瞎改一句。
+export function markableIssues(draft, scan) {
+  const markable = []
+  const add = (code, message, quote) => {
+    const text = String(quote || '').trim()
+    // 没原句的进不来：说不清改哪一句，就只能让模型自由发挥。
+    if (!text) return
+    // 按「位置」去重，不是按哪条规则报的：同一个词可能同时踩到档案禁忌和风险词，
+    // 那是两处标记、一处正文，只能改一次——改两遍第二遍就找不到原句了。
+    if (markable.some(item => item.quote === text)) return
+    markable.push({ code, message, quote: text })
+  }
+  for (const item of scan?.evidence || []) add(item.code, item.message, item.quote)
+  for (const key of ['persona', 'quality']) {
+    const checked = draft?.checks?.[key]
+    // 检查是对着某个版本做的；版本改过之后，那些标记说的不是现在这条正文，不能拿来改。
+    if (checked?.draft_version !== draft?.version) continue
+    for (const item of checked.evidence || []) if (item.scope === 'locatable') add(item.code, item.message, item.quote)
+  }
+  return markable
+}
+
 export function diagnosticReport(draft) {
   const { hits } = writingIssues(draft)
   // Requirement 13：结构层（dbs-script-flow）与语言层用同一份报告、同一套风险三档，
   // 按文本顺序逐处呈现；layer 标清是哪一层判出来的。结构层不拦停生成。
   const structure = structureReport(draft)
   const entries = [
-    ...hits.map(item => ({ layer: 'language', code: item.code, label: item.label, quote: item.quote, note: item.message, severity: item.feature?.severity || diagnosticSeverityOf[item.code] || 'weak', position: item.position, intent: item.intent, followup: item.followup, feature: item.feature ? { id: item.feature.id, name: item.feature.name } : null })),
-    ...structure.findings.map(item => ({ layer: 'structure', code: item.code, label: structureDimensions[item.dimension], quote: item.quote, note: item.note, severity: item.risk, position: item.position, intent: '', followup: '', fix: item.fix })),
+    ...hits.map(item => ({ layer: 'language', code: item.code, label: item.label, quote: item.quote, note: item.message, severity: item.feature?.severity || diagnosticSeverityOf[item.code] || 'weak', scope: item.scope, position: item.position, intent: item.intent, followup: item.followup, feature: item.feature ? { id: item.feature.id, name: item.feature.name } : null })),
+    ...structure.findings.map(item => ({ layer: 'structure', code: item.code, label: structureDimensions[item.dimension], quote: item.quote, note: item.note, severity: item.risk, scope: item.position >= 0 && item.quote ? 'locatable' : 'whole_body', position: item.position, intent: '', followup: '', fix: item.fix })),
   ].sort((left, right) => (left.position < 0 ? Number.MAX_SAFE_INTEGER : left.position) - (right.position < 0 ? Number.MAX_SAFE_INTEGER : right.position))
   // 第 5 条：整体没特征就直说，不硬找。
   const summary = entries.length ? '' : '没有发现明显的 AI 特征，也没发现逻辑断裂。不硬找。'
