@@ -42,23 +42,21 @@ const OTHER = { id: 'isolation-other', mark: 'ISO-OTHER-SENTINEL' }
 // 多出一族就会红——要么给它造种子，要么在这里说明为什么不用查。
 const SKIPPED_FAMILIES = {
   'private-files': '要真上传文件才有得读，本测试不造',
-  'performance-snapshots': '种子要造发布表现，本测试不造',
   'vision-tasks': '种子要跑截图识别，本测试不造',
   feedback: '反馈是管理员视角，本测试不造',
-  shooting: '种子要排拍摄计划，本测试不造',
-  sync: '同步对象要两台设备握手，本测试不造',
+  shooting: '拍摄项只能由草稿定稿流程产生，本测试不跑那条链路',
+  sync: '同步冲突要两台设备真的撞到一起，本测试不造',
   'api-settings': '设置项按 slot 读，本测试不造',
   positioning: '定位候选要真模型生成，本测试不造',
-  profile: '档案审核项要真审核流程，本测试不造',
   research: '研究项要连外部搜索，本测试不造',
-  preferences: '偏好由「数据流向」接口写入，本测试不造',
-  'sync-directories': '同步目录要指向真实路径，本测试不造',
+  preferences: '偏好由「终稿回流」产生，要求草稿有两版可比，本测试不跑那条链路',
+  devices: '设备心跳按设备号读，本测试不造',
 }
 
 // 这几条列表路由必须双向都看得见：B 看得见 B 的、看不见 A 的。
 // 它们也是「防整套测试空过」的探针——路由坏了、种子没生效，这里会先红。
-const LIST_ROUTES_WITH_BOTH = ['/api/drafts', '/api/materials', '/api/memories', '/api/structures', '/api/topics']
-const ANTI_EMPTY_MIN_ROUTES = 4
+const LIST_ROUTES_WITH_BOTH = ['/api/drafts', '/api/materials', '/api/memories', '/api/structures', '/api/topics', '/api/performance-snapshots', '/api/sync-directories', '/api/profile/reviews']
+const ANTI_EMPTY_MIN_ROUTES = 8
 
 function freshDataFile(tag) {
   const file = join(mkdtempSync(join(tmpdir(), `owner-isolation-${tag}-`)), 'data.json')
@@ -84,8 +82,8 @@ async function getAs(owner, path, base) {
   return { status: response.status, text: await response.text() }
 }
 
-async function post(owner, path, body, base) {
-  const response = await fetch(`${base}${path}`, { method: 'POST', headers: headersFor(owner), body: JSON.stringify(body) })
+async function post(owner, path, body, base, method = 'POST') {
+  const response = await fetch(`${base}${path}`, { method, headers: headersFor(owner), body: JSON.stringify(body) })
   const text = await response.text()
   return { status: response.status, text, json: text ? JSON.parse(text) : undefined }
 }
@@ -136,6 +134,7 @@ function enumerateGetRoutes(source) {
 
 // 给每个账号造一份自己的数据，并把 id 记下来给带参数的路由拼 URL 用。
 // 造不出来就直接红：整套判定的前提就是「A 手里真的有数据」。
+// 每多一族种子，读判定和写判定就自动多覆盖几条路由（枚举是按路由走的，不靠手抄）。
 async function seed(owner, base) {
   const draft = await post(owner, '/api/drafts/generate', { topic: { title: `${owner.mark}-draft`, strategy_layer: 'trust', goal_refs: [] } }, base)
   assert.ok([200, 201].includes(draft.status), `造草稿失败（${owner.id}）：${draft.status} ${draft.text.slice(0, 200)}`)
@@ -147,7 +146,28 @@ async function seed(owner, base) {
   assert.ok([200, 201].includes(memory.status), `造记忆失败（${owner.id}）：${memory.status} ${memory.text.slice(0, 200)}`)
   const structure = await post(owner, '/api/structures', { title: `${owner.mark}-structure`, steps: ['开场：一句话点题', '正文：给一个例子'] }, base)
   assert.ok([200, 201].includes(structure.status), `造方法失败（${owner.id}）：${structure.status} ${structure.text.slice(0, 200)}`)
-  return { ids: { drafts: draft.json[0]?.id, topics: topic.json[0]?.id, materials: material.json?.id, memories: memory.json?.id, structures: structure.json?.id }, mark: owner.mark }
+  // 档案是个人信息，泄漏代价最高，所以这族必须有种子；审核项顺便也造一条。
+  const profile = await post(owner, '/api/profile', { role: `${owner.mark}-role`, audiences: [`${owner.mark}-audience`] }, base, 'PUT')
+  assert.ok(profile.status === 200, `造档案失败（${owner.id}）：${profile.status} ${profile.text.slice(0, 200)}`)
+  const review = await post(owner, '/api/profile/import', { content: `角色：${owner.mark}-role`, name: `${owner.mark}-档案.txt` }, base)
+  assert.ok(review.status === 201, `造档案审核项失败（${owner.id}）：${review.status} ${review.text.slice(0, 200)}`)
+  const snapshot = await post(owner, '/api/performance-snapshots', { draft_id: draft.json[0]?.id, platform: '抖音', metrics: { 播放量: 1000, 点赞数: 50 }, status: 'confirmed' }, base)
+  assert.ok(snapshot.status === 201, `造发布表现失败（${owner.id}）：${snapshot.status} ${snapshot.text.slice(0, 200)}`)
+  const directory = await post(owner, '/api/sync-directories', { local_path: `C:/iso-${owner.mark}`, device_id: `iso-device-${owner.id}` }, base)
+  assert.ok(directory.status === 201, `造同步目录失败（${owner.id}）：${directory.status} ${directory.text.slice(0, 200)}`)
+  return {
+    ids: {
+      drafts: draft.json[0]?.id,
+      topics: topic.json[0]?.id,
+      materials: material.json?.id,
+      memories: memory.json?.id,
+      structures: structure.json?.id,
+      profile: review.json?.id,
+      'performance-snapshots': snapshot.json?.id,
+      'sync-directories': directory.json?.id,
+    },
+    mark: owner.mark,
+  }
 }
 
 // 一个账号名下五类数据的完整快照（用于「B 改没改动 A 的东西」）。
@@ -201,8 +221,8 @@ test('别人的数据读不到：GET 路由逐条过一遍（跨账号）', asyn
   for (const list of LIST_ROUTES_WITH_BOTH) {
     const family = familyOf(list)
     const asOther = await getAs(OTHER, list, base)
-    assert.ok(asOther.text.includes(`"id":${theirs.ids[family]}`), `${list} 没返回 B 自己的数据（${asOther.status}）：${asOther.text.slice(0, 160)}`)
-    assert.ok(!asOther.text.includes(`"id":${mine.ids[family]}`), `${list} 把 A 的数据混进了 B 的列表：${asOther.text.slice(0, 160)}`)
+    assert.ok(asOther.text.includes(`"id":${JSON.stringify(theirs.ids[family])}`), `${list} 没返回 B 自己的数据（${asOther.status}）：${asOther.text.slice(0, 160)}`)
+    assert.ok(!asOther.text.includes(`"id":${JSON.stringify(mine.ids[family])}`), `${list} 把 A 的数据混进了 B 的列表：${asOther.text.slice(0, 160)}`)
     assert.ok(!asOther.text.includes(mine.mark), `${list} 把 A 的数据混进了 B 的列表：${asOther.text.slice(0, 160)}`)
   }
 })
