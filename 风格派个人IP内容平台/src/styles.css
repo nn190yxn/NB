@@ -224,6 +224,15 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .draft-body-meta strong { color: var(--muted); font: 600 12px var(--font-mono); }
 .draft-body-meta small { color: var(--muted); font-size: 11px; line-height: 1.5; text-align: right; }
 .draft-body-meta.warn strong, .draft-body-meta.warn small { color: var(--amber); }
+.draft-edit-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.draft-edit-bar.dirty { border-color: color-mix(in srgb, var(--amber) 42%, var(--line)); background: color-mix(in srgb, var(--amber) 7%, var(--surface)); }
+.draft-edit-bar > div:first-child { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.draft-edit-bar strong { color: var(--ink); font-size: 12.5px; }
+.draft-edit-bar.dirty strong { color: var(--amber); }
+.draft-edit-bar small { color: var(--muted); font-size: 10.5px; line-height: 1.45; }
+.draft-edit-bar small.draft-edit-error { color: var(--coral); }
+.draft-edit-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.draft-edit-actions .primary-action, .draft-edit-actions .outline-action { width: auto; margin: 0; white-space: nowrap; }
 .draft-revise { margin-top: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
 .draft-revise-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .draft-revise-head label { color: var(--accent-ink); font-size: 12.5px; font-weight: 700; }
@@ -309,3 +318,4 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .replace-plan .replace-old { color: var(--muted); text-decoration: line-through; }
 .replace-plan .replace-new { color: #1f6feb; font-weight: 600; }
 .replace-plan .replace-dropped { color: var(--muted); font-size: 11px; }
+@media (max-width: 680px) { .draft-edit-bar { align-items: stretch; flex-direction: column; }.draft-edit-actions { width: 100%; }.draft-edit-actions button { flex: 1; } }
