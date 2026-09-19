@@ -276,6 +276,33 @@ function usesSharedPrimaryLlm(request) {
 }
 function sharedQuotaError(message) { const error = new Error(message); error.code = 'QUOTA_EXCEEDED'; error.retryable = false; return error }
 
+// 逻辑检查：只查一种毛病——提了问题，但后文给的办法治的是另一件事。
+// 它跟其他三项检查不一样：要调模型。所以它是这里唯一的异步检查。
+// 返回结构跟着 result()／DraftCheck 走，字段名是 draft_version（下划线），
+// 写错会让同版本缓存失效，每次点都烧一次模型调用。
+async function runLogicCheck(request, draft) {
+  const draftBody = String(draft?.body || '')
+  const draftVersion = Number(draft?.version || 1)
+  const spans = logicSignalSpans(draftBody)
+  // 圈不出「既有问题、又有办法」的段落，就无从判断治没治错病。
+  // 这一格直接放行，不花这次调用——这是设计里省钱的那道闸门。
+  if (!spans.shouldCheck) {
+    return { status: 'passed', dimensions: {}, evidence: [], findings: [], suggestions: [], reminders: ['正文里没有「提了问题又给了办法」的段落，这次没有可查的地方。'], draft_version: draftVersion }
+  }
+  const content = await generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(draftBody, spans))
+  const findings = parseLogicFindings(content, draftBody)
+  return {
+    status: findings.length ? 'warning' : 'passed',
+    dimensions: {},
+    evidence: findings.map(finding => finding.message),
+    // 单独留给界面：界面要按 locatable 把标记挂到正文上，光看 evidence 做不到。
+    findings,
+    suggestions: findings.length ? ['补一段回应它，或者把那句问题删掉。'] : [],
+    reminders: [],
+    draft_version: draftVersion,
+  }
+}
+
 async function generateStructured(request, instruction, input) {
   const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
   if (!configs.primary && !configs.fallback) throw Object.assign(new Error('请先在 API 中心配置并启用文本模型'), { code: 'MISSING_CONFIG' })
@@ -1418,7 +1445,7 @@ const server = createServer(async (request, response) => {
       await saveState('topics')
       return send(response, 200, topic)
     }
-    const draftCheckMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/checks\/(persona|quality|publish)$/)
+    const draftCheckMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/checks\/(persona|quality|publish|logic)$/)
     if (draftCheckMatch && request.method === 'POST') {
       const draft = owned('drafts', request).find(item => item.id === Number(draftCheckMatch[1]))
       if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
@@ -1433,9 +1460,24 @@ const server = createServer(async (request, response) => {
       if (checkName === 'quality' && (!draft.checks?.persona || draft.checks.persona.draft_version !== currentVersion)) return send(response, 409, { error: '请先完成当前版本的人设检查', code: 'invalid_transition' })
       if (checkName === 'publish' && (!draft.checks?.quality || draft.checks.quality.draft_version !== currentVersion || draft.checks.quality.status !== 'passed')) return send(response, 409, { error: '请先通过当前版本的质量门', code: 'invalid_transition' })
       // 质量诊断同时给出按文本顺序的报告：界面直接呈现，不用自己拼顺序。
-      const check = checkName === 'persona' ? checkPersona(draft, profile) : checkName === 'quality' ? { ...checkQuality(draft, profile, { replacedFeatureIds: new Set(activeFeatureReplacements(state.preferences.filter(item => item.owner_id === userId(request))).keys()) }), report: diagnosticReport(draft) } : checkPublishChecklist(draft)
+      // 逻辑检查要调模型，是这里面唯一的异步项；它挂了要出错误码，
+      // 不能像其他三项那样同步算完就走。
+      let check
+      if (checkName === 'logic') {
+        try {
+          check = await runLogicCheck(request, draft)
+        } catch (error) {
+          return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '逻辑检查失败，请检查模型配置并重试。', retryable: true })
+        }
+      } else {
+        check = checkName === 'persona' ? checkPersona(draft, profile) : checkName === 'quality' ? { ...checkQuality(draft, profile, { replacedFeatureIds: new Set(activeFeatureReplacements(state.preferences.filter(item => item.owner_id === userId(request))).keys()) }), report: diagnosticReport(draft) } : checkPublishChecklist(draft)
+      }
       draft.checks = { ...(draft.checks || {}), [checkKey]: check }
-      draft.workflow_status = checkName === 'persona' ? 'persona_checked' : check.status === 'blocked' ? 'needs_revision' : checkName === 'quality' ? 'quality_checked' : 'publish_ready'
+      // 逻辑检查不动工作流状态：它是个附加检查，不是流程里的一道关。
+      // 不加这句，它会掉进下面的 else 分支，把草稿标成「可以发布了」。
+      if (checkName !== 'logic') {
+        draft.workflow_status = checkName === 'persona' ? 'persona_checked' : check.status === 'blocked' ? 'needs_revision' : checkName === 'quality' ? 'quality_checked' : 'publish_ready'
+      }
       draft.updated_at = new Date().toISOString()
       await saveState('drafts')
       return send(response, 200, draft)
