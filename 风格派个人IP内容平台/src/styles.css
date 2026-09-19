@@ -59,6 +59,10 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .history-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .history-list span { display: inline-flex; align-items: center; gap: 5px; }
 .conflict-banner { display: grid; gap: 8px; margin-bottom: 18px; padding: 13.5px 15px; border: 1px solid #d46a5f; border-radius: 8px; color: #8b342d; background: #fff4f0; font-size: 12.5px; }
+/* 顶部「有一件事没成功」：默认由 apiJson 上报（审计 25.5）。dismissible，十二秒后自己收起。 */
+.api-failure-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; padding: 13.5px 15px; border: 1px solid #d4a55f; border-radius: 8px; color: #7a5219; background: #fffaf0; font-size: 12.5px; }
+.api-failure-banner span { flex: 1; min-width: 200px; }
+.api-failure-banner button { border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
 .conflict-banner span { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .conflict-banner button { border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
 
