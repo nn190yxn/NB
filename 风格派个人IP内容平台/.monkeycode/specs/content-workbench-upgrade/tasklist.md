@@ -543,7 +543,31 @@
   - 怎么查：列出「同一能力的所有入口」（路由、界面动作、skill、定时/触发路径），对照 `server/*.test.mjs`，标出**只有一条入口有测试**的项。
   - 已知必查点：`/api/skills/logic-check` vs `/api/drafts/:id/checks/logic`；`/api/skills/claims` vs 界面上 `ClaimsPanel` 的保存链路；`/api/skills/deconstruct`；共振 / 脚本流 / 发布风险三条报告生成路径。
   - 验收：产出「能力 → 入口清单 → 哪条有测试 / 哪条没有」的表。**没测的那条要说清「它跟已测的那条有什么不同」**，不能只写「缺测试」。
-- [ ] 25.3 维度三：持久化与重启
+- [x] 25.3 维度三：持久化与重启（**2026-09-19 已做一轮，查出一个真缺口**）
+  - **方法**：从源码里抽出**三个**登记清单，再跟 `saveState('<名>')` 的全部调用名逐个比对。
+  - **登记的清单有三处（分开放，容易只查到一处）**：
+    1. `mysql.mjs:6` 的 `collectionNames`（14 项）
+    2. `mysql.mjs:7` 的 **`userDocNames`** = `['positioning','strategy','profile','positioning_candidates','api_settings']`
+    3. `content-assets.mjs:1` 的 **`crossPlatformCollections`** = `['devices','sync_directories','sync_files','private_files','performance_snapshots','vision_tasks']`，
+       经 `mysql.mjs:6` 的 `...crossPlatformCollectionNames` 展开进来。
+  - **结果：24 个被写的集合里，23 个已登记，唯独 `preferences` 三处都没有。**
+  - **【P1 · 待确认】`preferences` 的写入在 MySQL 模式下会被静默丢弃**
+    - 证据：`server/index.mjs:1883` `if (records.length) await saveState('preferences')`——
+      该路由真的在造记录（`buildPreferenceRecords(finalDraftCandidates(draft), ...)`，`index.mjs:1880-1884`）；
+    - `preferences` 不在 `collectionNames`、不在 `userDocNames`、不在 `crossPlatformCollections`；
+    - 按上一轮审计（`docs/audits/2026-09-07-user-journey`）的 P1 结论，**MySQL 模式的 `saveState` 受集合白名单过滤**，
+      没登记 = 不落库。**本地 JSON 模式看不出来**（`server/data.json` 里确实有 `preferences` 集合），
+      **所以这正是「不能用 JSON 模式测试代替 MySQL 验证」的那个坑。**
+    - **要做什么**：把 `preferences` 补进登记清单（属哪一类需判断：它带 `owner_id`，
+      看起来更像 `collectionNames` 那一类，不是 `userDocNames` 的单文档类）。补完要有测试。
+    - **我没做的验证**：**没有真去 MySQL 跑一遍**——本机没有可连的副本库（`3306` 未监听、
+      没有 `.env` 的 `PROJECT_DB_*`）。所以这一条是**源码确认，不是实测**。按第 25 节的规矩如实标注。
+    - **不许拿生产库来验这一条。**
+  - **过程中的自我纠正（第三次同源错误）**：第一版脚本只抓了 `collectionNames` 一个清单，
+    跑出「10 个集合漏掉」，**包括 `profile`、`positioning`、`strategy` 这种核心的——看着像重大 P1**。
+    回代码一查，还有 `userDocNames` 和 `crossPlatformCollections` 两个清单，**10 个里 9 个是假的**。
+    **教训（今天第三次）：抽清单必须把源码里所有登记点找齐，一个都不能漏；找到"重大发现"时先回头问自己漏了什么。**
+  - **仍未做**：其他写入路径（`PUT`/`POST` 直接改 `state.*` 再存）没逐个核；重启读取的回填也没验。
   - 查什么：`saveState` 的**集合白名单**是否覆盖所有会被写入的集合。写了一个没注册的集合 = 静默不落库，重启即失。
   - 为什么必查：上一轮审计的 P1 就是这个（`api_configs` 被白名单过滤），**本轮新增了草稿检查结果这类写入，要重新核一遍**。
   - 怎么查：搜出所有 `saveState('<名字>')` 的调用点，跟 `server/mysql.mjs` 的 `collectionNames` 逐个比对。
