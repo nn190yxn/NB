@@ -18,11 +18,24 @@ test('apiJson 失败默认要报，安静的调用点必须显式 opt out', () =
   assert.match(ui, /setApiFailure\(null\)/, '要能关掉')
 })
 
-// 钩住「静默点会悄悄变多」：现在是探活 + 计数两类，数出来看变化。
+// 钩住「静默点会悄悄变多」：现在两类——启动时的探活 / 计数（失败显示的只是 0 或空），
+// 以及**定时轮询**（下面单独一条管）。数出来看变化。
 test('显式静默的调用点数量要能一眼数出来', () => {
   const silents = ui.match(/\{ silent: true \}/g) || []
-  assert.ok(silents.length >= 2, `显式静默的调用点太少，疑似有人把上报告口绕过去了：${silents.length}`)
-  assert.ok(silents.length <= 6, `显式静默的调用点变多了（${silents.length} 个），每一个都要能说清为什么可以安静`)
+  assert.ok(silents.length >= 5, `显式静默的调用点太少，疑似有人把上报告口绕过去了：${silents.length}`)
+  assert.ok(silents.length <= 9, `显式静默的调用点变多了（${silents.length} 个），每一个都要能说清为什么可以安静`)
+})
+
+// 真坑（2026-09-20 自查发现）：定时轮询加上「失败默认上报」会变成每几秒弹一次提示，
+// 比原来更扰民。所以轮询里的请求必须显式安静（顶部提示十二秒自消，轮询是 2–5 秒一次）。
+// 注意：`setInterval(refresh, …)` 和 `refresh` 里那个请求**不在同一行**，
+// 所以这条要往前看几行（第一版只看同一行，结果反向验证时没红——是个假绿）。
+test('轮询里的请求必须显式安静，不能每隔几秒弹一次', () => {
+  const lines = ui.split('\n')
+  const polls = lines.map((line, index) => ({ line, index })).filter(item => item.line.includes('setInterval'))
+  assert.ok(polls.length >= 1, '至少要扫到一处轮询，否则这条测试是空转')
+  const noisy = polls.flatMap(poll => (lines.slice(Math.max(0, poll.index - 6), poll.index + 1).join('\n').match(/apiJson[^\n]*/g) || []).filter(call => !call.includes('{ silent: true }')))
+  assert.deepEqual(noisy, [], `轮询会反复弹提示（每几秒一次），这些请求要显式安静：\n${noisy.map(call => call.slice(0, 140)).join('\n')}`)
 })
 
 // 审计 25.5 的 P1：草稿列表加载失败原来什么都不说，界面显示「还没有草稿」——

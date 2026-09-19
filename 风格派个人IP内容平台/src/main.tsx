@@ -419,10 +419,12 @@ function SyncManagementPanel({ onClose, onSync, syncing }: { onClose: () => void
   const [deviceId, setDeviceId] = useState('')
   const [runtime, setRuntime] = useState<DesktopSyncRuntime | null>(null)
   const [saved, setSaved] = useState('')
+  // 每 5 秒轮一次的后台刷新：这三条必须安静，否则后台一断，顶部提示每 5 秒又冒一次。
+  // 失败由这一面板自己那一句 `setSaved` 说（就地提示）。
   const refresh = useCallback(() => Promise.all([
-    apiJson<SyncDirectoryView[]>('/api/sync-directories'),
-    apiJson<SyncDeviceView[]>('/api/devices'),
-    apiJson<SyncJobView[]>('/api/materials/sync'),
+    apiJson<SyncDirectoryView[]>('/api/sync-directories', { silent: true }),
+    apiJson<SyncDeviceView[]>('/api/devices', { silent: true }),
+    apiJson<SyncJobView[]>('/api/materials/sync', { silent: true }),
   ]).then(([nextDirectories, nextDevices, nextJobs]) => { setDirectories(nextDirectories); setDevices(nextDevices); setJobs(nextJobs); setDeviceId(current => current || nextDevices[0]?.id || '') }).catch(() => setSaved('同步状态暂时无法刷新')), [])
   useEffect(() => { void window.desktopApp?.getSyncRuntime().then(next => { setRuntime(next); setDeviceId(next.device_id) }); void refresh(); const timer = window.setInterval(() => void refresh(), 5000); return () => window.clearInterval(timer) }, [refresh])
   const addDirectory = () => {
@@ -2809,9 +2811,10 @@ function ShootingWorkspace({ onClose }: { onClose: () => void }) {
     frame = window.requestAnimationFrame(step)
     return () => window.cancelAnimationFrame(frame)
   }, [playing, scrollSpeed, active?.id])
+  // 每 2 秒轮一次的任务状态：轮询必须安静——否则后台一断，顶部提示每 2 秒又冒一次。
   useEffect(() => {
     if (!active) { setVisionTasks([]); return }
-    const refresh = () => void apiJson<VisionTask[]>(`/api/vision-tasks?shooting_id=${active.id}`).then(setVisionTasks).catch(() => setVisionTasks([]))
+    const refresh = () => void apiJson<VisionTask[]>(`/api/vision-tasks?shooting_id=${active.id}`, { silent: true }).then(setVisionTasks).catch(() => setVisionTasks([]))
     refresh(); const timer = window.setInterval(refresh, 2000); return () => window.clearInterval(timer)
   }, [active?.id])
   const analyzeScreenshots = async (files: FileList | null) => {
