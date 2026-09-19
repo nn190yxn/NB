@@ -82,16 +82,28 @@ function extractJson(content) {
 // 解析模型返回，并把编造的引用丢掉。
 // 引用必须真的在正文里——这一条是整套设计里最要紧的闸门：
 // 模型最常见的失败不是答错，是把「我认为的问题」写成「原文里的话」。查一遍就能拦住。
-export function parseLogicFindings(content, body) {
+//
+// 解析不出来时抛错（返回空数组是错的）：返回空数组等于把「模型输出坏了」压成「模型说没问题」，
+// 上层 runLogicCheck 于是写 status: 'passed'，界面显示「已通过」——用户把「没查成」读成「查过没问题」。
+// 假阴性比假阳性危险，所以「没查成」必须是一条错误，不能是一个正常结果。
+// 这个约定和 claims / deconstruct / 定位 / 选题的 parseXxx 一致（它们也是抛错，路由转 502）。
+//
+// reported 是模型一共报了几条，unverifiable 是其中「引用对不上正文」被丢掉的条数。
+// 两个数都要露出来：上层要拿它们把「丢了几条、为什么丢」说出来。
+// 只返回 findings 的话，被丢掉的条目在界面上完全不可见——用户分不清「模型没报」和「报了但被丢」。
+export function parseLogicOutput(content, body) {
   const parsed = extractJson(content)
-  const items = Array.isArray(parsed?.findings) ? parsed.findings : []
+  if (!parsed || !Array.isArray(parsed.findings)) throw Object.assign(new Error('模型这次没给出可解析的结果，重试一次通常就好。'), { code: 'MODEL_OUTPUT_INVALID' })
+  const items = parsed.findings
   const source = String(body || '')
   const findings = []
+  let unverifiable = 0
   for (const item of items) {
     const quote = String(item?.problem || '').trim()
+    // 引用不到原句的：按「编的」丢掉。丢掉的条数要单独数出来，下面要报给用户。
+    if (!source.includes(quote)) { unverifiable += 1; continue }
     // 一句话太短算不上「一个问题」，太长的多半是把整段抄回来了。
     if (quote.length < 4 || quote.length > 120) continue
-    if (!source.includes(quote)) continue
     if (findings.some(finding => finding.quote === quote)) continue
     findings.push({
       code: logicCheckCode,
@@ -105,5 +117,10 @@ export function parseLogicFindings(content, body) {
     })
     if (findings.length >= 2) break
   }
-  return findings
+  return { findings, reported: items.length, unverifiable }
+}
+
+// 只取 findings 的旧形状，调用点（skill 路由、测试）不动。
+export function parseLogicFindings(content, body) {
+  return parseLogicOutput(content, body).findings
 }

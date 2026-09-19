@@ -76,4 +76,7 @@ test('逻辑检查：模型编造的引用一律丢掉，不能放行', async t 
   assert.equal(response.status, 200)
   const result = await response.json()
   assert.deepEqual(result.findings, [], '引用不在正文里就必须丢，宁可空手而归')
+  // 丢掉这件事本身要说出来：不说的话，「模型报了但全被丢掉」和「模型说没问题」长得一样（finding 2026-09-20）。
+  assert.equal(result.reported, 1, '模型报了几条')
+  assert.equal(result.unverifiable, 1, '其中几条因为引用对不上被丢掉')
 })

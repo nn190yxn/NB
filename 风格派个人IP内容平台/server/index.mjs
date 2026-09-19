@@ -11,7 +11,7 @@ import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterminis
 import { deconstructSystemPrompt, parseDeconstruction } from './deconstruct.mjs'
 import { claimsSystemPrompt, parseClaims } from './claims.mjs'
 import { contentFormSystemPrompt, parseFormJudgement } from './content-form.mjs'
-import { logicCheckSystemPrompt, logicCheckVariables, logicSignalSpans, parseLogicFindings } from './draft-logic.mjs'
+import { logicCheckSystemPrompt, logicCheckVariables, logicSignalSpans, parseLogicOutput } from './draft-logic.mjs'
 import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCollections, saveMysqlState, saveUserDocs, collectionNames, userDocNames } from './mysql.mjs'
 import { emptyPublicApiConfigs, emptyPublicRedfoxConfig, parseApiConfigKey, publicApiConfig, publicRedfoxConfig, runtimeApiConfig, runtimeRedfoxConfig, updateApiConfig, updateRedfoxConfig } from './api-settings.mjs'
 import { publicPrivateFile, readPrivateFile, storePrivateFile, validatePrivateFile } from './private-files.mjs'
@@ -295,7 +295,14 @@ async function runLogicCheck(request, draft) {
     return { status: 'skipped', score: null, dimensions: {}, evidence: [], findings: [], suggestions: ['本次没有检查：正文里找不到「提了问题、又给了办法」的段落，所以没有可对照的地方。'], reminders: [], draft_version: draftVersion, checked_at: new Date().toISOString() }
   }
   const content = await generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(draftBody, spans))
-  const findings = parseLogicFindings(content, draftBody)
+  // 解析不出来会抛错（MODEL_OUTPUT_INVALID），路由转 502——不能让它变成「已通过」。
+  const { findings, reported, unverifiable } = parseLogicOutput(content, draftBody)
+  const suggestions = findings.length ? ['补一段回应它，或者把那句问题删掉。'] : []
+  // 「模型报了几条、丢了几条」必须说出来。不说的话，「模型报了但全被引用闸门丢掉」这一种，
+  // 在界面上和「模型说没问题」长得一模一样——又一处假阴性。
+  const verifiable = reported - unverifiable
+  if (verifiable > findings.length) suggestions.push(`模型报了 ${verifiable} 条，这里按规则只显示前 ${findings.length} 条。`)
+  if (unverifiable > 0) suggestions.push(`模型另外提了 ${unverifiable} 条，引用对不上正文原句（多半是改写或编的），按规则丢弃了，没有报给你。`)
   return {
     status: findings.length ? 'warning' : 'passed',
     score: null,
@@ -305,7 +312,7 @@ async function runLogicCheck(request, draft) {
     evidence: findings,
     // 单独留一份：界面按 quote 把标记挂到正文上。
     findings,
-    suggestions: findings.length ? ['补一段回应它，或者把那句问题删掉。'] : [],
+    suggestions,
     reminders: [],
     draft_version: draftVersion,
     checked_at: new Date().toISOString(),
@@ -1341,9 +1348,11 @@ const server = createServer(async (request, response) => {
       if (!spans.shouldCheck) return send(response, 200, { findings: [], checked: false })
       try {
         const content = await generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(draftBody, spans))
-        return send(response, 200, { findings: parseLogicFindings(content, draftBody), checked: true })
+        // reported / unverifiable 一并返回：调用方要能把「模型报了几条、丢了几条」说出来。
+        const { findings, reported, unverifiable } = parseLogicOutput(content, draftBody)
+        return send(response, 200, { findings, checked: true, reported, unverifiable })
       } catch (error) {
-        return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '逻辑检查失败，请检查模型配置并重试。', retryable: true })
+        return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG', 'MODEL_OUTPUT_INVALID'].includes(error.code) ? error.message : '逻辑检查失败，请检查模型配置并重试。', retryable: true })
       }
     }
     if (url.pathname === '/api/skills/deconstruct' && request.method === 'POST') {
@@ -1476,7 +1485,7 @@ const server = createServer(async (request, response) => {
         try {
           check = await runLogicCheck(request, draft)
         } catch (error) {
-          return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '逻辑检查失败，请检查模型配置并重试。', retryable: true })
+          return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG', 'MODEL_OUTPUT_INVALID'].includes(error.code) ? error.message : '逻辑检查失败，请检查模型配置并重试。', retryable: true })
         }
       } else {
         check = checkName === 'persona' ? checkPersona(draft, profile) : checkName === 'quality' ? { ...checkQuality(draft, profile, { replacedFeatureIds: new Set(activeFeatureReplacements(state.preferences.filter(item => item.owner_id === userId(request))).keys()) }), report: diagnosticReport(draft) } : checkPublishChecklist(draft)

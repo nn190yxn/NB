@@ -6,7 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { logicCheckSystemPrompt, logicCheckVariables, logicSignalSpans, parseLogicFindings, splitSentences } from './draft-logic.mjs'
+import { logicCheckSystemPrompt, logicCheckVariables, logicSignalSpans, parseLogicFindings, parseLogicOutput, splitSentences } from './draft-logic.mjs'
 
 // 验收用的真稿子。它的毛病是明确的：提了「怕得罪人」「表情不自然」，
 // 但后面给的办法（切素材）治的是「不知道说什么」。那两个问题从头到尾没人管。
@@ -94,10 +94,39 @@ test('解析：模型不听话时的三种废物输出都要能兜住', () => {
   // 前后带废话
   const chatty = '好的，我分析了一下：{"findings":[{"problem":"这句话会不会得罪人","explain":"没回应"}]} 以上。'
   assert.equal(parseLogicFindings(chatty, realDraft).length, 1)
-  // 完全不是 JSON
-  assert.deepEqual(parseLogicFindings('我觉得这篇没问题。', realDraft), [])
-  assert.deepEqual(parseLogicFindings('', realDraft), [])
-  assert.deepEqual(parseLogicFindings(null, realDraft), [])
+})
+
+// 2026-09-20 改：这里原来断言「完全不是 JSON 就返回空数组」。那个断言钉住的正是 bug:
+// 返回空数组，上层 runLogicCheck 会写 status: 'passed'，界面显示「已通过」——
+// 把「模型输出坏了」渲染成「查过没问题」。假阴性比假阳性危险，所以现在抛错，由路由转 502。
+// 这个约定跟 claims / deconstruct / 定位 / 选题的 parseXxx 一致（它们也是抛错）。
+test('解析：模型返回不可解析时必须报错，不能当成「没问题」', () => {
+  const garbage = ['我觉得这篇没问题。', '', null, undefined, 'invalid JSON', '{"findings":"没有"}', '{"其他":[]}']
+  for (const content of garbage) {
+    assert.throws(
+      () => parseLogicFindings(content, realDraft),
+      error => error.code === 'MODEL_OUTPUT_INVALID' && /可解析/.test(error.message),
+      `这份输出应当被报成「解析失败」而不是「没问题」：${JSON.stringify(content)}`,
+    )
+  }
+  // 真的报了、只是没有条目，算正常结果（"findings":[] 就是模型说没问题）。
+  assert.deepEqual(parseLogicFindings('{"findings":[]}', realDraft), [])
+})
+
+// 被引用闸门丢掉的条数必须能查：上层靠它把「模型提了几条、丢了几条」说出来。
+// 不说的话，「模型提了但全被丢掉」在界面上和「模型说没问题」长得一模一样。
+test('解析：模型报了但引用对不上时，条数要单独数出来', () => {
+  const content = JSON.stringify({
+    findings: [
+      { problem: '这句正文里根本没有', explain: 'a' },
+      { problem: '这句也没有', explain: 'b' },
+      { problem: '这句话会不会得罪人', explain: 'c' },
+    ],
+  })
+  const { findings, reported, unverifiable } = parseLogicOutput(content, realDraft)
+  assert.equal(reported, 3, '模型一共报了几条')
+  assert.equal(unverifiable, 2, '引用对不上正文的几条要数出来')
+  assert.equal(findings.length, 1, '只有引用真在正文里的那条放行')
 })
 
 test('解析：过短的片段和过长的整段都不算一个问题', () => {

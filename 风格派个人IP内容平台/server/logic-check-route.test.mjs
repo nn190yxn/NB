@@ -109,3 +109,61 @@ test('草稿检查路由：逻辑检查不改 workflow_status，且形状是界�
   const second = await again.json()
   assert.equal(second.workflow_status, before, '再跑一次也不许改 workflow_status')
 })
+
+// 2026-09-20：同一条路上另一类假阴性——模型输出坏了（或报的引用全被丢掉）时，
+// 界面原来显示「已通过」。这条测试用模拟模型的两种模式把两种情形都钉住。
+test('草稿检查路由：模型输出不可解析时报 502，模型报的全被丢掉时要说明', async t => {
+  const port = nextPort()
+  const baseUrl = `http://127.0.0.1:${port}`
+  const testDataFile = join(mkdtempSync(join(tmpdir(), 'content-ip-logic-invalid-')), 'data.json')
+  writeFileSync(testDataFile, '{}')
+  const server = await startServer(port, testDataFile)
+  t.after(() => server.kill())
+  t.after(() => generationMock.setMode('success'))
+
+  const headers = { 'x-user-id': 'logic-invalid-user', 'content-type': 'application/json' }
+  const generated = await fetch(`${baseUrl}/api/drafts/generate`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ topic: { title: '逻辑检查的坏输出', strategy_layer: 'trust', goal_refs: [] } }),
+  })
+  assert.equal(generated.status, 201)
+  const draft = (await generated.json())[0]
+
+  // 模拟模型生成的正文圈不出「既有问题又有办法」，先改成一条真的会被送去查的正文。
+  // 末尾那句「编造引用」是模拟模型的开关：带这个词它就回一条正文里根本没有的引用（情形二要用）。
+  const checkableBody = [
+    '你是不是也这样：一打开摄像头，脑子一片空白。',
+    '你以为需要灵感，其实你需要的是把念头切成碎片。',
+    '编造引用',
+  ].join('\n')
+  const patched = await fetch(`${baseUrl}/api/drafts/${draft.id}`, { method: 'PUT', headers, body: JSON.stringify({ body: checkableBody }) })
+  assert.equal(patched.status, 200, '改正文应当成功')
+  // 前提：这段正文圈得出问题句和办法句，才会真的花一次模型调用——否则下面两条断言会变成空过。
+  assert.equal(logicSignalSpans(checkableBody).shouldCheck, true, '前提：这段正文必须真的会被送去查')
+
+  // 情形一：模型回的是一堆无法解析的东西（模拟模型的 invalid 模式回 "invalid JSON"）。
+  // 原来这条路会报 200 + status: 'passed'，界面显示「已通过」。
+  generationMock.setMode('invalid')
+  const broken = await fetch(`${baseUrl}/api/drafts/${draft.id}/checks/logic`, { method: 'POST', headers, body: '{}' })
+  assert.equal(broken.status, 502, '模型输出坏了必须是错误，不能是「查过没问题」')
+  const brokenPayload = await broken.json()
+  assert.equal(brokenPayload.code, 'MODEL_OUTPUT_INVALID')
+  // 报错要说得像人话，而且不能把「模型输出坏了」写成「你的模型配置有问题」。
+  assert.match(brokenPayload.error, /没给出可解析的结果/)
+  assert.equal(brokenPayload.retryable, true)
+  // 失败的检查不许落到草稿上：落上去一次，界面就会一直显示那一份。
+  const afterBroken = await (await fetch(`${baseUrl}/api/drafts`, { headers })).json()
+  const sameDraft = afterBroken.find(item => item.id === draft.id)
+  assert.equal(sameDraft.checks?.logic ?? null, null, '检查失败时草稿上不该留下检查结果')
+
+  // 情形二：模型报了，但引用对不上正文，全被引用闸门丢掉。
+  // 状态仍是 passed（没有可确认的问题），但「丢了几条」必须说出来。
+  generationMock.setMode('success')
+  const forged = await fetch(`${baseUrl}/api/drafts/${draft.id}/checks/logic`, { method: 'POST', headers, body: JSON.stringify({ force: true }) })
+  assert.equal(forged.status, 200)
+  const forgedDraft = await forged.json()
+  const logic = forgedDraft.checks.logic
+  assert.equal(logic.status, 'passed')
+  assert.equal(logic.evidence.length, 0)
+  assert.ok(logic.suggestions.some(text => /引用对不上正文原句/.test(text)), '「模型报了但被丢掉」必须说出来，否则和「模型说没问题」长得一样')
+})
