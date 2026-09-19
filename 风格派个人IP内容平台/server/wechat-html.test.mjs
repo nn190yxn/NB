@@ -26,13 +26,14 @@ test('CSS 按选择器拆成声明', () => {
   assert.equal(rules.p, 'margin:12px 0')
 })
 
-test('正文转换：标题用 h1、空行分段、段末句号去掉、段内单换行并成空格、不出现 br', () => {
+test('正文转换：标题用 h1、空行分段、段末句号保留、段内单换行并成空格、不出现 br', () => {
   const result = wechatHtmlFor({ title: '内容要按成交写', body: '第一句。\n还是同一段。\n\n第二段在这里。', styleId: 'minimal' })
   assert.match(result.html, /<h1[^>]*>内容要按成交写<\/h1>/)
   assert.match(result.html, /还是同一段/)
   assert.ok(!result.html.includes('<br'))
-  assert.match(result.html, /<p[^>]*>第一句。 还是同一段<\/p>/)
-  assert.match(result.html, /<p[^>]*>第二段在这里<\/p>/)
+  // 段末句号保留：源技能的「去句号」规则按 Alex 的决定关掉了。
+  assert.match(result.html, /<p[^>]*>第一句。 还是同一段。<\/p>/)
+  assert.match(result.html, /<p[^>]*>第二段在这里。<\/p>/)
 })
 
 test('列表合并成一个 ul，表格降级成列表行（表头算内容、分隔行丢掉）', () => {

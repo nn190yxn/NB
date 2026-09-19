@@ -71,9 +71,9 @@ function renderBody(markdown, rules) {
 
   const closeParagraph = () => {
     if (!paragraph.length) return
-    // 段内单换行并成空格（源技能第 4 条），段末中文句号去掉（第 5 条）。不做 br。
-    let text = inlineMarkup(paragraph.join(' ')).trim()
-    if (text.endsWith('。')) text = text.slice(0, -1)
+    // 段内单换行并成空格（源技能第 4 条）。不做 br。
+    // 段末中文句号保留：源技能要求去掉，但那是它的排版偏好，不是硬要求；Alex 定了保留，不擅自改他的标点。
+    const text = inlineMarkup(paragraph.join(' ')).trim()
     if (text) out.push(`<p${styleAttr(style('p'))}>${text}</p>`)
     paragraph = []
   }
