@@ -615,7 +615,27 @@
   - 查什么：每个数据读写路由是否都经 `owned()` / `userId(request)` 过滤。**漏一个就是别人能看到或改到你的数据。**
   - 怎么查：枚举所有 `/api/*` 路由，逐条看有没有做 owner 过滤；重点看 `PUT` / `DELETE` / `POST`（读漏了是信息泄露，写漏了是数据被改）。
   - 验收：产出「路由 → 方法 → 是否做了 owner 过滤」的表。**任何一条 `PUT`/`DELETE` 没有过滤，都按 P1 报。**
-- [ ] 25.5 维度五：失败路径与错误处理
+- [x] 25.5 维度五：失败路径（**2026-09-19 已做一轮，无真问题**）
+  - **方法**：脚本找 `server/index.mjs` 里所有 `catch`（共 43 处），筛出「既没 `throw`、
+    也没有给用户回话（`send(response, ...)`）」的，再逐条读代码判断。
+  - **结果：筛出 7 条，逐条核实后全部合理**，没有"吞掉错误却让用户以为成功"的情况：
+    1. `index.mjs:66` `mkdirSync(logs)` —— 注释写明 `read-only cwd: crash log disabled`，尽力而为，合理。
+    2. `index.mjs:68` 写崩溃日志失败 —— 注释 `/* lo…*/`，同上，合理。
+    3. `index.mjs:71` 写崩溃日志失败 —— 注释 `/* ignore */`，同上，合理。
+    4. `index.mjs:83` —— 注释写明 `APP_ORIGIN is validated by the origin comparison below`，
+       **有注释解释为什么可以吞**，合理。
+    5. `index.mjs:420` —— `catch (error) { return { ok: false, error } }`，
+       **其实有处理**（返回结构化结果），是我脚本的假阳性（它只认 `send(response`）。
+    6. `index.mjs:1065` —— `catch { retrospect = null }`，紧接着 `if (!retrospect) retrospect = deterministic`，
+       **明确降级到确定性版本**，不是吞掉。
+    7. `index.mjs:1607` —— `catch { adaptation = null }`，同样有确定性兜底，不是吞掉。
+  - **唯一值得留意的一处（不算问题，但记下来）**：6 和 7 是同一个模式——**模型调用失败就静默降级成确定性版本**。
+    查了 1064 行，模型那条路写了 `provider: result.provider`，**结果里带着产出方标记，理论上能分辨**。
+    所以**不构成"用户分不清"的问题**；但如果将来要让用户明确知道"这次是降级结果"，
+    要确认 `deterministic` 那一份也带 `provider` 标记、且界面显示它。**目前没证据说这是个 bug，不作为结论。**
+  - **未覆盖**：只查了 `index.mjs`。`server/` 下其他文件（`mysql.mjs`、`content-assets.mjs`、
+    `draft-logic.mjs` 等）的 catch 没查。另外**前端 `src/main.tsx` 的失败路径也没查**——
+    界面拿不到数据时显示什么，同样属于这一维度。与错误处理
   - 查什么：**吞错和静默失败**。上一轮审计的 P1/P2 里有一批是这个（保存失败吞错、接口失败被当成空结果、断网仍前进）。
   - 怎么查：搜 `.catch(() => undefined)`、`.catch(() => {})` 这类空捕获，逐条判断「这里吞掉之后，用户会看到什么」。**吞掉之后用户以为成功，就是 P1。**
   - 已知必查点：`src/main.tsx` 的 `runDraftCheck`（`.catch(() => undefined)`）。本轮逻辑检查新增的错误码（429/422/502）**前端能不能显示出来**，一并核。
