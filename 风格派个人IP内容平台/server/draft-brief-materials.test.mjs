@@ -85,6 +85,30 @@ test('只抓像数据声明的数字，个位数修辞不误伤', () => {
   assert.deepEqual(draftNumbers(''), [])
 })
 
+// 中文数字和阿拉伯数字得用同一把尺子。
+// 不补这一条，把数字写成汉字就能绕过不可溯源闸门。
+test('中文数字也要抓，不能写成汉字就绕过', () => {
+  assert.deepEqual(draftNumbers('我那条播放八百，这条只有两百'), ['八百', '两百'])
+  // 文末的数字不能因为「后面没字了」被当成估值放过。
+  assert.deepEqual(draftNumbers('只有两百'), ['两百'], '文末中文数字也要抓')
+  assert.deepEqual(draftNumbers('我拆了十五条片子'), ['十五'])
+  assert.deepEqual(draftNumbers('播放涨了三倍'), ['三倍'])
+})
+
+// 这是闸门，误报会直接拦住稿子，所以修辞和估值必须放过。
+test('中文数字不误伤修辞、成语和估值', () => {
+  assert.deepEqual(draftNumbers('一步就好，三个动作，两个方法'), [], '裸个位数是修辞')
+  assert.deepEqual(draftNumbers('十分关键，千万不要，万一忘了，老百姓关心价格'), [], '成语不是数据声明')
+  // 「几十」会被正则切成孤立的「十」，不管它就会把「拆了几十条」当成数据声明。
+  assert.deepEqual(draftNumbers('拆了几十条片子，有十几万播放，数百人问过'), [], '估值不是数据声明')
+})
+
+test('中文和阿拉伯写法归一化后才比：写法不同不算不可溯源', () => {
+  assert.deepEqual(unbackedNumberHits('我拆了三百条。', '素材：拆了 300 条'), [], '正文用汉字、素材用阿拉伯')
+  assert.deepEqual(unbackedNumberHits('我拆了 300 条。', '素材：拆了三百条'), [], '正文用阿拉伯、素材用汉字')
+  assert.deepEqual(unbackedNumberHits('我拆了三百条。', '素材：只提到发布节奏'), ['三百'], '两边都没有才报')
+})
+
 test('素材和简报里没有的数字才标记，有的不标记', () => {
   const body = '我有个客户，发了半年没人问，后来做到 786 条数据、涨了 30%'
   assert.deepEqual(unbackedNumberHits(body, '786 条数据'), ['30%'], '素材里有的不标，没有的才标')

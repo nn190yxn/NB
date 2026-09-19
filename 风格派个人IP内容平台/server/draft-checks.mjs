@@ -731,26 +731,75 @@ function sameEssayHits(bodies) {
   return hits
 }
 
+// 数字归一化：中文数字和阿拉伯数字按同一个「值」比较。
+// 不归一化的话，素材里写 300、正文里写 三百会被当成两个数字，正文那个必然被判不可溯源。
+const chineseDigitValues = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 零: 0 }
+const chinesePlaceValues = { 十: 10, 百: 100, 千: 1000 }
+const chineseNumberChars = '一二三四五六七八九十百千万零两'
+
+function chineseNumberValue(text) {
+  let total = 0
+  let section = 0
+  let digit = null
+  for (const char of String(text || '')) {
+    if (Object.hasOwn(chineseDigitValues, char)) { digit = chineseDigitValues[char]; continue }
+    if (Object.hasOwn(chinesePlaceValues, char)) { section += (digit ?? 1) * chinesePlaceValues[char]; digit = null; continue }
+    if (char === '万') { total += (section + (digit ?? 0)) * 10000; section = 0; digit = null }
+  }
+  return total + section + (digit ?? 0)
+}
+
 // 只抓像数据声明的数字：两位数以上，或带 % 万 倍 元 块 单位的。
 // 个位数的「一步」「三个动作」是最常见的修辞用法，抓了只会误伤。
 const dataNumberPattern = /(\d+(?:\.\d+)?)\s*(%|％|万|倍|元|块)?/g
+// 中文数字走同一把尺子。不补这一条，把数字写成汉字就能绕过不可溯源闸门。
+const chineseNumberPattern = new RegExp(`([${chineseNumberChars}]+)\\s*(%|％|倍|元|块)?`, 'g')
+// 长得像数字、实际不是数据声明的词。这是闸门，误报会直接拦住稿子，宁可先排掉。
+const numeralIdioms = ['十分', '百分', '千万', '万般', '百般', '十足', '百姓']
+// 「几十条」「十几万」里的「十」是估值，不是数据声明。
+// 中文数字的正则字符集里没有「几」「数」，所以「几十」会被切成孤立的「十」，
+// 不管它的话「拆了几十条片子」会被当成数据声明，直接拦住稿子。
+const vagueNeighbors = '几数多来余许'
+
+const isNumeralIdiom = (text, index) => numeralIdioms.some(word => text.startsWith(word, index))
+// 注意 空字符串：`vagueNeighbors.includes('')` 返回 true，
+// 不显式判空的话，出现在文末的数字会拿到空邻居，被静默当成估值跳过。
+const isVagueNeighbor = (text, index, length) => {
+  const before = text[index - 1]
+  const after = text[index + length]
+  return Boolean((before && vagueNeighbors.includes(before)) || (after && vagueNeighbors.includes(after)))
+}
+const valueOfArabic = (digits, unit) => (unit === '万' ? Number(digits) * 10000 : Number(digits))
+
+// 归一化成「值 → 原样写法」。同一个数值的两种写法只留一个，报告里显示正文里的那个写法。
+function numberTokens(input) {
+  const text = String(input || '')
+  const found = new Map()
+  const add = (value, form) => found.set(value, form)
+  for (const match of text.matchAll(dataNumberPattern)) {
+    if (!match[2] && match[1].replace(/\D/g, '').length < 2) continue
+    add(valueOfArabic(match[1], match[2]), match[2] ? `${match[1]}${match[2]}` : match[1])
+  }
+  for (const match of text.matchAll(chineseNumberPattern)) {
+    if (isNumeralIdiom(text, match.index) || isVagueNeighbor(text, match.index, match[0].length)) continue
+    const value = chineseNumberValue(match[1])
+    if (!match[2] && value < 10) continue
+    add(match[2] === '万' ? value * 10000 : value, match[2] ? `${match[1]}${match[2]}` : match[1])
+  }
+  return found
+}
 
 // 正文里出现的、像数据声明的数字。返回去重后的原样写法（带单位）。
 export function draftNumbers(body) {
-  const found = new Map()
-  for (const match of String(body || '').matchAll(dataNumberPattern)) {
-    if (!match[2] && match[1].replace(/\D/g, '').length < 2) continue
-    found.set(match[1], match[2] ? `${match[1]}${match[2]}` : match[1])
-  }
-  return [...found.values()]
+  return [...numberTokens(body).values()]
 }
 
 // 正文里素材和简报都没有的数字：这些数字不可溯源。
 // Requirement 13 第 3 条把它列为闸门：生成阶段命中就重写一次并标成待修改（见 index.mjs 生成路由）。
 // 这里只负责把不可溯源的数字算出来，拦不拦由调用方决定。
 export function unbackedNumberHits(body, allowedText = '') {
-  const allowed = new Set([...String(allowedText || '').matchAll(/\d+(?:\.\d+)?/g)].map(match => match[0]))
-  return draftNumbers(body).filter(number => !allowed.has(number.replace(/[%％万倍元块]/g, '')))
+  const allowed = new Set(numberTokens(allowedText).keys())
+  return [...numberTokens(body).entries()].filter(([value]) => !allowed.has(value)).map(([, form]) => form)
 }
 
 // 生成阶段的拦停只看闸门：格式泄漏、串台，加四平台同一篇。

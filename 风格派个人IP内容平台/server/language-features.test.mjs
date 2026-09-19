@@ -151,3 +151,57 @@ test('真实口播稿：629 字里 2 处翻转不够密度，修完仍不报', (
   assert.equal(hasCode(crossed, 'ai_tone_phrase'), true)
 })
 
+// ===== 下面七条原来有检测器、没有 hit/miss 测试 =====
+// `ai_tone_phrase` 就是在这个状态下整类漏判了很久。没有对照样本的检测器，
+// 它既可能不报，也可能乱报，两种都发现不了。这里把剩下的补齐。
+
+test('每段收束金句：其实……才是命中，普通转折不命中', () => {
+  const hit = '大家都在追技巧。其实，慢才是快。'
+  assert.equal(hasCode(hit, 'golden_tail'), true)
+  assert.ok(hit.includes(quoteOf(hit, 'golden_tail')))
+  const miss = '先说报价，再说交付。两件事都要说清楚。'
+  assert.equal(hasCode(miss, 'golden_tail'), false)
+})
+
+test('万能收尾：未来可期命中，具体下一步不命中', () => {
+  const hit = '这条就到这，未来可期。'
+  assert.equal(hasCode(hit, 'generic_ending'), true)
+  const miss = '下周我把报价表拆给你看。'
+  assert.equal(hasCode(miss, 'generic_ending'), false)
+})
+
+test('连接词过度：首先其次命中，口语先后不命中', () => {
+  const hit = '首先，报价要写清楚。其次，交付要说明白。'
+  assert.equal(hasCode(hit, 'connector_abuse'), true)
+  const miss = '先看报价，再谈交付。两件事都要说清楚。'
+  assert.equal(hasCode(miss, 'connector_abuse'), false)
+})
+
+test('假反驳：有人可能会说命中，直给结论不命中', () => {
+  const hit = '有人可能会说，这样做太慢。但你算一下就会发现不慢。'
+  assert.equal(hasCode(hit, 'fake_rebuttal'), true)
+  const miss = '这样做看起来慢，其实交付更快。'
+  assert.equal(hasCode(miss, 'fake_rebuttal'), false)
+})
+
+test('排比凑数：抽象词三连命中，具体清单不命中', () => {
+  const hit = '你要提升认知、格局、视野。'
+  assert.equal(hasCode(hit, 'triple_list'), true)
+  const miss = '这条要选题、拍摄、剪辑。'
+  assert.equal(hasCode(miss, 'triple_list'), false, '具体清单是正常写作，不该当成 AI 排比')
+})
+
+test('没有主体的案例：有个朋友命中，第一人称不命中', () => {
+  const hit = '有个朋友做了三年没起号。'
+  assert.equal(hasCode(hit, 'vague_case'), true)
+  const miss = '我自己做了三年没起号。'
+  assert.equal(hasCode(miss, 'vague_case'), false)
+})
+
+test('咨询腔：赋能闭环命中，大白话不命中', () => {
+  const hit = '我们要赋能客户，形成闭环。'
+  assert.equal(hasCode(hit, 'consulting_tone'), true)
+  const miss = '我要帮客户把报价说清楚。'
+  assert.equal(hasCode(miss, 'consulting_tone'), false)
+})
+

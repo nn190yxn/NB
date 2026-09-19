@@ -34,6 +34,17 @@ test('三个维度都只认确定性形态：跳跃、重复、长句、书面�
   assert.ok(twice.findings.some(item => item.code === 'structure_self_answer'))
 })
 
+// 「首先/其次/再次」与「第一/第二/第三」是同一个功能：给听众路标。
+// 它们可以同时被说「用得俗」，但不能同时被说「没有衔接」——那是自相矛盾的判定。
+test('序数连接词两种写法都要被认成承接信号', () => {
+  const body = ordinal => `报价说不清，询盘就不会来。\n\n${ordinal[0]}，先给一次免费诊断。客户得知道你能干什么。\n\n${ordinal[1]}，把价格写在明面上。藏着只会让人退回去问别人。\n\n${ordinal[2]}，让老客户替你说话。别人替你讲的比你自己讲管用。`
+
+  for (const ordinal of [['第一', '第二', '第三'], ['首先', '其次', '再次']]) {
+    const jump = structureReport({ body: body(ordinal) }).findings.filter(item => item.code === 'structure_jump')
+    assert.equal(jump.length, 0, `「${ordinal[0]}」本身就是承接词，不该判跳跃`)
+  }
+})
+
 test('结构层风险也走同一套三档词汇，不另造一套说法', () => {
   const report = structureReport({ body: '这一版我改了三遍。\n\n抖音的完播率看前三秒。针对这个问题我们再看一个例子。' })
   assert.ok(report.findings.length > 0)
