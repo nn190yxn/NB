@@ -42,7 +42,7 @@ export async function startGenerationMock({ adaptBody } = {}) {
     // 定点替换：给一对能落地的、一对原文里不存在的，测试必须把后者丢掉。
     if (system.includes('只做定点替换')) {
       return reply(JSON.stringify({ pairs: [
-        { old: '其实高频迭代才是长期主义。', new: '上周那版改到第四遍才有人来问价。' },
+        { old: '其实高频迭代才是长期主义。', new: '上周那版发出去，当天就有人来问价。' },
         { old: '这句原文里不存在。', new: '随便一句。' },
       ] }))
     }

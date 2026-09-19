@@ -275,7 +275,7 @@ test('只重写一个平台，带修改意见，不动其他平台', async t => 
 test('替换对只认原文里唯一存在的句子，越改越短和没变化都丢掉', () => {
   const body = '我上周改了三版。其实高频迭代才是长期主义。观众不欠你注意力。'
   const parsed = parseReplacePairs(JSON.stringify({ pairs: [
-    { old: '其实高频迭代才是长期主义。', new: '上周那版改到第四遍才有人来问价。' },
+    { old: '其实高频迭代才是长期主义。', new: '上周那版发出去，当天就有人来问价。' },
     { old: '我上周改了三版。', new: '改了三版。' },
     { old: '这句原文里没有。', new: '随便写一句。' },
     { old: '观众不欠你注意力。', new: '观众不欠你注意力。' },
@@ -283,9 +283,9 @@ test('替换对只认原文里唯一存在的句子，越改越短和没变化�
   assert.equal(parsed.length, 4)
   const { accepted, dropped } = validateReplacePairs({ body, pairs: parsed })
   assert.equal(accepted.length, 1)
-  assert.match(accepted[0].new, /第四遍/)
+  assert.match(accepted[0].new, /当天就有人来问价/)
   assert.equal(dropped.length, 3)
-  assert.equal(applyReplacePairs(body, accepted), '我上周改了三版。上周那版改到第四遍才有人来问价。观众不欠你注意力。')
+  assert.equal(applyReplacePairs(body, accepted), '我上周改了三版。上周那版发出去，当天就有人来问价。观众不欠你注意力。')
   assert.equal(parseReplacePairs('不是 JSON').length, 0)
   assert.match(draftReplacePrompt({ platform: '抖音', format: '短视频', body, issues: ['ai_tone_phrase'] }), /逐字复制/)
 })
@@ -312,7 +312,7 @@ test('定点替换只返回能落地的替换对，对不上的原样退回', as
   const result = await replaced.json()
   assert.equal(result.pairs.length, 1, '只有原文里唯一存在的那句能进来')
   assert.equal(result.dropped.length, 1, '原文里没有的句子要退回')
-  assert.match(result.pairs[0].new, /第四遍/)
+  assert.match(result.pairs[0].new, /当天就有人来问价/)
   assert.equal(result.remaining, 0, '替换完这条不该再有命中')
   assert.equal(target.body, body, '预览不该改动草稿')
 })

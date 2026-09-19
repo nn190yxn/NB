@@ -106,14 +106,67 @@ function formatLeakHits(body) {
 // 只要求人物词紧跟数量词（「一位做家政的老板」「我有个客户」「某本地老板」），不匹配「一个反问：…客户」。
 // 「有个」单独也算人物前缀（2026-09-20 真模型实测：「我身边有个创业者」绕过了「我有个」）。
 // **每遇到一次真实编造绕过了这里，就把那个说法补进词表，并补一条断言**。
+// 人物词与结果词抽成常量：下面「编经历」那条要用同一套词做去重，不能各写一份。
+const casePersonPattern = /(我有个|有个|有一个|有一位|有位|某|某位|一位|一个)(做[^，。]{0,8}的)?(老板|客户|学员|同行|朋友|宝妈|店长|创始人|创业者|阿姨)/
+const caseResultPattern = /(涨粉|粉丝\d|翻了?\d|翻倍|多赚|省下|归零|成交额|复购率|\d+个月涨粉)/
+
 function caseClaimHits(body) {
   const hits = []
   for (const rawLine of String(body || '').split(/[\n。！？]/)) {
     const line = rawLine.trim()
     if (!line) continue
-    const person = /(我有个|有个|有一个|有一位|有位|某|某位|一位|一个)(做[^，。]{0,8}的)?(老板|客户|学员|同行|朋友|宝妈|店长|创始人|创业者|阿姨)/.test(line)
-    const number = /(涨粉|粉丝\d|翻了?\d|翻倍|多赚|省下|归零|成交额|复购率|\d+个月涨粉)/.test(line)
+    const person = casePersonPattern.test(line)
+    const number = caseResultPattern.test(line)
     if (person || number) hits.push(`${person ? '案例人物' : ''}${person && number ? '+' : ''}${number ? '结果数字' : ''}｜${line.slice(0, 40)}`)
+  }
+  return [...new Set(hits)].slice(0, 3)
+}
+
+// 编经历：数量 + 经历的说法。「我复盘过 5 个账号」「文案改四遍」「我们复盘过大量IP账号」（后两条是审计里的真实原文）。
+// 为什么另起一条：上面两条都抳不住它——不可溯源数字闸门只认「两位数以上或带单位」的数字（个位数是故意放过的，
+// 因为「三个动作」这类修辞太多），caseClaimHits 认的是案例人物与结果数字（涨粉、翻倍），经历数量不在它里面。
+// 与那两条一样只提醒、不拦停：这是用户自己的历史，系统没有事实来源，只有本人能核。
+//
+// 词表要窄（审计的告警：拓宽了几乎每篇都命中），所以分三档，而不是「看到数字就报」：
+//   一档：过去式经历动词 + 任何数量（复盘过/带了/改过/操盘过…）——「复盘过大量IP账号」就在这档。
+//   二档：普通动作 + 「几次几遍」型量词（改四遍、拆三次）——「文案改四遍」在这档。
+//   三档：第一人称 + 数量 + 经历名词（我 5 个账号）——「我每天写 3 条片子」在这档。
+// 反面不能误伤：「先发 3 个账号试试」（没有第一人称、也没有过去式动词，是通用建议）不许报。
+const experienceVerbs = ['复盘过', '复盘了', '带过', '带了', '做过', '写过', '改过', '改了', '服务过', '陪跑过', '操盘过', '跑过', '教过', '培训过', '经手过']
+const actionVerbs = ['改', '写', '做', '拆', '拍', '剪', '发', '跑', '带', '教', '复盘', '看']
+const experienceNouns = ['账号', '学员', '客户', '门店', '店铺', '项目', '稿子', '脚本', '片子', '作品', '直播间', '会员', '公司', '品牌', '团队', '选题', '样本', '同行']
+// 「几次几遍」型量词：说的是「我做过多少回」，基本不是修辞。
+const timesUnits = '遍次轮场届'
+// 「多少个东西」型量词：光有它不够，得配第一人称或经历名词。
+const thingUnits = '个位条篇份家款套周月年'
+const chineseNumber = '[一二两三四五六七八九十]{1,3}'
+const vagueQuantity = '(?:大量|无数|很多|不少|若干|一批|一堆|十几|几十|几百|上千|数[十百千万])'
+const experienceCount = new RegExp(`(\\d{1,2}|${chineseNumber}|几)[\\s]*([${timesUnits}${thingUnits}])`, 'g')
+const vagueCount = new RegExp(vagueQuantity)
+
+function experienceClaimHits(body) {
+  const hits = []
+  for (const rawLine of String(body || '').split(/[\n。！？]/)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    // 同一句话已经在「案例」那条里报过，这里不重复报（「我有个客户，改了 8 遍」只报一次）。
+    if (casePersonPattern.test(line) || caseResultPattern.test(line)) continue
+    // 一句话里可能有好几个数量（「这一条文案改四遍」），只要有一个是「几次几遍」型就算数，
+    // 所以得全扫，不能只取第一个匹配——取第一个会把「一条」当成结论。
+    const counts = [...line.matchAll(experienceCount)]
+    const vague = vagueCount.test(line)
+    const verb = experienceVerbs.find(word => line.includes(word))
+    const action = actionVerbs.find(word => line.includes(word))
+    const noun = experienceNouns.find(word => line.includes(word))
+    const firstPerson = /我|自己/.test(line)
+    const times = counts.some(match => timesUnits.includes(match[2]))
+    // 全句只在跟读者说话（有「你」、没有「我」）：那是叫读者去做，不是作者的经历。
+    // 不拦这一刀的话，「把开场删了重写两次试试」会被当成编经历。
+    const readerOnly = /你|您/.test(line) && !firstPerson
+    if (readerOnly) continue
+    if (verb && (counts.length || vague)) hits.push(`经历动作｜${line.slice(0, 40)}`)
+    else if (times && action) hits.push(`重复次数｜${line.slice(0, 40)}`)
+    else if (firstPerson && (counts.length || vague) && (noun || times)) hits.push(`第一人称经历｜${line.slice(0, 40)}`)
   }
   return [...new Set(hits)].slice(0, 3)
 }
@@ -293,7 +346,7 @@ export function draftCheckRewriteNote(draft) {
       const fix = languageFixes[reminder.code]
       if (!fix) continue
       const detail = String(reminder.message || '').split('：').slice(1).join('：').trim()
-      if ((reminder.code === 'consulting_tone' || reminder.code === 'vague_case' || reminder.code === 'case_claim') && detail) hints.push(`${fix}。点名原文：${detail}`)
+      if ((reminder.code === 'consulting_tone' || reminder.code === 'vague_case' || reminder.code === 'case_claim' || reminder.code === 'experience_claim') && detail) hints.push(`${fix}。点名原文：${detail}`)
       else hints.push(fix)
     }
   }
@@ -570,6 +623,7 @@ const languageLabels = {
   ing_tail: '「正在 / 越来越」式尾句',
   avoid_copula: '少用「是」字句',
   case_claim: '来路不明的具体案例',
+  experience_claim: '来路不明的经历数量',
   no_concrete_support: '整篇通用判断',
   method_talk: '方法骨架 / 分发说明',
   opening_question: '开头第一句是问句',
@@ -616,6 +670,7 @@ const languageFixes = {
   connector_abuse: '删掉凑数三连、没人提出的反驳和「首先 / 其次 / 此外」这类书面连接词，用口语顺序讲',
   vague_case: '把没有主体的例子和来路不明的数字换成你自己经历过的具体事，或直接删掉',
   case_claim: '把没有主体的例子和来路不明的数字换成你自己经历过的具体事，或直接删掉',
+  experience_claim: '把「做过多少次、带过多少人」这类数字换成你真做过的那一件事，或者直接删掉数字',
   no_concrete_support: '补一个具体场景、数字或时间，让整篇有一个能落地的地方',
   method_talk: '把「拆成几块 / 裂变 / 多平台分发」换成一件具体的经历或判断，字数不要因此变少',
   consulting_tone: '改成跟熟人说话，删掉咨询腔和工程词',
@@ -673,6 +728,8 @@ function writingIssues(draft) {
   if (methodHits.length) add('method_talk', `正文在讲方法或分发骨架：${methodHits.join('、')}`, '', methodHits[0])
   const caseHits = caseClaimHits(draft?.body)
   if (caseHits.length) add('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`, '', caseHits[0])
+  const experienceHits = experienceClaimHits(draft?.body)
+  if (experienceHits.length) add('experience_claim', `正文出现自己的经历数量：${experienceHits.join('、')}`, '', experienceHits[0])
   const toneHits = consultingToneWords.filter(word => String(draft?.body || '').includes(word)).slice(0, 6)
   if (toneHits.length) add('consulting_tone', `正文出现咨询腔或工程词：${toneHits.join('、')}`, '', toneHits[0])
   const concessions = concessionHits(draft?.body)
@@ -884,6 +941,7 @@ const diagnosticSeverityOf = {
   no_concrete_support: 'medium',
   vague_case: 'medium',
   case_claim: 'medium',
+  experience_claim: 'medium',
   method_talk: 'medium',
   ai_tone_phrase: 'medium',
   consulting_tone: 'weak',

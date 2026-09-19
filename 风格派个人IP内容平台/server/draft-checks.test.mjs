@@ -345,6 +345,49 @@ test('真模型实测绕过词表的两种写法，现在要能挑出来', () =>
   assert.equal(issueItems(own).some(item => item.code === 'case_claim'), false)
 })
 
+test('编经历：自己的经历数量要拿出来让人确认', () => {
+  // 审计 25.6 的尾巴：「复盘过多少账号、改了几遍」这类经历数量两条旧规则都抳不住——
+  // 不可溯源数字闸门只认两位数以上或带单位的数字（个位数是故意放过的），
+  // case_claim 认的是案例人物与结果数字。于是「我复盘过 5 个账号」无人拦、无人提。
+  const reviewed = checkQuality({ ...baseDraft, body: '我复盘过 5 个账号，发现一个共同点：开头都在解释背景。' }, {})
+  const reviewedHit = issueItems(reviewed).find(item => item.code === 'experience_claim')
+  assert.ok(reviewedHit, '「复盘过 5 个账号」必须被挑出来')
+  assert.equal(reviewedHit.severity, 'warning', '只提醒，不拦停')
+  assert.match(reviewedHit.message, /经历数量/)
+  assert.match(reviewedHit.message, /复盘过/)
+
+  // 经历动作 + 量词，没有名词也认（「改了 8 遍」）。
+  const rewrites = checkQuality({ ...baseDraft, body: '这条稿子我改了 8 遍，最后才把开场那句删了。' }, {})
+  assert.ok(issueItems(rewrites).some(item => item.code === 'experience_claim'), '「改了 8 遍」必须被挑出来')
+
+  // 中文数字与估值写法照旧得认：不补这两条，把数字写成汉字、写成「几十」就能绕过。
+  const chinese = checkQuality({ ...baseDraft, body: '我带过三届学员，最难的从来不是选题。' }, {})
+  assert.ok(issueItems(chinese).some(item => item.code === 'experience_claim'), '中文数字也要认')
+  const vague = checkQuality({ ...baseDraft, body: '我复盘了几十个账号，问题都出在同一处。' }, {})
+  assert.ok(issueItems(vague).some(item => item.code === 'experience_claim'), '「几十」这类估值也要认')
+
+  // 审计里记下的两条真实原文（当时因为「词表拓下去会变噪声」而挂着）：
+  const auditedOne = checkQuality({ ...baseDraft, body: '我们复盘过大量IP账号，发现能持续更新的都有同一个习惯。' }, {})
+  assert.ok(issueItems(auditedOne).some(item => item.code === 'experience_claim'), '「复盘过大量IP账号」（审计原文）要能挑出来')
+  const auditedTwo = checkQuality({ ...baseDraft, body: '这一条文案改四遍，最后只留了开头那句。' }, {})
+  assert.ok(issueItems(auditedTwo).some(item => item.code === 'experience_claim'), '「文案改四遍」（审计原文）要能挑出来')
+
+  // 不能误伤：通用建议、结构说明、没有数量的经历。
+  const advice = checkQuality({ ...baseDraft, body: '先发 3 个账号试试，看哪个方向的数据更好。' }, {})
+  assert.equal(issueItems(advice).some(item => item.code === 'experience_claim'), false, '没有第一人称的通用建议不算你的经历')
+  const structure = checkQuality({ ...baseDraft, body: '把这条内容拆成 3 个部分，每部分只讲一件事。' }, {})
+  assert.equal(issueItems(structure).some(item => item.code === 'experience_claim'), false, '结构说明不算经历')
+  const adviceTwice = checkQuality({ ...baseDraft, body: '如果你也卡在这里，就把开场删了重写两次试试。' }, {})
+  assert.equal(issueItems(adviceTwice).some(item => item.code === 'experience_claim'), false, '叫读者去做的动作不算你的经历')
+  const noCount = checkQuality({ ...baseDraft, body: '我复盘过这个账号，问题就出在开头。' }, {})
+  assert.equal(issueItems(noCount).some(item => item.code === 'experience_claim'), false, '没有数量就不是数量声明')
+
+  // 同一句话只报一次：「我有个客户，改了 8 遍」归 case_claim，不归两条。
+  const both = checkQuality({ ...baseDraft, body: '我有个客户，一条稿子改了 8 遍才过。' }, {})
+  assert.ok(issueItems(both).some(item => item.code === 'case_claim'), '案例那条照旧要报')
+  assert.equal(issueItems(both).some(item => item.code === 'experience_claim'), false, '同一句话不重复报')
+})
+
 test('「第一反应」不是极限词；「全网第一」仍然是', () => {
   // 2026-09-20 真模型实测：正文里的「看到爆款，第一反应不是拆逻辑」
   // 被当成广告法极限词「第一」，质量门整条判 blocked、工作流进 needs_revision——一篇正常稿子被挡在发布链路外。
