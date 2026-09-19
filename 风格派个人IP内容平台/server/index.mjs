@@ -2038,6 +2038,23 @@ const server = createServer(async (request, response) => {
     }
     const draftArchiveMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/archive$/)
     if (draftArchiveMatch && request.method === 'POST') { const body = await readJson(request); const draft = owned('drafts', request).find(item => item.id === Number(draftArchiveMatch[1])); if (!draft) return send(response, 404, { error: '草稿不存在' }); if (body.archived !== undefined && typeof body.archived !== 'boolean') return send(response, 422, { error: 'archived 应为布尔值' }); draft.archived_at = body.archived === false ? null : new Date().toISOString(); draft.updated_at = new Date().toISOString(); await saveState('drafts'); return send(response, 200, draft) }
+    // 删除草稿：分两步，先归档再删。删除不可逆，所以门槛比归档高得多：
+    // 没归档的删不了（逼用户先点归档，点错一下还能撤销），
+    // 已确认 / 已发布 / 待拍摄的锁住，别的草稿派生自它的也不给删（删了变体会指向空处）。
+    const draftDeleteMatch = url.pathname.match(/^\/api\/drafts\/(\d+)$/)
+    if (draftDeleteMatch && request.method === 'DELETE') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftDeleteMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      if (!draft.archived_at) return send(response, 409, { error: '请先归档，再删除。删除不可撤销，多一道确认。', code: 'invalid_transition' })
+      if (draft.approval?.status === 'approved') return send(response, 409, { error: '已确认的草稿不能删除，请先撕回人工确认。', code: 'invalid_transition' })
+      if (draft.status === 'published' || draft.workflow_status === 'published') return send(response, 409, { error: '已发布的草稿不能删除。', code: 'invalid_transition' })
+      if (draft.workflow_status === 'ready_to_shoot') return send(response, 409, { error: '已进入拍摄安排的草稿不能删除，请先取消安排。', code: 'invalid_transition' })
+      const derived = state.drafts.filter(item => item.variant_of === draft.id)
+      if (derived.length) return send(response, 409, { error: `还有 ${derived.length} 条变体是从这条派生的，先删掉变体再删它。`, code: 'invalid_transition' })
+      state.drafts = state.drafts.filter(item => item.id !== draft.id)
+      await saveState('drafts')
+      return send(response, 200, { id: draft.id, deleted: true })
+    }
     const draftHistoryMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/history$/)
     if (draftHistoryMatch && request.method === 'GET') {
       const draft = owned('drafts', request).find(item => item.id === Number(draftHistoryMatch[1]))
