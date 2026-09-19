@@ -151,7 +151,7 @@ async function seed(owner, base) {
   assert.ok(profile.status === 200, `造档案失败（${owner.id}）：${profile.status} ${profile.text.slice(0, 200)}`)
   const review = await post(owner, '/api/profile/import', { content: `角色：${owner.mark}-role`, name: `${owner.mark}-档案.txt` }, base)
   assert.ok(review.status === 201, `造档案审核项失败（${owner.id}）：${review.status} ${review.text.slice(0, 200)}`)
-  const snapshot = await post(owner, '/api/performance-snapshots', { draft_id: draft.json[0]?.id, platform: '抖音', metrics: { 播放量: 1000, 点赞数: 50 }, status: 'confirmed' }, base)
+  const snapshot = await post(owner, '/api/performance-snapshots', { draft_id: draft.json[0]?.id, platform: '抖音', metrics: { 播放量: 1000, 点赞数: 50 }, raw_model_result: { note: `${owner.mark}-snapshot` }, status: 'confirmed' }, base)
   assert.ok(snapshot.status === 201, `造发布表现失败（${owner.id}）：${snapshot.status} ${snapshot.text.slice(0, 200)}`)
   const directory = await post(owner, '/api/sync-directories', { local_path: `C:/iso-${owner.mark}`, device_id: `iso-device-${owner.id}` }, base)
   assert.ok(directory.status === 201, `造同步目录失败（${owner.id}）：${directory.status} ${directory.text.slice(0, 200)}`)
