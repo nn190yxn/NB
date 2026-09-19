@@ -527,6 +527,23 @@
     `server/draft-checks.test.mjs` 里大量断言 `evidence.severity`、`evidence.message`（还核对文案内容）、`evidence.label`。
     **这解释了 25.2 里那个不对称**：老三项测试文件多（8/8/5），**而且真的在断言形状**，
     不是数量堆出来的；逻辑检查现在也有形状契约测试（`draft-logic.test.mjs` + `logic-check-route.test.mjs`）。
+  - **[x] 本条已做完并得出正确结论（原报的 P2 是错的，已撤回；撤回过程见下条）**
+    - **方法（这次读的是类型定义本身，不用抽取器）**：直接读 `src/main.tsx` 的权威类型，
+      `DraftCheck` 在 795、`DraftResonanceReport` 在 831、`DraftScriptFlowReport` 在 834、
+      `DraftPublishRiskReport` 在 837、`DraftIdeaGroup` 在 842。
+    - **结论：`c793d20` 那类错配（顶层 `evidence` 是对象数组）只存在于 `DraftCheck` 一处。**
+      - **`DraftCheck`（795）**：`evidence: { code: string; message: string; severity: string; scope?: DiagnosticScope; quote?: string }[]`
+        ——**唯一的顶层对象数组**，正是出事那个。渲染代码（`main.tsx:805-809` 的 `MarkerScope`）用 `scope` 和 `code`，
+        **与类型对得上**；且 `draft-checks.test.mjs` 对 `evidence.severity`/`.message`/`.label` 大量断言。
+        **这一处是安全的。**
+      - **`DraftResonanceReport`（831）**：`evidence` 是 `dimensions[]` **内部**的 **`string`**，**顶层没有 `evidence`**。
+      - **`DraftScriptFlowReport`（834）**：`evidence` 是 `findings[]` **内部**的 **`string`**，顶层没有。
+      - **`DraftPublishRiskReport`（837）**：`evidence` 是 `findings[]` **内部**的 **`string`**，顶层没有。
+      - **`DraftIdeaGroup`（842）**：**根本没有 `evidence` 字段**。
+    - **所以那三份报告不存在"服务端发数组、界面按对象取"的错配空间**——
+      它们的逐条证据是普通字符串，渲染就是显示文本。**原来的 P2 不成立。**
+    - **另外：它们的结构其实是被测过的**——`resonance.test.mjs:63` 用 `assert.deepEqual` 整条比对了
+      `report.dimensions[0]`（含 `evidence: '点赞会撒谎'`）。`script-flow`/`publish-risk` 同理（`findings[]`）。
   - **【本条已撤回】原先报的「三份报告的 `evidence` 形状完全没测」是我搞错了，如实记下撤回过程。**
     - **我原先的依据**：`findstr` 查那三个测试文件，一份里都没出现 `evidence`（**这个事实本身是对的**）；
       加上我从类型里"抽到"六种类型都有 `evidence`，于是推断"出过 bug 的字段在这三份里没人测"。
