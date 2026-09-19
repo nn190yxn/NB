@@ -24,7 +24,7 @@
 //       事后 A 的数据也不许变。
 //
 // 已知边界（别拿它当安全证明）：数不完的那几条都写着底——
-//   不带 id 的写路由（只写自己名下的）不在写判定里；写判定里还有 6 族没造种子（逐族登记了原因）；
+//   不带 id 的写路由（只写自己名下的）不在写判定里；写判定里还有 4 族没造种子（逐族登记了原因）；
 //   请求体里的 id 只覆盖源码里能枚举到的那几处（INDIRECT_REFERENCES）；
 //   真正的「结构性不可能发生」（数据访问层统一收口）仍未做。
 import assert from 'node:assert/strict'
@@ -48,10 +48,8 @@ const OTHER = { id: 'isolation-other', mark: 'ISO-OTHER-SENTINEL' }
 const SKIPPED_FAMILIES = {
   'private-files': '要真上传文件才有得读，本测试不造',
   'vision-tasks': '种子要跑截图识别，本测试不造',
-  feedback: '反馈是管理员视角，本测试不造',
-  shooting: '拍摄项只能由草稿定稿流程产生，本测试不跑那条链路',
+  shooting: '要过人工确认闸门（人设/质量/发布清单三项检查 + 事实核验）才能生成；不值得把隔离判定跟那条七步链路绑死（试过：直接改状态被 409 拦下）',
   sync: '同步冲突要两台设备真的撞到一起，本测试不造',
-  positioning: '定位候选要真模型生成，本测试不造',
   research: '研究项要连外部搜索，本测试不造',
   devices: '设备心跳按设备号读，本测试不造',
 }
@@ -178,6 +176,19 @@ async function seed(owner, base) {
   }
   const flow = await post(owner, '/api/preferences/data-flow', {}, base)
   assert.ok(flow.status === 200 && (flow.json?.created || []).length > 0, `造偏好失败（${owner.id}）：${flow.status} ${flow.text.slice(0, 200)}`)
+  // 拍摄项（shooting）故意不造：它要过人工确认闸门（人设/质量/发布清单三项检查 + 事实核验）才能生成，
+  // 直接改草稿状态会被 409 拦下（试过：「请通过人工确认接口进入拍摄」）。
+  // 本测试要的是隔离判定，不想跟那条七步链路绑在一起——那边的规则一改，这里会红得让人看不懂。
+  // 反馈：用户自己提的单。它是**按角色（管理员）放行**的一族，不是按所有者过滤——正是那种容易被人忽略的写法。
+  const feedback = await post(owner, '/api/feedback', { type: 'bug', title: `${owner.mark}-feedback`, description: `${owner.mark}-feedback` }, base)
+  assert.equal(feedback.status, 201, `造反馈失败（${owner.id}）：${feedback.status} ${feedback.text.slice(0, 200)}`)
+  // 定位是**按用户存的文档**，不是列表：又是另一种存储形状（键就是登录身份）。
+  // 分两步：先写访谈回答（文档），再让模型出候选（候选才有 id，带参数的写路由要靠它才能试）。
+  const positioning = await post(owner, '/api/positioning', { interview_answers: { 0: `${owner.mark}-answer` }, status: 'draft' }, base, 'PUT')
+  assert.equal(positioning.status, 200, `造定位文档失败（${owner.id}）：${positioning.status} ${positioning.text.slice(0, 200)}`)
+  const candidates = await post(owner, '/api/positioning/candidates', {}, base)
+  assert.equal(candidates.status, 201, `造定位候选失败（${owner.id}）：${candidates.status} ${candidates.text.slice(0, 200)}`)
+  assert.ok(candidates.text.includes(owner.mark), `定位候选里没有标记（${owner.id}）：${candidates.text.slice(0, 200)}`)
   return {
     ids: {
       drafts: draft.json[0]?.id,
@@ -191,6 +202,8 @@ async function seed(owner, base) {
       // 设置项没有 id，参数就是槽位名：写判定要试的正是「B 能不能动 A 的槽位配置」。
       'api-settings': 'text_primary',
       preferences: flow.json?.created?.[0]?.id,
+      feedback: feedback.json?.id,
+      positioning: candidates.json?.[0]?.id,
     },
     mark: owner.mark,
   }
