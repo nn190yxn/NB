@@ -6,7 +6,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { draftLogicPrompt, logicSignalSpans, parseLogicFindings, splitSentences } from './draft-logic.mjs'
+import { logicCheckSystemPrompt, logicCheckVariables, logicSignalSpans, parseLogicFindings, splitSentences } from './draft-logic.mjs'
 
 // 验收用的真稿子。它的毛病是明确的：提了「怕得罪人」「表情不自然」，
 // 但后面给的办法（切素材）治的是「不知道说什么」。那两个问题从头到尾没人管。
@@ -52,17 +52,17 @@ test('圈范围：平铺直叙的稿子不送模型查', () => {
 })
 
 test('提示词：把两个问题都问死，并逼模型引用原句', () => {
-  const spans = logicSignalSpans(realDraft)
-  const prompt = draftLogicPrompt(realDraft, spans)
-  assert.match(prompt.system, /逐字引用/)
-  assert.match(prompt.system, /引用不到原句就不要报/)
-  assert.match(prompt.system, /最多报两条/)
+  const system = logicCheckSystemPrompt.join('\n')
+  assert.match(system, /逐字引用/)
+  assert.match(system, /引用不到原句就不要报/)
+  assert.match(system, /最多报两条/)
   // 短视频本来就靠跳跃制造节奏，这条不写模型会把所有省略都判成毛病。
-  assert.match(prompt.system, /省略和跳跃/)
-  // 圈出来的句子要真的出现在给模型的资料里，否则规则白圈了。
-  assert.match(prompt.user, /会不会得罪人/)
-  assert.match(prompt.user, /你需要的是/)
-  assert.match(prompt.user, /正文：/)
+  assert.match(system, /省略和跳跃/)
+  // 规则圈出来的句子必须真的交给模型，否则规则白圈了。
+  const vars = logicCheckVariables(realDraft)
+  assert.equal(vars.body, realDraft)
+  assert.ok(vars.problems.some(text => /会不会得罪人/.test(text)))
+  assert.ok(vars.remedies.some(text => /你需要的是/.test(text)))
 })
 
 test('解析：编造的引用必须被丢掉', () => {

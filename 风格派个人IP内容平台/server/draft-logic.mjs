@@ -43,8 +43,9 @@ export function logicSignalSpans(body) {
 
 export const logicCheckCode = 'problem_remedy_mismatch'
 
-export function draftLogicPrompt(body, spans = logicSignalSpans(body)) {
-  const system = [
+// 提示词和变量分开交，跟项目里其他 skill 一个形状：
+// generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(body))。
+export const logicCheckSystemPrompt = [
     '你在给一条已经写好的短视频口播稿挑逻辑毛病，只挑一种：',
     '作者提出了问题，但后面给出的办法，治的是另一个问题。',
     '',
@@ -58,20 +59,11 @@ export function draftLogicPrompt(body, spans = logicSignalSpans(body)) {
     '只输出 JSON，不要解释，不要代码块围栏：',
     '{"findings":[{"problem":"没人回应的问题，逐字引用原句","remedy":"作者给的办法治的是什么，一句话","explain":"为什么说这个办法治的不是它，一句话"}]}',
     '没有问题就输出 {"findings":[]}',
-  ].join('\n')
+]
 
-  const user = [
-    '正文：',
-    body,
-    '',
-    '正文里提出问题的句子：',
-    spans.problems.map(text => `- ${text}`).join('\n') || '（没找到）',
-    '',
-    '正文里给出办法的句子：',
-    spans.remedies.map(text => `- ${text}`).join('\n') || '（没找到）',
-  ].join('\n')
-
-  return { system, user }
+// 正文和圈出来的两类句子一起交给模型。规则已经缩过范围，模型只需要在圈内判断。
+export function logicCheckVariables(body, spans = logicSignalSpans(body)) {
+  return { body, problems: spans.problems, remedies: spans.remedies }
 }
 
 // 从可能带代码块或前后废话的回复里抠出 JSON。模型经常不听话，这里宽容一点。

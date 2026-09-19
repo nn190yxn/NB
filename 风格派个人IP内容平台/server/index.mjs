@@ -11,6 +11,7 @@ import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterminis
 import { deconstructSystemPrompt, parseDeconstruction } from './deconstruct.mjs'
 import { claimsSystemPrompt, parseClaims } from './claims.mjs'
 import { contentFormSystemPrompt, parseFormJudgement } from './content-form.mjs'
+import { logicCheckSystemPrompt, logicCheckVariables, logicSignalSpans, parseLogicFindings } from './draft-logic.mjs'
 import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCollections, saveMysqlState, saveUserDocs, collectionNames, userDocNames } from './mysql.mjs'
 import { emptyPublicApiConfigs, emptyPublicRedfoxConfig, parseApiConfigKey, publicApiConfig, publicRedfoxConfig, runtimeApiConfig, runtimeRedfoxConfig, updateApiConfig, updateRedfoxConfig } from './api-settings.mjs'
 import { publicPrivateFile, readPrivateFile, storePrivateFile, validatePrivateFile } from './private-files.mjs'
@@ -1291,6 +1292,22 @@ const server = createServer(async (request, response) => {
         return send(response, 200, parseClaims(content))
       } catch (error) {
         return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '主张提炼失败，请检查模型配置并重试。', retryable: true })
+      }
+    }
+    // 逻辑检查：只查一种毛病——提了问题，但后文给的办法治的是另一件事。
+    // 规则先圈范围：圈不出「既有问题又有办法」就干脆不调模型，省一次调用。
+    if (url.pathname === '/api/skills/logic-check' && request.method === 'POST') {
+      const body = await readJson(request)
+      const draftBody = String(body.body || '').trim().slice(0, 8000)
+      if (!draftBody) return send(response, 422, { error: '正文不能为空' })
+      const spans = logicSignalSpans(draftBody)
+      // 没有办法句就无从判断治没治错病，这里直接返回空，不花这一次调用。
+      if (!spans.shouldCheck) return send(response, 200, { findings: [], checked: false })
+      try {
+        const content = await generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(draftBody, spans))
+        return send(response, 200, { findings: parseLogicFindings(content, draftBody), checked: true })
+      } catch (error) {
+        return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '逻辑检查失败，请检查模型配置并重试。', retryable: true })
       }
     }
     if (url.pathname === '/api/skills/deconstruct' && request.method === 'POST') {
