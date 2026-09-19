@@ -147,6 +147,14 @@ export async function startGenerationMock({ adaptBody } = {}) {
       const form = topic.includes('长文') ? '长文' : topic.includes('长视频') ? '长视频' : '短视频'
       return reply(JSON.stringify({ form, reason: `「${topic}」只需要把一个判断讲清楚，${form}就够` }))
     }
+    if (system.includes('挑逻辑毛病')) {
+      const input = JSON.parse(last)
+      // 圈出来的第一句就是正文里的原句，拿它当引用必然能通过闸门。
+      const quote = (input.problems || [])[0] || ''
+      // 「编造引用」用来测闸门：模型报了一句正文里根本没有的话，必须被丢掉。
+      if (String(input.body).includes('编造引用')) return reply(JSON.stringify({ findings: [{ problem: '这句正文里根本没有', explain: '模型自己以为的问题' }] }))
+      return reply(JSON.stringify({ findings: [{ problem: quote, remedy: '把念头切成碎片', explain: '治的是不知道说什么' }] }))
+    }
     if (system.includes('主张提炼')) {
       const text = JSON.parse(last).text
       // 「单一主张」用来测不触发提示的那条路径。
