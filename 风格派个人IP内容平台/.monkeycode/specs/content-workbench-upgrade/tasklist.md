@@ -527,21 +527,26 @@
     `server/draft-checks.test.mjs` 里大量断言 `evidence.severity`、`evidence.message`（还核对文案内容）、`evidence.label`。
     **这解释了 25.2 里那个不对称**：老三项测试文件多（8/8/5），**而且真的在断言形状**，
     不是数量堆出来的；逻辑检查现在也有形状契约测试（`draft-logic.test.mjs` + `logic-check-route.test.mjs`）。
-  - **【P2 · 覆盖缺口】三份报告的 `evidence` 形状完全没人测**（2026-09-19 查实）
-    - **方法（确定性的，不靠推断）**：`findstr /C:"evidence"` 直接查那三个测试文件，
-      **一份里都没有出现 `evidence` 这个词**——
-      `server/resonance.test.mjs`、`server/script-flow.test.mjs`、`server/publish-risk.test.mjs`。
-    - **含义**：`evidence` 正是 `c793d20` 出事的那类字段（服务端发字符串数组、界面按对象取，
-      渲染不出来而 `tsc` 拦不住）。**这个字段在这三份报告里也存在，而它们的形状没有任何测试盯着。**
-    - **注意措辞**：**这是"没测"，不是"有问题"。** 我没有核出这三份的 `evidence` 现在到底对不对——
-      只核出**没有人检查过**。**别把覆盖缺口说成已确认的 bug。**
-    - **建议**：照 `draft-logic.test.mjs` 那条"形状契约"的做法，给这三份各补一条
-      ——断言 `evidence` 是对象数组、每条含界面要的字段，且原句同时出现在
-      `quote` 和 `message` 里（通用列表显示的是 `message`，这条最要紧）。
-      改动量小（各一条测试），**收益是把这一整类复发风险按到这里**。
-    - **对照**：草稿检查这一族不是这样——`server/draft-checks.test.mjs` 里
-      `evidence.severity` / `evidence.message` / `evidence.label` 被大量断言，
-      **所以老三项是"测到位了"，这三份是"根本没测"，两者不能混为一谈。**
+  - **【本条已撤回】原先报的「三份报告的 `evidence` 形状完全没测」是我搞错了，如实记下撤回过程。**
+    - **我原先的依据**：`findstr` 查那三个测试文件，一份里都没出现 `evidence`（**这个事实本身是对的**）；
+      加上我从类型里"抽到"六种类型都有 `evidence`，于是推断"出过 bug 的字段在这三份里没人测"。
+    - **错在哪**：**"类型里有 `evidence`"这一步是错的。** 我的字段抽取脚本会把**嵌套类型拍平**——
+      `main.tsx:831` 一行写到底：
+      ```ts
+      type DraftResonanceReport = { dimensions: { id: string; label: string; theory: string; verdict: string; evidence: string; detail: string }[]; ... }
+      ```
+      **`evidence` 是 `dimensions[]` **里面**的字段，报告顶层没有 `evidence`。**
+      同理 `id`/`label`/`theory`/`verdict`/`detail` 也都是维度字段，被我误当成报告顶层字段了。
+    - **所以这个 P2 不成立**：三份报告里每维度的 `evidence` 是**普通字符串**（类型写明 `string`），
+      **不存在 `c793d20` 那种"服务端发数组、界面按对象取"的错配空间**。
+      那个 bug 出在 **`DraftCheck`**（它的 `evidence` 确实是对象数组，且**已被 `draft-checks.test.mjs` 大量断言**）。
+    - **教训（今日第四次同源错误）**：**抽取工具"拍平"了嵌套结构，我没核对就信了它。**
+      前三次是凭类型反推、编接口名、漏登记清单；这次是**信了一个我没验过的解析结果**。
+      **共同点都是：拿二手结论当一手事实，跳过"回代码看一眼"。**
+      **留下的规矩：脚本抽出来的结构，至少要挑一处回原文件核对，尤其是它支持的结论很重的时候。**
+    - **顺带修正**：上面那份"抽到的字段名"清单**不能用在嵌套类型上**——
+      `DraftResonanceReport`/`DraftScriptFlowReport`/`DraftPublishRiskReport` 的字段清单需要重新按顶层核对。
+      但那属于"重做 25.1"，本条不假装已经做对。
   - **仍未做**：`DraftIdeaGroup`、`TopicItem` 的形状比对。
   - **已完成一次（2026-09-19，Monkeycode）**：核了 `DraftCheck` 这条线。`evidence` 的形状 bug 已在 `c793d20` 修掉；`report` 字段逻辑检查不产出（`item.report` 为 undefined），界面那几段 `item.report &&` 会自然跳过，不会报错——**这条是安全的**。结论：`DraftCheck` 线上界面与实现一致。
   - 顺带纠正了一处我自己写错的判断（原 22.1，已改）：通用列表本来就渲染 `message` 和 `MarkerScope`，**不存在「用户看不出效果」**。教训：**判断界面缺口前必须先读渲染代码，不能只看类型声明反推。**
