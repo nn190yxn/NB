@@ -322,12 +322,22 @@ const aiTonePatterns = [
   /与其说[^。！？\n]{1,20}不如说/,
   /真正的[^。！？\n]{0,12}是/,
 ]
+// 「不是 X，是 Y」的短式：口播稿几乎都省掉「而」，上面那条 /不是…而是/ 认不出来。
+// 但这一式人类作者也高频用，源技能的误伤警告写着「一次是正常修辞」（鲁迅、李敖、罗翔都用），
+// 所以这里只收集，够不够密度由调用方判。
+const flipShortPattern = /不是[^。！？\n]{1,20}[，,]\s*是[^。！？\n]{1,20}/g
+// 源技能给的阈值是「800 字内 3 次以上」。长文按同一密度换算，避免 3000 字的文章出现 3 次就被误报。
+const flipDensityThreshold = body => Math.max(3, Math.ceil(String(body || '').length / 800 * 3))
 const vagueCasePatterns = [/某某/, /某人/, /有个人/, /有个朋友/, /有位(朋友|学员|客户|同事)/]
 const concreteSignalPatterns = [/[0-9０-９]/, /我/, /(昨天|今天|上周|上个月|去年|当时|那天|前几天)/, /(客户|学员|同事|评论区|私信|直播|现场|后台|群里)/]
 
 function aiToneHits(body) {
   const text = String(body || '')
   return aiTonePatterns.map(pattern => text.match(pattern)?.[0]).filter(Boolean).map(hit => hit.slice(0, 14))
+}
+
+function flipShortHits(body) {
+  return [...String(body || '').matchAll(flipShortPattern)].map(match => match[0].slice(0, 16))
 }
 
 function vagueCaseHits(body) {
@@ -612,6 +622,10 @@ function writingIssues(draft) {
   if (leakHits.length) add('format_leak', `正文混入结构骨架或标记：${leakHits.join('、')}`, '删掉结构说明、占位符与其他平台建议，只留给读者看的正文', leakHits[0])
   const aiToneList = aiToneHits(draft?.body)
   if (aiToneList.length) add('ai_tone_phrase', `正文出现升华式句式：${aiToneList.join('、')}`, '', aiToneList[0])
+  // 短式翻转补齐：口播稿基本不写「而」，只靠上面那条正则会整类漏判。
+  // 密度不够就不报——一次翻转是正常修辞，不是 AI 味。
+  const flips = flipShortHits(draft?.body)
+  if (!aiToneList.length && flips.length >= flipDensityThreshold(draft?.body)) add('ai_tone_phrase', `正文反复用「不是X，是Y」翻转 ${flips.length} 次：${flips[0]}`, '', flips[0])
   const vagueList = vagueCaseHits(draft?.body)
   if (vagueList.length) add('vague_case', `正文出现没有主体的案例：${vagueList.join('、')}`, '', vagueList[0])
   if (lacksConcreteSupport(draft?.body)) add('no_concrete_support', '正文没有具体场面、人、数字或时间，整篇是通用判断', '', openingSentence(draft?.body), true)

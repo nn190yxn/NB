@@ -125,3 +125,29 @@ test('同义词替换：或者说叠也可以叫命中，单次或者说不命�
   assert.equal(hasCode(miss, 'synonym_swapping'), false)
 })
 
+// 口播稿写「不是X，是Y」（省掉「而」），原来的正则会整类漏判。
+test('短式翻转：三次命中，两次不命中', () => {
+  const hit = '你要做的不是老师，是那个让人停一下的东西。这不是忽悠，是用反常识抢注意力。这不是方法，是认知没对上。'
+  assert.equal(hasCode(hit, 'ai_tone_phrase'), true)
+  assert.ok(hit.includes(quoteOf(hit, 'ai_tone_phrase')))
+
+  // 两次不够：源技能的误伤警告写着「一次是正常修辞」，阈值是 800 字内 3 次以上。
+  const twice = '你要做的不是老师，是那个让人停一下的东西。这不是忽悠，是用反常识抢注意力。把画面给足。'
+  assert.equal(hasCode(twice, 'ai_tone_phrase'), false)
+
+  // 带「而」的长式仍走原来那条正则，不受密度阈值影响。
+  const strict = '这不是方法的问题，而是认知的问题。'
+  assert.equal(hasCode(strict, 'ai_tone_phrase'), true)
+  assert.ok(strict.includes(quoteOf(strict, 'ai_tone_phrase')), '引文必须是原文里真实存在的片段')
+})
+
+// 真实稿回归：629 字里 2 处短式翻转，低于阈值，修完也不该报。
+// 记下来是因为修前我用它当「漏判」例子时数成了 4 处；实际只有 2 处，结论必须跟着改。
+test('真实口播稿：629 字里 2 处翻转不够密度，修完仍不报', () => {
+  const body = '你要做的不是老师，是那个让人停一下的东西。把手里那堆完整的素材敲碎。观众不需要你教育他们，他们需要的是被理解。这不是忽悠，是用反常识去抢注意力。别喂观众完整的观点。'
+  assert.equal(hasCode(body, 'ai_tone_phrase'), false)
+  // 同一段多加一处翻转就到了阈值，说明卡的是密度而不是漏判。
+  const crossed = `${body}这不是方法，是认知没对上。`
+  assert.equal(hasCode(crossed, 'ai_tone_phrase'), true)
+})
+
