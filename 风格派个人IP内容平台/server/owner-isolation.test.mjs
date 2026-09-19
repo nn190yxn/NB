@@ -17,11 +17,12 @@
 //       2) 再以 B 的身份请求同一条：**任何 A 的标记都不许出现**；
 //       3) 路径里带了 A 的真 id 的（详情类）：A 拿到 200，B 就必须不是 200。
 //   写：用 B 的身份对 A 的资源发写请求（带 A 的真 id），**不许被接受**（必须 ≥400），
+//       且**拒绝的文案里不许出现 A 的标记**（2026-09-20 补：拒绝也分干净不干净，报错里带出别人的数据一样是泄），
 //       并且事后以 A 的身份重新读一遍，**A 的数据必须一字不差**。
 //
 // 已知边界（别拿它当安全证明）：只覆盖种子造得出的资源族，其余族在 SKIPPED_FAMILIES 里逐条登记原因，
-// 新增一族会红；不带 id 的写路由（只写自己名下的）不在写判定里；真正的「结构性不可能发生」
-// （数据访问层统一收口）仍未做。
+// 新增一族会红；不带 id 的写路由（只写自己名下的）不在写判定里；间接引用（拿 A 的 id 去拼自己的东西）也没判；
+// 真正的「结构性不可能发生」（数据访问层统一收口）仍未做。
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -46,17 +47,18 @@ const SKIPPED_FAMILIES = {
   feedback: '反馈是管理员视角，本测试不造',
   shooting: '拍摄项只能由草稿定稿流程产生，本测试不跑那条链路',
   sync: '同步冲突要两台设备真的撞到一起，本测试不造',
-  'api-settings': '设置项按 slot 读，本测试不造',
   positioning: '定位候选要真模型生成，本测试不造',
   research: '研究项要连外部搜索，本测试不造',
-  preferences: '偏好由「终稿回流」产生，要求草稿有两版可比，本测试不跑那条链路',
   devices: '设备心跳按设备号读，本测试不造',
 }
 
 // 这几条列表路由必须双向都看得见：B 看得见 B 的、看不见 A 的。
 // 它们也是「防整套测试空过」的探针——路由坏了、种子没生效，这里会先红。
-const LIST_ROUTES_WITH_BOTH = ['/api/drafts', '/api/materials', '/api/memories', '/api/structures', '/api/topics', '/api/performance-snapshots', '/api/sync-directories', '/api/profile/reviews']
-const ANTI_EMPTY_MIN_ROUTES = 8
+// 能进来的前提：响应里带自己那一行的 id。设置项（api-settings）按 slot 读、没有 id 字段，所以只能进指纹比对。
+const LIST_ROUTES_WITH_BOTH = ['/api/drafts', '/api/materials', '/api/memories', '/api/structures', '/api/topics', '/api/performance-snapshots', '/api/sync-directories', '/api/profile/reviews', '/api/preferences']
+// 「B 改没改动 A 的东西」要比对的路由：除了上面那张表，另加没有 id 字段、但历史上就是因「忘了过滤」翻过车的设置项。
+const FINGERPRINT_EXTRA = ['/api/api-settings']
+const ANTI_EMPTY_MIN_ROUTES = 10
 
 function freshDataFile(tag) {
   const file = join(mkdtempSync(join(tmpdir(), `owner-isolation-${tag}-`)), 'data.json')
@@ -155,6 +157,18 @@ async function seed(owner, base) {
   assert.ok(snapshot.status === 201, `造发布表现失败（${owner.id}）：${snapshot.status} ${snapshot.text.slice(0, 200)}`)
   const directory = await post(owner, '/api/sync-directories', { local_path: `C:/iso-${owner.mark}`, device_id: `iso-device-${owner.id}` }, base)
   assert.ok(directory.status === 201, `造同步目录失败（${owner.id}）：${directory.status} ${directory.text.slice(0, 200)}`)
+  // 设置项：显示出来的是 Base URL 和模型名，所以标记放这两个字段里。
+  // 标记不能放主机名：域名过 URL 解析会被小写化，标记变成另一个字符串，读判定就永远看不见它。
+  const apiSetting = await post(owner, '/api/api-settings/text_primary', { api_key: 'sk-iso-test-key', base_url: 'https://api.example.com/v1', model: `${owner.mark}-model`, enabled: true }, base, 'PUT')
+  assert.equal(apiSetting.status, 200, `造设置项失败（${owner.id}）：${apiSetting.status} ${apiSetting.text.slice(0, 200)}`)
+  // 偏好：数据回流那条路只认「同一平台、至少两条已确认、带 views 的表现数据」。
+  // 没用「终稿回流」那条（要求草稿有两版可比，跑起来重多了）。平台名里带标记，偏好这一行才进得了标记判定。
+  for (const views of [1000, 10]) {
+    const extra = await post(owner, '/api/performance-snapshots', { draft_id: draft.json[0]?.id, platform: `${owner.mark}-抖音`, metrics: { views }, status: 'confirmed' }, base)
+    assert.ok(extra.status === 201, `造同类发布表现失败（${owner.id}）：${extra.status} ${extra.text.slice(0, 200)}`)
+  }
+  const flow = await post(owner, '/api/preferences/data-flow', {}, base)
+  assert.ok(flow.status === 200 && (flow.json?.created || []).length > 0, `造偏好失败（${owner.id}）：${flow.status} ${flow.text.slice(0, 200)}`)
   return {
     ids: {
       drafts: draft.json[0]?.id,
@@ -165,15 +179,18 @@ async function seed(owner, base) {
       profile: review.json?.id,
       'performance-snapshots': snapshot.json?.id,
       'sync-directories': directory.json?.id,
+      // 设置项没有 id，参数就是槽位名：写判定要试的正是「B 能不能动 A 的槽位配置」。
+      'api-settings': 'text_primary',
+      preferences: flow.json?.created?.[0]?.id,
     },
     mark: owner.mark,
   }
 }
 
-// 一个账号名下五类数据的完整快照（用于「B 改没改动 A 的东西」）。
+// 一个账号名下各类数据的完整快照（用于「B 改没改动 A 的东西」）。
 async function fingerprint(owner, base) {
   const parts = []
-  for (const path of LIST_ROUTES_WITH_BOTH) parts.push((await getAs(owner, path, base)).text)
+  for (const path of [...LIST_ROUTES_WITH_BOTH, ...FINGERPRINT_EXTRA]) parts.push((await getAs(owner, path, base)).text)
   return parts.join('\n')
 }
 
@@ -241,6 +258,7 @@ test('别人的东西改不动：带参数的写路由逐条用 B 的身份试�
   const before = await fingerprint(OWNER, base)
   const skipped = new Set()
   const accepted = []
+  const leakedInReason = []
   let exercised = 0
 
   for (const route of routes) {
@@ -249,11 +267,14 @@ test('别人的东西改不动：带参数的写路由逐条用 B 的身份试�
     exercised += 1
     const target = patternToUrl(route.pattern, id)
     const response = await fetch(`${base}${target}`, { method: route.method, headers: headersFor(OTHER), ...(route.method === 'DELETE' ? {} : { body: '{}' }) })
-    if (response.status < 400) accepted.push(`${route.method} ${target} → ${response.status} ${(await response.text()).slice(0, 140)}`)
+    const text = await response.text()
+    if (response.status < 400) accepted.push(`${route.method} ${target} → ${response.status} ${text.slice(0, 140)}`)
+    if (text.includes(mine.mark)) leakedInReason.push(`${route.method} ${target} → ${response.status} ${text.slice(0, 140)}`)
   }
 
   assert.ok(exercised >= 5, `只试了 ${exercised} 条写路由——种子或枚举没生效，这条等于空转`)
   assert.deepEqual(accepted, [], `B 对 A 的资源发写请求，服务端没拒绝：\n${accepted.join('\n')}`)
+  assert.deepEqual(leakedInReason, [], `B 被拒了，但拒绝的文案里带出了 A 的数据：\n${leakedInReason.join('\n')}`)
   assert.equal(await fingerprint(OWNER, base), before, 'B 的写请求改动了 A 的数据')
   assertCoverageDecided(skipped)
   console.log(JSON.stringify({ event: 'owner_isolation_write', patternWriteRoutes: routes.length, exercised, skippedFamilies: [...skipped].sort() }))
