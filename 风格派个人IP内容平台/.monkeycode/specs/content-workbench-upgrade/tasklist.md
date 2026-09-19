@@ -527,9 +527,21 @@
     `server/draft-checks.test.mjs` 里大量断言 `evidence.severity`、`evidence.message`（还核对文案内容）、`evidence.label`。
     **这解释了 25.2 里那个不对称**：老三项测试文件多（8/8/5），**而且真的在断言形状**，
     不是数量堆出来的；逻辑检查现在也有形状契约测试（`draft-logic.test.mjs` + `logic-check-route.test.mjs`）。
-  - **未确认（不要当成通过了）**：`DraftResonanceReport`、`DraftScriptFlowReport`、`DraftPublishRiskReport`
-    这三份的 `evidence` 形状**没核**——我的检索输出被截断，没有逐份确认它们的测试是否断言了
-    `evidence` 的元素结构（是对象还是字符串）。**这三份要单独看，不能因为老三项没问题就默认它们没问题。**
+  - **【P2 · 覆盖缺口】三份报告的 `evidence` 形状完全没人测**（2026-09-19 查实）
+    - **方法（确定性的，不靠推断）**：`findstr /C:"evidence"` 直接查那三个测试文件，
+      **一份里都没有出现 `evidence` 这个词**——
+      `server/resonance.test.mjs`、`server/script-flow.test.mjs`、`server/publish-risk.test.mjs`。
+    - **含义**：`evidence` 正是 `c793d20` 出事的那类字段（服务端发字符串数组、界面按对象取，
+      渲染不出来而 `tsc` 拦不住）。**这个字段在这三份报告里也存在，而它们的形状没有任何测试盯着。**
+    - **注意措辞**：**这是"没测"，不是"有问题"。** 我没有核出这三份的 `evidence` 现在到底对不对——
+      只核出**没有人检查过**。**别把覆盖缺口说成已确认的 bug。**
+    - **建议**：照 `draft-logic.test.mjs` 那条"形状契约"的做法，给这三份各补一条
+      ——断言 `evidence` 是对象数组、每条含界面要的字段，且原句同时出现在
+      `quote` 和 `message` 里（通用列表显示的是 `message`，这条最要紧）。
+      改动量小（各一条测试），**收益是把这一整类复发风险按到这里**。
+    - **对照**：草稿检查这一族不是这样——`server/draft-checks.test.mjs` 里
+      `evidence.severity` / `evidence.message` / `evidence.label` 被大量断言，
+      **所以老三项是"测到位了"，这三份是"根本没测"，两者不能混为一谈。**
   - **仍未做**：`DraftIdeaGroup`、`TopicItem` 的形状比对。
   - **已完成一次（2026-09-19，Monkeycode）**：核了 `DraftCheck` 这条线。`evidence` 的形状 bug 已在 `c793d20` 修掉；`report` 字段逻辑检查不产出（`item.report` 为 undefined），界面那几段 `item.report &&` 会自然跳过，不会报错——**这条是安全的**。结论：`DraftCheck` 线上界面与实现一致。
   - 顺带纠正了一处我自己写错的判断（原 22.1，已改）：通用列表本来就渲染 `message` 和 `MarkerScope`，**不存在「用户看不出效果」**。教训：**判断界面缺口前必须先读渲染代码，不能只看类型声明反推。**
