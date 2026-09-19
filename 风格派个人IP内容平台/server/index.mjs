@@ -287,7 +287,11 @@ async function runLogicCheck(request, draft) {
   // 圈不出「既有问题、又有办法」的段落，就无从判断治没治错病。
   // 这一格直接放行，不花这次调用——这是设计里省钱的那道闸门。
   if (!spans.shouldCheck) {
-    return { status: 'passed', score: null, dimensions: {}, evidence: [], findings: [], suggestions: [], reminders: ['正文里没有「提了问题又给了办法」的段落，这次没有可查的地方。'], draft_version: draftVersion, checked_at: new Date().toISOString() }
+    // 这一支必须把「没查」说出来。
+    // 原来只说 reminders，而界面不渲染 reminders（只渲染 evidence / suggestions / report），
+    // 结果用户只看到状态是「通过」——把「没查」读成了「查过了」。
+    // 假阴性比假阳性危险，所以放在 suggestions 这个真会显示的字段里。
+    return { status: 'passed', score: null, dimensions: {}, evidence: [], findings: [], suggestions: ['本次没有检查：正文里找不到「提了问题、又给了办法」的段落，所以没有可对照的地方。'], reminders: [], draft_version: draftVersion, checked_at: new Date().toISOString() }
   }
   const content = await generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(draftBody, spans))
   const findings = parseLogicFindings(content, draftBody)
