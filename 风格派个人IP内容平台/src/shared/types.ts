@@ -2,7 +2,8 @@ export type StrategyLayer = 'reach' | 'trust' | 'conversion'
 
 export type CapabilityId = 'topic_matrix' | 'topic_evaluate' | 'hook_generate' | 'draft_generate' | 'platform_adapt' | 'persona_check' | 'quality_gate' | 'publish_checklist' | 'content_postmortem' | 'memory_candidate'
 export type WorkflowStatus = 'candidate' | 'evaluated' | 'approved' | 'in_production' | 'completed' | 'needs_revision' | 'draft' | 'hooks_ready' | 'content_ready' | 'persona_checked' | 'quality_checked' | 'publish_ready' | 'ready_to_shoot' | 'published'
-export type CheckStatus = 'passed' | 'warning' | 'blocked'
+// skipped = 这一项没查（没有可对照的内容），跟 passed（查过、没问题）分开，避免把假阴性读成安全。
+export type CheckStatus = 'passed' | 'warning' | 'blocked' | 'skipped'
 
 export interface ContentCapability {
   id: CapabilityId

@@ -9,6 +9,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { testPortSequence } from './test-port.mjs'
+import { logicSignalSpans } from './draft-logic.mjs'
 
 // 这条测试补的是 24.1：/api/drafts/:id/checks/logic 这条路一直没有测试，
 // 而本次会话两个 bug（c793d20 的形状、以及 workflow_status 被三元兜底改坏）都出在这条路上。
@@ -77,7 +78,7 @@ test('草稿检查路由：逻辑检查不改 workflow_status，且形状是界�
   assert.ok(Array.isArray(logic.reminders), 'reminders 必须是数组')
   assert.equal(typeof logic.draft_version, 'number', 'draft_version 必须是数字（缓存靠它，写错会重复烧模型调用）')
   assert.equal(typeof logic.checked_at, 'string', 'checked_at 必须是时间串')
-  assert.ok(['passed', 'warning', 'blocked'].includes(logic.status), 'status 必须是界面认得的三个值之一')
+  assert.ok(['passed', 'warning', 'blocked', 'skipped'].includes(logic.status), 'status 必须是界面认得的四个值之一')
 
   // 逐条形状（c793d20 的 bug）：有内容时，每条必须是对象而不是字符串。
   for (const item of logic.evidence) {
@@ -92,12 +93,15 @@ test('草稿检查路由：逻辑检查不改 workflow_status，且形状是界�
   // 形状契约在单元层已经钉住了（见 draft-logic.test.mjs 的「形状契约」一条）；
   // 若要让这条路也跑到非空分支，需要让模拟模型吐出带信号词的正文。
 
-  // 断言 3（20.7）：圈不出范围时，必须把「没查」说出来。
-  // 通用列表显示的是 suggestions，所以「没查」的说明要落在那儿；
-  // 落回 reminders 的话界面不渲染，用户只看到「通过」。
-  if (logic.evidence.length === 0) {
-    assert.ok(logic.suggestions.length > 0, '没查出来时必须给出一句说明，否则用户会把「没查」读成「通过」')
-  }
+  // 断言 3（20.7 / 2026-09-20）：圈不出范围时，必须把「没查」说出来，而且状态本身要跟「查过没问题」分开。
+  // 先把前提钉住：这段正文圈不出「既有问题又有办法」的段落，所以这一支**不经过模型**——
+  // 它是确定性的，下面两条断言不能是空过的。
+  assert.equal(logicSignalSpans(draft.body).shouldCheck, false, '前提：这段正文不该送模型，否则这条用例就不在测「没查」那一支了')
+  assert.equal(logic.evidence.length, 0, '前提：这一支不产出 evidence')
+  // 状态原来是 'passed'，界面显示「已通过」——用户把「没查」读成了「查过没问题」。
+  // 说明文字在 suggestions 里（界面只渲染 evidence / suggestions / report），但它盖不住状态那一行。
+  assert.equal(logic.status, 'skipped', '「没查」必须是它自己的状态，不能报成「通过」')
+  assert.ok(logic.suggestions.length > 0, '没查出来时必须给出一句说明，否则用户会把「没查」读成「通过」')
 
   // 断言 4：同一版本再跑一次，不重复调模型（省钱闸门靠 draft_version 缓存）。
   const again = await fetch(`${baseUrl}/api/drafts/${draft.id}/checks/logic`, { method: 'POST', headers, body: '{}' })

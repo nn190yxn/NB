@@ -792,7 +792,9 @@ type DraftHook = { id: string; label: string; text: string; source_refs?: unknow
 // elsewhere 得去 IP 档案 / 开头句槽位 / 来源引用那里补。
 type DiagnosticScope = 'locatable' | 'whole_body' | 'elsewhere'
 type DraftCheckReport = { entries: { code: string; label?: string; quote: string; note: string; severity: 'strong' | 'medium' | 'weak'; scope?: DiagnosticScope; position: number; intent?: string; followup?: string; feature?: { id: number; name: string } | null }[]; summary?: string; severity_labels: Record<string, string>; footer: string }
-type DraftCheck = { status: 'passed' | 'warning' | 'blocked'; score?: number | null; dimensions?: Record<string, number | boolean>; evidence: { code: string; message: string; severity: string; scope?: DiagnosticScope; quote?: string }[]; suggestions: string[]; report?: DraftCheckReport | null; draft_version?: number; checked_at: string }
+// skipped 是「这一项没查」（比如逻辑检查圈不出可对照的段落），跟「passed 查过没问题」必须分开：
+// 两者都显示「通过」的话，用户会把假阴性读成安全。
+type DraftCheck = { status: 'passed' | 'warning' | 'blocked' | 'skipped'; score?: number | null; dimensions?: Record<string, number | boolean>; evidence: { code: string; message: string; severity: string; scope?: DiagnosticScope; quote?: string }[]; suggestions: string[]; report?: DraftCheckReport | null; draft_version?: number; checked_at: string }
 // 阶段 4「标记式改稿」：每条标记该去哪改，由 scope 说话——不给假按钮。
 // 可定位的指到已有的「定位替换」（它真能干这事），别处改的直说去哪，整篇级的直说没有哪一处。
 const elsewhereFixes: Record<string, string> = {
@@ -876,7 +878,7 @@ type SyncConflict = { id: string; resource_type: string; resource_id: number; st
 const topicDimensionLabels: Record<string, string> = { traffic_potential: '流量潜力', account_fit: '账号匹配', competitive_differentiation: '竞争差异化', timeliness: '时效价值', monetization: '变现空间', production_cost: '制作成本', compliance_risk: '合规风险' }
 const topicDecisionLabels: Record<string, string> = { do: '建议做', revise: '建议改方向', defer: '建议暂缓' }
 const topicMissingFieldLabels: Record<string, string> = { role: '身份定位', audiences: '服务对象', pillars: '内容支柱' }
-const draftCheckStatusLabels: Record<string, string> = { passed: '已通过', warning: '有提醒', blocked: '未通过' }
+const draftCheckStatusLabels: Record<string, string> = { passed: '已通过', warning: '有提醒', blocked: '未通过', skipped: '没检查' }
 	const draftWorkflowStatusLabels: Record<string, string> = { draft: '草稿', hooks_ready: '已定开头', content_ready: '内容已就绪', persona_checked: '人设已查', quality_checked: '质量已过', publish_ready: '可发', needs_revision: '要改', ready_to_shoot: '已确认拍摄', published: '已发布' }
 	const draftWorkflowLabel = (draft: DraftItem) => {
 	  if (draft.archived_at) return '已归档'
