@@ -59,6 +59,9 @@ test('逻辑检查：空正文拦下来，圈不出范围不调模型，能查�
   assert.equal(result.findings.length, 1)
   assert.equal(result.findings[0].code, 'problem_remedy_mismatch')
   assert.equal(result.findings[0].scope, 'locatable')
+  // severity 是 DraftCheck.evidence 要求的字段，缺了前端按对象渲染会缺一块。
+  assert.equal(result.findings[0].severity, 'warning')
+  assert.ok(result.findings[0].message, '每条要有可直接显示的话')
   assert.ok(checkableDraft.includes(result.findings[0].quote), '引用必须真在正文里')
 })
 

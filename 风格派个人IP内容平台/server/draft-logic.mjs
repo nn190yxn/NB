@@ -95,6 +95,8 @@ export function parseLogicFindings(content, body) {
     if (findings.some(finding => finding.quote === quote)) continue
     findings.push({
       code: logicCheckCode,
+      // 跟 DraftCheck.evidence 的形状对齐（前端按 severity 上色）。
+      severity: 'warning',
       // 措辞只说这条的性质，不提具体功能——避免提示指向一个做不到的操作。
       message: `提出了「${quote}」，但正文给出的办法治的是另一件事：${String(item?.explain || item?.remedy || '').trim() || '后文没有回应它'}`,
       quote,

@@ -287,19 +287,23 @@ async function runLogicCheck(request, draft) {
   // 圈不出「既有问题、又有办法」的段落，就无从判断治没治错病。
   // 这一格直接放行，不花这次调用——这是设计里省钱的那道闸门。
   if (!spans.shouldCheck) {
-    return { status: 'passed', dimensions: {}, evidence: [], findings: [], suggestions: [], reminders: ['正文里没有「提了问题又给了办法」的段落，这次没有可查的地方。'], draft_version: draftVersion }
+    return { status: 'passed', score: null, dimensions: {}, evidence: [], findings: [], suggestions: [], reminders: ['正文里没有「提了问题又给了办法」的段落，这次没有可查的地方。'], draft_version: draftVersion, checked_at: new Date().toISOString() }
   }
   const content = await generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(draftBody, spans))
   const findings = parseLogicFindings(content, draftBody)
   return {
     status: findings.length ? 'warning' : 'passed',
+    score: null,
     dimensions: {},
-    evidence: findings.map(finding => finding.message),
-    // 单独留给界面：界面要按 locatable 把标记挂到正文上，光看 evidence 做不到。
+    // 直接把 findings 当 evidence：它已经是 {code, message, severity, quote, scope}，
+    // 跟 DraftCheck.evidence 的形状一致。别 map 成字符串——前端按对象渲染。
+    evidence: findings,
+    // 单独留一份：界面按 quote 把标记挂到正文上。
     findings,
     suggestions: findings.length ? ['补一段回应它，或者把那句问题删掉。'] : [],
     reminders: [],
     draft_version: draftVersion,
+    checked_at: new Date().toISOString(),
   }
 }
 
