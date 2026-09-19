@@ -27,7 +27,7 @@
 
 | 优先级 | 用户路径与问题 | 证据 | 建议与验收 |
 |---|---|---|---|
-| **P1（待确认）** | **用户在「数据回流」确认草稿偏好后，MySQL 模式下这次写入会被静默丢弃**。本地 JSON 模式看不出来。 | `server/index.mjs:1883` `if (records.length) await saveState('preferences')`；该路由确实在造记录（`index.mjs:1880-1884`）。而 `preferences` **不在三个登记清单的任何一个里**：`mysql.mjs:6` `collectionNames`、`mysql.mjs:7` `userDocNames`、`content-assets.mjs:1` `crossPlatformCollections`。按上一轮审计结论，MySQL 模式 `saveState` 受白名单过滤，未登记 = 不落库。 | 把 `preferences` 补进 `collectionNames`（它带 `owner_id`，属多文档集合，不是 `userDocNames` 那类单文档）。**验收**：MySQL 模式下确认偏好记录能落库、重启后还在；补一条测试。**该路由本身的隔离是对的**（`index.mjs:1880-1881` 按 `owner_id` 过滤），所以这纯粹是登记遗漏，不涉及权限逻辑。 |
+| **P1（已修复）** | **用户在「数据回流」确认草稿偏好后，MySQL 模式下这次写入会被静默丢弃**。本地 JSON 模式看不出来。 | `server/index.mjs:1883` `if (records.length) await saveState('preferences')`；该路由确实在造记录（`index.mjs:1880-1884`）。而 `preferences` **不在三个登记清单的任何一个里**：`mysql.mjs:6` `collectionNames`、`mysql.mjs:7` `userDocNames`、`content-assets.mjs:1` `crossPlatformCollections`。按上一轮审计结论，MySQL 模式 `saveState` 受白名单过滤，未登记 = 不落库。 | 把 `preferences` 补进 `collectionNames`（它带 `owner_id`，属多文档集合，不是 `userDocNames` 那类单文档）。**验收**：MySQL 模式下确认偏好记录能落库、重启后还在；补一条测试。**已于 2026-09-19 修复**：`server/mysql.mjs` 的 `collectionNames` 补入 `preferences`；并新增 `server/persistence-registry.test.mjs`——静态断言「每个 `saveState` 用到的集合名都在登记清单里」，**把这一整类 bug 永久挡住**（全量 415 → 416）。**该路由本身的隔离是对的**（`index.mjs:1880-1881` 按 `owner_id` 过滤），所以这纯粹是登记遗漏，不涉及权限逻辑。 |
 
 ### 本轮修掉的两个（审计过程中发现，已单独提交）
 

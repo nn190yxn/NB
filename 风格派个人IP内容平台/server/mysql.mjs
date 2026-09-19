@@ -3,7 +3,10 @@ import { crossPlatformCollectionNames } from './content-assets.mjs'
 
 const required = ['PROJECT_DB_HOST', 'PROJECT_DB_NAME', 'PROJECT_DB_USER', 'PROJECT_DB_PASSWORD']
 
-export const collectionNames = ['users', 'api_configs', 'usage_daily', 'feedback', 'materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'profile_reviews', 'conflicts', 'memories', ...crossPlatformCollectionNames]
+// preferences：数据回流确认的草稿偏好。它带 owner_id，属多文档集合。
+// 2026-09-19 审计发现它此前不在任何一个登记清单里，MySQL 模式下 saveState('preferences')
+// 会被白名单过滤掉、静默不落库（本地 JSON 模式看不出来）。
+export const collectionNames = ['users', 'api_configs', 'usage_daily', 'feedback', 'materials', 'research', 'structures', 'topics', 'drafts', 'shooting', 'sync_jobs', 'profile_reviews', 'conflicts', 'memories', 'preferences', ...crossPlatformCollectionNames]
 export const userDocNames = ['positioning', 'strategy', 'profile', 'positioning_candidates', 'api_settings']
 
 export function mysqlConfig(env = process.env) {
