@@ -108,6 +108,20 @@ export async function startGenerationMock({ adaptBody } = {}) {
     }
     // 移植 dbs-script-flow：逐字稿三维检查。故意给一条判定不在三档内的、一条维度不认识的、一条段落号越界的，
     // 测校验会不会丢（模型给 5 条，落到用户面前只剩 2 条）。
+    // 移植 dbs-content-risk-check：发布前风险检查。故意给一条原句在稿子里找不到的、一条层级不认识的，
+    // 测「原句必须逐字出现」与层级白名单会不会丢（模型给 4 条，落到用户面前剩 2 条）。
+    if (system.includes('发布前风险检查')) {
+      return reply(JSON.stringify({
+        findings: [
+          { kind: 'substance', evidence: '别再为流量写，为成交写。', location: '正文', problem: '把做法说成了确定结果，没有依据', action: '补上适用条件，或改成自己的做法' },
+          { kind: 'machine', evidence: '上周我翻了后台', location: '正文', problem: '“后台”会被读成数据来源不明的断言', action: '保留并接受复核', false_positive: '正常叙事，可能被机器误判' },
+          { kind: 'substance', evidence: '这句话稿子里根本没有', location: '正文', problem: '原句找不到，这条应该被丢掉', action: '随便改' },
+          { kind: 'unknown', evidence: '点赞会撒谎，询盘不会', location: '正文', problem: '层级不认识，这条应该被丢掉', action: '随便改' },
+        ],
+        overlay: ['个人经验分享', '不构成效果保证', '请结合自身情况'],
+        summary: { machine: '未发现明显触发点', substance: '存在一处需要处理的表述' },
+      }))
+    }
     if (system.includes('逻辑延续检查法')) {
       return reply(JSON.stringify({
         findings: [

@@ -25,6 +25,7 @@ import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, 
 import { hookMethodSource, hookMethods } from './hook-diagnosis.mjs'
 import { coreMechanismCheck, parseResonanceResponse, resonancePrompt } from './resonance.mjs'
 import { parseScriptFlowResponse, scriptFlowPrompt, scriptFlowSignals } from './script-flow.mjs'
+import { parsePublishRiskResponse, publishRiskPrompt, publishRiskSignals } from './publish-risk.mjs'
 import { activeFeatureReplacements, buildPreferenceRecords, draftVersions, finalDraftCandidates, isFeatureId, performanceCandidates, performanceSignalNote } from './return-flow.mjs'
 import { guideColdStartPaths, guideState } from './guide.mjs'
 import { hookIdeasPrompt, hookReadiness, ideaKinds, parseHookIdeas, parseTitleIdeas, titleIdeasPrompt } from './ideas.mjs'
@@ -1839,6 +1840,33 @@ const server = createServer(async (request, response) => {
         return send(response, 200, draft)
       } catch (error) {
         return send(response, 502, { error: error?.message || '逐字稿检查失败，请稍后重试', retryable: true })
+      }
+    }
+    // 移植 dbs-content-risk-check：发布前风险检查（机器可识别信号 + 内容实质问题两层）。
+    // 不替用户决定能不能发，也不写 checks、不改 workflow_status、不动 approval。
+    const draftPublishRiskMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/publish-risk$/)
+    if (draftPublishRiskMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftPublishRiskMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      if (!String(draft.body || '').trim()) return send(response, 422, { error: '这份草稿还没有正文，先写正文再检查', code: 'validation_failed' })
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      if (!configs.primary && !configs.fallback) return send(response, 422, { error: '发布前风险检查需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      if (usesSharedPrimaryLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) return send(response, 429, { code: 'QUOTA_EXCEEDED', error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false })
+      }
+      try {
+        const signals = publishRiskSignals({ title: draft.title, body: draft.body })
+        const prompt = publishRiskPrompt({ platform: draft.platform, title: draft.title, body: draft.body, signals })
+        const result = await callLlmWithFallback(configs, [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }])
+        const report = parsePublishRiskResponse(result.content, { title: draft.title, body: draft.body, signals })
+        // 一条能在稿子里找到原句的结论都没有就不落库：宁可少给，不给编的。
+        if (!report || !report.findings.length) return send(response, 502, { code: 'PUBLISH_RISK_UNLINKED', error: '这一轮没有一条能指到稿子原句的结论，没有落库。可以再试一次。', retryable: true })
+        draft.publish_risk = { ...report, generated_at: new Date().toISOString(), draft_version: draft.version, provider: result.provider }
+        await saveState('drafts')
+        return send(response, 200, draft)
+      } catch (error) {
+        return send(response, 502, { error: error?.message || '发布前风险检查失败，请稍后重试', retryable: true })
       }
     }
     const draftSlotMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/slots\/(title|opening|structure|ending)$/)

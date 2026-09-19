@@ -801,10 +801,13 @@ type DraftResonanceReport = { dimensions: { id: string; label: string; theory: s
 // 移植 dbs-script-flow：逐字稿三维检查（段落衔接/信息密度/口播流畅）。同样只给人看、不拦发布，
 // 且只描述文稿本身，不预测完播率这类平台指标。
 type DraftScriptFlowReport = { findings: { axis: string; axis_label: string; segment: number; verdict: string; evidence: string; detail: string; fix: string }[]; axis_counts: Record<string, number>; fixes: { cut: string[]; merge: string[]; transition: string[]; rewrite: string[] }; measured?: { segment_count: number; long_sentence_count: number; written_style_count: number; repeated_count: number } | null; generated_at?: string; draft_version?: number; provider?: string }
+// 移植 dbs-content-risk-check：发布前风险检查，分「平台机器可能识别到什么」与「内容实质问题」两层。
+// 只报位置、机制与最小改法，不替用户决定能不能发，也不拦发布。
+type DraftPublishRiskReport = { findings: { kind: string; kind_label: string; evidence: string; location: string; problem: string; action: string; false_positive: string }[]; kind_counts: Record<string, number>; overlay: string[]; overlay_rejected: boolean; summary: { machine: string; substance: string }; measured?: { hit_count: number; url_count: number; contact_count: number; qrcode_count: number; drive_action_count: number; digits_count: number; claim_count: number; medical_count: number } | null; generated_at?: string; draft_version?: number; provider?: string }
 // Requirement 14：标题/开头方案的形状。溯源字段都可能为空（服务端只收能溯源的），所以都按可选处理。
 type DraftIdeaPlan = { formula_id?: number; formula_template?: string; formula_example?: string; formula_example_source?: string; category?: string; category_label?: string; title?: string; why?: string; method?: string; method_label?: string; opening?: string; note?: string; used_material?: string; needs_user_material?: boolean }
 type DraftIdeaGroup = { plans?: DraftIdeaPlan[]; source?: string; blocked?: string; methods?: { id: string; label: string }[] | null; readiness?: { richness?: { verdict?: string; dimensions: { label: string; found: boolean }[] }; opening?: { dimensions: { label: string; judged: boolean; problem: boolean | null }[] } } | null }
-type DraftItem = { id: number; topic_id?: number | null; platform: string; content_format?: string; title: string; body: string; fact_check_status: string; status: string; workflow_status?: string; hooks?: DraftHook[]; selected_hook_id?: string | null; selected_hook?: DraftHook | null; opening_ref?: { option_id: string; name: string } | null; variant_group_id?: string | null; variant_type?: string; variant_of?: number | null; archived_at?: string | null; generation_context?: Record<string, unknown> | null; checks?: { persona?: DraftCheck | null; quality?: DraftCheck | null; publish_checklist?: DraftCheck | null }; approval?: DraftApproval; version?: number; history?: DraftItem[]; adaptations?: Record<string, DraftAdaptation>; planned_date?: string | null; ideas?: { title?: DraftIdeaGroup | null; hook?: DraftIdeaGroup | null } | null; resonance?: DraftResonanceReport | null; script_flow?: DraftScriptFlowReport | null }
+type DraftItem = { id: number; topic_id?: number | null; platform: string; content_format?: string; title: string; body: string; fact_check_status: string; status: string; workflow_status?: string; hooks?: DraftHook[]; selected_hook_id?: string | null; selected_hook?: DraftHook | null; opening_ref?: { option_id: string; name: string } | null; variant_group_id?: string | null; variant_type?: string; variant_of?: number | null; archived_at?: string | null; generation_context?: Record<string, unknown> | null; checks?: { persona?: DraftCheck | null; quality?: DraftCheck | null; publish_checklist?: DraftCheck | null }; approval?: DraftApproval; version?: number; history?: DraftItem[]; adaptations?: Record<string, DraftAdaptation>; planned_date?: string | null; ideas?: { title?: DraftIdeaGroup | null; hook?: DraftIdeaGroup | null } | null; resonance?: DraftResonanceReport | null; script_flow?: DraftScriptFlowReport | null; publish_risk?: DraftPublishRiskReport | null }
 const draftIsLocked = (draft: DraftItem) => draft.approval?.status === 'approved' || draft.workflow_status === 'ready_to_shoot' || draft.status === 'published'
 const liveWorkbenchDrafts = (drafts: DraftItem[]) => {
   const live = drafts.filter(draft => !draft.archived_at)
@@ -2218,6 +2221,18 @@ function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: 
       .finally(() => setFlowBusy(false))
   }
 
+  const risk = draft.publish_risk || null
+  const [riskBusy, setRiskBusy] = useState(false)
+
+  // 发布前风险检查：跟另外两份报告一样只读文稿、只出报告，不替用户决定能不能发。
+  const diagnoseRisk = () => {
+    setRiskBusy(true); setMessage('')
+    void apiJson<DraftItem>(`/api/drafts/${draft.id}/publish-risk`, { method: 'POST', body: '{}' })
+      .then(onUpdated)
+      .catch((error: unknown) => setMessage(error instanceof Error && error.message ? error.message : '发布前风险检查失败，请稍后重试。'))
+      .finally(() => setRiskBusy(false))
+  }
+
   // Requirement 16：共鸣报告只是给人看的一份诊断，不改稿、不写检查，也不拦发布。
   const diagnose = () => {
     setDiagnosing(true); setMessage('')
@@ -2313,6 +2328,33 @@ function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: 
           {flow.fixes.rewrite.length > 0 && <p><strong>改口播：</strong>{flow.fixes.rewrite.join('；')}</p>}
         </div>}
       </> : <p className="empty-state">还没检查过。检查只读正文，不改稿、不影响发布。</p>}
+    </div>
+    <div className="publish-resonance">
+      <div className="structure-toolbar-row">
+        <strong>发布前风险检查</strong>
+        <button className="primary-action" disabled={riskBusy} onClick={diagnoseRisk}>{riskBusy ? '检查中...' : risk ? '重新检查' : '跑一次风险检查'}</button>
+      </div>
+      <p className="publish-resonance-note">分两层看：平台机器可能识别到什么，和内容本身有没有实质问题。只给位置和最小改法，不替你决定能不能发，也不拦发布。</p>
+      {risk ? <>
+        {risk.draft_version !== undefined && draft.version !== undefined && risk.draft_version !== draft.version && <p className="skill-message" role="status">正文已改到第 {draft.version} 版，这份检查是基于第 {risk.draft_version} 版的，建议重新检查。</p>}
+        {risk.measured && <div className="resonance-core">
+          <span>{`规则先扫到 ${risk.measured.hit_count} 处词面信号`}</span>
+          <small>{`外链 ${risk.measured.url_count} · 联系方式 ${risk.measured.contact_count} · 二维码 ${risk.measured.qrcode_count} · 导流动作 ${risk.measured.drive_action_count} · 绝对化 ${risk.measured.claim_count} · 医疗词 ${risk.measured.medical_count}`}</small>
+        </div>}
+        <ul className="resonance-list">{risk.findings.map(item => <li key={`${item.kind}-${item.evidence.slice(0, 12)}`}>
+          <div className="resonance-head"><strong>{item.location} · {item.kind_label}</strong><span className={`publish-check-status status-${item.kind === 'substance' ? 'risk' : 'warn'}`}>{item.kind === 'substance' ? '优先处理' : item.kind === 'needs_confirm' ? '需确认' : '机器信号'}</span></div>
+          <p className="resonance-evidence">原文：「{item.evidence}」</p>
+          <p>{item.problem}</p>
+          <p><strong>怎么改：</strong>{item.action}</p>
+          {item.false_positive && <p><small>可能误伤：{item.false_positive}</small></p>}
+        </li>)}</ul>
+        {risk.overlay.length > 0 && <div className="resonance-fixes"><p><strong>贴片小字（三行）：</strong>{risk.overlay.join(' / ')}</p></div>}
+        {risk.overlay_rejected && <p className="skill-message" role="status">模型给的贴片不是三行、或每行超出 4-9 个汉字，按规矩不给，也没替它凑。</p>}
+        {(risk.summary.machine || risk.summary.substance) && <div className="resonance-synthesis">
+          {risk.summary.machine && <p><strong>机器信号：</strong>{risk.summary.machine}</p>}
+          {risk.summary.substance && <p><strong>实质问题：</strong>{risk.summary.substance}</p>}
+        </div>}
+      </> : <p className="empty-state">还没检查过。检查只读这份稿子，不替你决定能不能发。</p>}
     </div>
     {message && <p className="skill-message" role="status">{message}</p>}
   </details>
