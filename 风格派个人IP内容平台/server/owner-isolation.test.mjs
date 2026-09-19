@@ -24,8 +24,9 @@
 //       事后 A 的数据也不许变。
 //
 // 已知边界（别拿它当安全证明）：数不完的那几条都写着底——
-//   不带 id 的写路由（只写自己名下的）不在写判定里；写判定里还有 4 族没造种子（逐族登记了原因）；
+//   不带 id 的写路由（只写自己名下的）不在写判定里；写判定里还有 3 族没造种子（逐族登记了原因）；
 //   请求体里的 id 只覆盖源码里能枚举到的那几处（INDIRECT_REFERENCES）；
+//   读判定里已经没有跳过的族了（private-files 与 vision-tasks 本轮造了种子）。
 //   真正的「结构性不可能发生」（数据访问层统一收口）仍未做。
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -46,8 +47,6 @@ const OTHER = { id: 'isolation-other', mark: 'ISO-OTHER-SENTINEL' }
 // 没在本测试里造数据、因此跳过的资源族：写清为什么。
 // 多出一族就会红——要么给它造种子，要么在这里说明为什么不用查。
 const SKIPPED_FAMILIES = {
-  'private-files': '要真上传文件才有得读，本测试不造',
-  'vision-tasks': '种子要跑截图识别，本测试不造',
   shooting: '要过人工确认闸门（人设/质量/发布清单三项检查 + 事实核验）才能生成；不值得把隔离判定跟那条七步链路绑死（试过：直接改状态被 409 拦下）',
   sync: '同步冲突要两台设备真的撞到一起，本测试不造',
   research: '研究项要连外部搜索，本测试不造',
@@ -189,6 +188,16 @@ async function seed(owner, base) {
   const candidates = await post(owner, '/api/positioning/candidates', {}, base)
   assert.equal(candidates.status, 201, `造定位候选失败（${owner.id}）：${candidates.status} ${candidates.text.slice(0, 200)}`)
   assert.ok(candidates.text.includes(owner.mark), `定位候选里没有标记（${owner.id}）：${candidates.text.slice(0, 200)}`)
+  // 私密文件：真的是上传一个文件（不是伪造记录），所以内容要与声明的类型对得上（.txt 就看有没有空字节与非法 UTF-8）。
+  // 标记同时放文件名和内容里：列表看名字，预览看字节，两处都盖得住。
+  const upload = await fetch(`${base}/api/private-files`, { method: 'POST', headers: { 'x-user-id': owner.id, 'content-type': 'text/plain', 'x-file-name': `${owner.mark}-note.txt` }, body: `${owner.mark}-private-content` })
+  const uploadText = await upload.text()
+  assert.equal(upload.status, 201, `上传私密文件失败（${owner.id}）：${upload.status} ${uploadText.slice(0, 200)}`)
+  const privateFile = JSON.parse(uploadText)
+  // 截图任务：要一张真截图的 id，所以必须跟在文件后面。识别本身要配 vision 模型，这里不配：任务会变 failed，
+  // 但**任务行是造出来了**，读/写判定要看的就是这一行到底是谁的。
+  const vision = await post(owner, '/api/vision-tasks', { screenshot_file_ids: [privateFile.id] }, base)
+  assert.equal(vision.status, 202, `造截图任务失败（${owner.id}）：${vision.status} ${vision.text.slice(0, 200)}`)
   return {
     ids: {
       drafts: draft.json[0]?.id,
@@ -204,6 +213,8 @@ async function seed(owner, base) {
       preferences: flow.json?.created?.[0]?.id,
       feedback: feedback.json?.id,
       positioning: candidates.json?.[0]?.id,
+      'private-files': privateFile?.id,
+      'vision-tasks': vision.json?.id,
     },
     mark: owner.mark,
   }
