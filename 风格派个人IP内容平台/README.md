@@ -790,7 +790,7 @@ node scripts/import-benchmark.mjs scripts/benchmarks/dontbesilent.json
 **做了什么**
 
 把审计计划里最后两项做完：25.8（上一轮 12 条逐条核）与 25.6（真模型实跑）。
-**真模型跑了 10 个入口、19 次调用**：数据用 `server/data.json` 的**副本**（临时目录），
+**真模型跑了 10 个入口、14 次模型调用（18 个请求）**：数据用 `server/data.json` 的**副本**（临时目录），
 `x-user-id: demo-user`，带 `origin` 头，**没改任何配置**。
 
 **结果一句话**：**九个模型入口全部跑通、全部能解析、没崩**；
