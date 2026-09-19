@@ -453,8 +453,25 @@
   - **仍未覆盖**（这才是 24.1 的本体）：路由那一层——`/api/drafts/:id/checks/logic` 的接线。
     包括：异步分支有没有正确 await、跑完 `workflow_status` 有没有被三元兜底改坏、同版本缓存、
     以及 20.7 那条「没查要说出来」。
-  - **怎么做**：照 `server/auth.test.mjs` 的写法——`startGenerationMock()` 拿模拟模型 env、
-    `startServer()` 起临时服务、`x-user-id` 头指定用户。需要先摸清草稿怎么造出来（可能要过前置状态门）。
+  - **怎么做**：照 `server/auth.test.mjs` 的写法——`startGenerationMock()` 拿模拟模型 env
+    （`generationMock.env` 里有 `PROJECT_LLM_BASE_URL` 等）、`startServer()` 起临时服务
+    （`DATA_FILE` 指向临时文件）、`x-user-id` 头指定用户。
+  - **造草稿的路径已摸清（2026-09-19）**：**没有直接 `POST /api/drafts`**。草稿走**选题生成**那条路
+    （`server/index.mjs` 约 1562–1566 行）：
+    `draftPlatforms.map(...)` 逐个平台造，每个都过 `defaultDraftWorkflowFields(...)`。
+    所以测试要先造选题、再触发生成，**不能跳过前置步骤直接塞草稿**（塞进去的形状容易跟真实的不一样，
+    那正是 `c793d20` 那类 bug 的温床）。
+  - **关键断言已确定（可直接写）**：生成出来的草稿 `workflow_status` 是
+    `gateFailure ? 'needs_revision' : 'draft'`（`index.mjs:1566`）。
+    **跑完逻辑检查后，它必须仍是原来那个值。**
+    如果变成了 `publish_ready`，就是「点一下逻辑检查，草稿变成可以发布了」那个 bug 复发——
+    `checkName !== 'logic'` 那句判断被谁删掉或改坏时就会这样。**这就是 24.2 要钉的那条。**
+  - **建议的断言清单**（照这个写，不用再调研）：
+    1. 跑完 `draft.checks.logic.evidence` 是**对象数组**，每条含 `code` / `message` / `severity`；
+    2. 跑完 `workflow_status` **等于跑之前的值**（这是 24.2 的实质）；
+    3. 圈不出范围时（正文里没有问题+办法两句），`checks.logic.suggestions` **非空**
+       ——把 20.7「没查要说出来」钉住；
+    4. 同一版本再跑一次不重复调模型（模拟模型里记调用次数，断言没涨）。
   - 事实：`/api/drafts/:id/checks/logic` 这条路的形状 bug（见 22.2）**没有被任何测试拦住**。独立接口 `/api/skills/logic-check` 有 2 条测试，但它返回的是 `{ findings, checked }`，跟草稿检查要的 `DraftCheck` 是两套形状——**测了 A 不等于测了 B**。
   - 为什么没写：写这条测试要先造一条草稿，需要铺生成流程的脚手架（选题 → 生成 → 落库），成本比独立接口高。
   - 做法：参考 `server/auth.test.mjs` 里跑检查的那段（它已经有「造出草稿 → 跑检查」的现成路径），照搬造草稿的部分，只断言 `draft.checks.logic` 的形状和 `workflow_status` 没被改坏（见下一条）。
