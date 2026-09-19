@@ -1,0 +1,62 @@
+// 前端「静默吞错」的预算棘轮。
+//
+// 由来（2026-09-20 审计）：src/main.tsx 里有 30+ 处 `.catch(() => undefined)`，
+// 其中一批是「用户主动点了按钮」——请求失败了界面上一个字都不说。
+// 用户分不清「查了没问题」和「压根没查成」，这跟「没查显示成已通过」是同一类毛病。
+// 本轮只修了 20.7/25.5 点名的那一处（`runDraftCheck`），其余按类登记在
+// docs/audits/2026-09-19-audit-round/README.md 里，等并回 21-24 的改造。
+//
+// 这道测试不修它们，只挡住「继续悄悄多出来」：
+// 数字对不上就红，下一个想加空捕获的人必须做一次有意识的决定——
+// 要么把失败说出来，要么来改这个数字并写清为什么这里可以吞。
+//
+// 它管不住的：位置合不合理、吞掉的是不是用户能看见的事。它只管数量不无声增长。
+// 所以数字变小是好事（修一处就往下调一格），变大必须配一句理由。
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readdirSync, readFileSync } from 'node:fs'
+
+// 空捕获的判定：.catch(() => undefined) 和 .catch(() => {})。
+// 注意不算 `catch { /* 有注释说明为什么能吞 */ }` 这种——那是带说明的显式决定，代码里有注释可查。
+const silentCatch = /\.catch\(\s*\(\s*\)\s*=>\s*(?:undefined|\{\s*\})\s*\)/g
+
+// 扫描范围：前端源码和桌面壳。新文件默认预算 0——新文件里冒出一个空捕获，就该红。
+const roots = ['src', 'desktop']
+const skipped = /(\.test\.|node_modules|dist)/
+const budget = {
+  'src/main.tsx': 32,
+  'desktop/main.mjs': 1,
+}
+
+const walk = dir => readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+  const path = `${dir}/${entry.name}`
+  return entry.isDirectory() ? walk(path) : [path]
+})
+
+test('前端静默吞错不许无声增长（棘轮）', () => {
+  const files = roots.flatMap(walk).filter(path => /\.(?:tsx?|mjs|jsx?)$/.test(path) && !skipped.test(path))
+  // 防「空过」：扫不到文件的话下面的循环一次都不跑，这条测试就永远绿。
+  assert.ok(files.includes('src/main.tsx'), '至少要扫到 src/main.tsx，否则这条测试是空转')
+  assert.ok(files.includes('desktop/main.mjs'), '至少要扫到 desktop/main.mjs')
+
+  const actual = {}
+  for (const path of files) {
+    const hits = readFileSync(path, 'utf8').match(silentCatch)
+    if (hits) actual[path] = hits.length
+  }
+
+  const grew = Object.entries(actual).filter(([path, count]) => count > (budget[path] || 0))
+  const messages = grew.map(([path, count]) => `${path}: ${budget[path] || 0} → ${count}`)
+  assert.deepEqual(grew, [], [
+    '空捕获变多了。两种处理方式，选一个：',
+    '1. 把失败说出来（用户点了按钮没反应 / 数据加载失败显示成空，都是这一类）；',
+    `2. 确实可以吞，就把 budget 里的数字改成实际值，并在上面写清为什么。\n${messages.join('\n')}`,
+  ].join('\n'))
+
+  // 数量下降了也要来改数字：不然后面可以悄悄加回去，棘轮就失效了。
+  const stale = Object.entries(budget).filter(([path, count]) => (actual[path] || 0) < count)
+  assert.deepEqual(stale, [], `空捕获比预算少了，把 budget 里的数字调小（往下只许一次一格）：${stale.map(([path, count]) => `${path}: ${count} → ${actual[path] || 0}`).join('、')}`)
+
+  // 顺带把「现在允许有多少」钉在断言里，让人一眼看到基数。
+  assert.equal(Object.values(actual).reduce((sum, count) => sum + count, 0), Object.values(budget).reduce((sum, count) => sum + count, 0), '预算表中的文件与实际扫描结果不一致')
+})

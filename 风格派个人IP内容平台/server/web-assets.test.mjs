@@ -21,10 +21,15 @@ test('访谈保存等待响应并恢复账号进度，失败保留输入', () =>
 
 test('草稿覆盖动作受脏状态保护，保存失败不清除脏状态', () => {
   const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  // 取「整个函数体」而不是「声明那一行」：2026-09-20 把 runDraftCheck 改成多行后，
+  // 保护语句落到了第二行，只切第一行的写法会把正确的实现判成红的（测试的切法问题，不是实现问题）。
+  // 函数体的边界取「下一个同缩进的 const 声明」——组件里只有顶层声明是两格缩进。
   for (const name of ['runDraftCheck', 'restoreDraft', 'deaiDraft', 'applySlot']) {
     const start = source.indexOf(`const ${name} =`)
     assert.ok(start > 0)
-    assert.match(source.slice(start, source.indexOf('\n', start)), /draftActionBlocked\(draft\)/)
+    const nextDeclaration = source.indexOf('\n  const ', start + 1)
+    const body = source.slice(start, nextDeclaration === -1 ? start + 800 : nextDeclaration)
+    assert.match(body, /draftActionBlocked\(draft\)/, `${name} 必须受脏状态保护：有未保存修改时不许覆盖草稿`)
   }
   assert.match(source, /draftLeaveGuard\.current\(\)/)
   assert.match(source, /draft-title-input" disabled=\{busy\}/)
