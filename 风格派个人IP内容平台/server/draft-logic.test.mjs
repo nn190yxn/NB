@@ -120,3 +120,30 @@ test('解析：报太多也只留两条，同一处不重复报', () => {
   assert.equal(findings.length, 2)
   assert.equal(new Set(findings.map(item => item.quote)).size, 2, '同一处不该报两遍')
 })
+
+// 形状契约：findings 会直接当作 DraftCheck.evidence 传给界面（server/index.mjs 的 runLogicCheck），
+// 界面按对象取值渲染。这里把契约钉住——2026-09-19 出过一次 bug：当时传的是字符串数组，
+// 界面拿不到 .message / .scope，结果在界面上渲染不出来，而 server/ 是纯 JS，tsc 拦不住。
+// 这些字段名跟 src/main.tsx 的 DraftCheck.evidence 类型声明一一对应，改前端类型时记得回来同步。
+test('形状契约：findings 的字段就是界面 DraftCheck.evidence 要的那几个', () => {
+  // 复用同一个 realDraft 夹具，保证引用一定真在正文里（过第一道闸门）。
+  const content = JSON.stringify({ findings: [{ problem: '情绪丰富，是搞钱的累赘', explain: '后面讲的是算账，没有回应这句' }] })
+  const findings = parseLogicFindings(content, realDraft)
+  assert.equal(findings.length, 1, '这条应该被放行')
+
+  const one = findings[0]
+  // 三个必填字段：缺任何一个，界面那一行就渲染不出来（不是显示得难看，是根本不显示）。
+  for (const key of ['code', 'message', 'severity']) {
+    assert.ok(one[key] !== undefined && one[key] !== '', `缺必填字段 ${key}——界面会渲染不出来`)
+  }
+  assert.equal(typeof one.message, 'string')
+  assert.equal(typeof one.severity, 'string')
+  // 可定位标记：界面的 MarkerScope 按它决定要不要提示「这一条指得出具体词句，能单独改」。
+  assert.equal(one.scope, 'locatable')
+
+  // 原句必须同时出现在 quote 和 message 里。
+  // quote 供界面按需单独成行；message 是通用列表实际显示的那行文字，
+  // 所以即便界面不专门渲染 quote，用户也不会看不到原文。
+  assert.ok(realDraft.includes(one.quote), 'quote 必须真在正文里')
+  assert.ok(one.message.includes(one.quote), 'message 里要带上原句，否则通用列表看不到原文')
+})

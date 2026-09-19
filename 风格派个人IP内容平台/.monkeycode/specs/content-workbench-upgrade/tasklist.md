@@ -443,6 +443,18 @@
 不属于 20–23，但都是这次真实踩出来的，单独记，避免重复付学费。
 
 - [ ] 24.1 草稿检查那条路没有自己的测试（**当前最该补的一条**）
+  - **部分进展（2026-09-19）**：形状契约已经用单元测试钉住了（`server/draft-logic.test.mjs`
+    新增「形状契约」一条，全量 413 → 414）。它断言 findings 的 `code` / `message` / `severity` 三个
+    必填字段都在、`scope` 是 `locatable`、且**原句同时出现在 `quote` 和 `message` 里**
+    （后者是关键：通用列表显示的是 `message`，所以即便界面不专门渲染 `quote`，用户也不会看不到原文）。
+    **这挡住的正是 `c793d20` 那个 bug**——那次传的是字符串数组，界面取不到 `.message`，整行渲染不出来。
+  - **写这条测试时的教训**：我第一版把字段写成了 `quote`，实际是 **`problem`**（模型返回的字段名），
+    `quote` 是解析后产出的。**写测试前要先看夹具里真实用的字段名，不能凭记忆。**
+  - **仍未覆盖**（这才是 24.1 的本体）：路由那一层——`/api/drafts/:id/checks/logic` 的接线。
+    包括：异步分支有没有正确 await、跑完 `workflow_status` 有没有被三元兜底改坏、同版本缓存、
+    以及 20.7 那条「没查要说出来」。
+  - **怎么做**：照 `server/auth.test.mjs` 的写法——`startGenerationMock()` 拿模拟模型 env、
+    `startServer()` 起临时服务、`x-user-id` 头指定用户。需要先摸清草稿怎么造出来（可能要过前置状态门）。
   - 事实：`/api/drafts/:id/checks/logic` 这条路的形状 bug（见 22.2）**没有被任何测试拦住**。独立接口 `/api/skills/logic-check` 有 2 条测试，但它返回的是 `{ findings, checked }`，跟草稿检查要的 `DraftCheck` 是两套形状——**测了 A 不等于测了 B**。
   - 为什么没写：写这条测试要先造一条草稿，需要铺生成流程的脚手架（选题 → 生成 → 落库），成本比独立接口高。
   - 做法：参考 `server/auth.test.mjs` 里跑检查的那段（它已经有「造出草稿 → 跑检查」的现成路径），照搬造草稿的部分，只断言 `draft.checks.logic` 的形状和 `workflow_status` 没被改坏（见下一条）。
