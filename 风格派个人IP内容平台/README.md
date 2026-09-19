@@ -691,3 +691,40 @@ node scripts/import-benchmark.mjs scripts/benchmarks/dontbesilent.json
 **省钱的那道闸门**：规则圈不出「既有问题又有办法」的段落时，直接返回通过，不调模型。
 
 验证：`npm test` 413/413 通过；`npx tsc --noEmit` 通过；`npx vite build` 通过。**未跑真实模型端到端**——规则、提示词、解析分别都测了，但模型实际返回什么没试过。搭好之后需要在界面上点一次，验收标准是：拿「情绪丰富，是搞钱的累赘」那篇跑，必须指到「会不会得罪人」那句。第一次跑完很可能要回头调提示词，而提示词一改，测试和界面都得跟着改。
+
+
+## 2026-09-19 · 交接：逻辑检查已落位，创作流程重构与全面审计未开始
+
+作者：Monkeycode。
+
+**当前状态（留给你或下一个 Agent 接手）**
+
+已完成并提交（7 次提交，全量 413/413）：
+
+| 提交 | 内容 |
+|---|---|
+| `0af44d3` | 逻辑检查核心 `server/draft-logic.mjs` |
+| `15aee87` | 独立接口 `/api/skills/logic-check` |
+| `42bf5ce` | 接口测试 |
+| `2be81d5` | 接进草稿检查路由 `/api/drafts/:id/checks/logic` |
+| `7613a73` | 界面按钮 |
+| `c793d20` | **修 bug**：`evidence` 形状。原来传字符串数组，`DraftCheck.evidence` 要对象数组，导致结果在界面上渲染不出来。`server/` 是纯 JS 无类型检查，没被拦住 |
+| `957f754` `3b43076` `a8c1e7f` `2499bf5` `9ba57a6` | 开发计划：21 创作流程重构、22 UI 优化 8 条、23 执行顺序、24 缺口、25 全面审计 8 维度、26 自主执行授权 |
+
+计划全文在 `.monkeycode/specs/content-workbench-upgrade/tasklist.md`（520 行），**照它执行，不要重新调研**。
+
+**下一步按这个顺序做**（详见计划第 23、25 节）：
+
+1. **真模型端到端**。模型已配好：`server/data.json` 的 `api_configs` 里 `slot=text_primary`、`model=agnes-2.5-flash`、`enabled=true`。**注意配置挂在 `owner_id: demo-user` 名下**，用别的账号登录会报 `MISSING_CONFIG`（422），那是假故障。验收：拿「情绪丰富，是搞钱的累赘」那篇跑，必须指到「会不会得罪人」那句。
+2. **24.1 + 24.2**：给 `/api/drafts/:id/checks/logic` 补测试。**这次 bug 就藏在没测试的那条路上**。参考 `server/auth.test.mjs` 造草稿的写法。
+3. **25.1 + 25.2 审计**：端到端形状一致性、测试覆盖真实性。**这两条来自本次 bug 的同一类，投入产出比最高。**
+4. 21.1 生成拆两段（影响最大）、22 各条。
+
+**踩过的坑，别重犯**
+
+- `server/` 是**纯 JS**，`tsc` 管不到。改服务端产出的形状时，**必须回 `src/main.tsx` 的类型声明对一遍**——两端各自看都对，接起来才错。
+- 草稿检查路由后面那句 `workflow_status` 赋值是**三元兜底**，新增检查会掉进 else 被标成 `publish_ready`。加检查时记得加判断。
+- 检查结果字段名是 `draft_version`（下划线）。写错 → 同版本缓存失效 → 每次点都烧一次模型调用。
+- 提示词必须**导出字符串数组**（跟 `claimsSystemPrompt` 同形），`.join('\n')` 成字符串会让调用方炸。
+- cmd.exe 会吃 `node -e` 和 `git commit -m` 里的中文引号，**一律改用脚本文件或消息文件**。
+- 别凭文件归属猜进程是谁的——**这条有血的教训**，见计划第 26 节。
