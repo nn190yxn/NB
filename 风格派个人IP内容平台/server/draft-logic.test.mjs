@@ -136,6 +136,24 @@ test('解析：过短的片段和过长的整段都不算一个问题', () => {
   assert.deepEqual(parseLogicFindings(long, realDraft), [], '把整篇抄回来不算指得出某一处')
 })
 
+// 真模型实测（2026-09-20）：引用了 4 字的「为什么？」——
+// 它在正文里确实找得到，能过「必须真的在正文里」那道闸门，但挂上去看不出指哪里。
+// 这类丢掉必须计数：不数的话，它和「模型没报」在界面上长得一样。
+test('解析：引句在正文里但太短时，要单独计数', () => {
+  const content = JSON.stringify({
+    findings: [
+      { problem: '情绪丰富', explain: '四个字，挂不到具体那一处' },
+      { problem: '这句话会不会得罪人', explain: '够长，能挂' },
+    ],
+  })
+  const { findings, reported, unverifiable, unanchored } = parseLogicOutput(content, realDraft)
+  assert.equal(reported, 2, '模型一共报了几条')
+  assert.equal(unanchored, 1, '引句太短的那条要单独计数')
+  assert.equal(unverifiable, 0, '它的引用在正文里，不算「对不上原句」')
+  assert.equal(findings.length, 1, '够长的那条照旧放行')
+  assert.equal(findings[0].quote, '这句话会不会得罪人')
+})
+
 test('解析：报太多也只留两条，同一处不重复报', () => {
   const content = JSON.stringify({
     findings: [

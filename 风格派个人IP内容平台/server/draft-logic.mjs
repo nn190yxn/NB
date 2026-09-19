@@ -43,6 +43,12 @@ export function logicSignalSpans(body) {
 
 export const logicCheckCode = 'problem_remedy_mismatch'
 
+// 引句长度闸门。过短的引句（真模型实测 2026-09-20：给过 4 字的「为什么？」）确实出现在正文里，
+// 但挂上去等于把标记挂在一个虚词上，用户看不出指的是哪里；过长的多半是把整段抄回来了。
+// 两种情况都不算「指得出某一处」，但**必须上报条数**——否则又变成「模型没报」和「报了但用不了」长得一样。
+export const logicAnchorMinLength = 8
+export const logicAnchorMaxLength = 120
+
 // 提示词和变量分开交，跟项目里其他 skill 一个形状：
 // generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(body))。
 export const logicCheckSystemPrompt = [
@@ -51,6 +57,9 @@ export const logicCheckSystemPrompt = [
     '',
     '要求：',
     '- 只报「提了、但整篇都没人回应」的问题。回应了就不算，换个说法回应了也算回应。',
+    '- 问题句后面紧接着就给了回答的，一律不报。反例（真模型实测误报过这种）：',
+    '  正文写「但很多人拆解完爆款，还是做不起来。为什么？因为只学了皮，没学到骨。」——',
+    '  后半句就是回答，这不算「没人管」，不报。',
     '- 每一条必须逐字引用正文里的原句，不能改写、不能拼接。引用不到原句就不要报。',
     '- 指不出具体是哪个问题没人管的，一律不报。',
     '- 最多报两条。宁可不报，也不要凑。',
@@ -88,8 +97,9 @@ function extractJson(content) {
 // 假阴性比假阳性危险，所以「没查成」必须是一条错误，不能是一个正常结果。
 // 这个约定和 claims / deconstruct / 定位 / 选题的 parseXxx 一致（它们也是抛错，路由转 502）。
 //
-// reported 是模型一共报了几条，unverifiable 是其中「引用对不上正文」被丢掉的条数。
-// 两个数都要露出来：上层要拿它们把「丢了几条、为什么丢」说出来。
+// reported 是模型一共报了几条，unverifiable 是其中「引用对不上正文」被丢掉的条数，
+// unanchored 是「引用在正文里、但长度用不了」被丢掉的条数。
+// 三个数都要露出来：上层要拿它们把「丢了几条、为什么丢」说出来。
 // 只返回 findings 的话，被丢掉的条目在界面上完全不可见——用户分不清「模型没报」和「报了但被丢」。
 export function parseLogicOutput(content, body) {
   const parsed = extractJson(content)
@@ -98,12 +108,13 @@ export function parseLogicOutput(content, body) {
   const source = String(body || '')
   const findings = []
   let unverifiable = 0
+  let unanchored = 0
   for (const item of items) {
     const quote = String(item?.problem || '').trim()
     // 引用不到原句的：按「编的」丢掉。丢掉的条数要单独数出来，下面要报给用户。
     if (!source.includes(quote)) { unverifiable += 1; continue }
-    // 一句话太短算不上「一个问题」，太长的多半是把整段抄回来了。
-    if (quote.length < 4 || quote.length > 120) continue
+    // 引句太短算不上「一个问题」，太长多半是把整段抄回来了。
+    if (quote.length < logicAnchorMinLength || quote.length > logicAnchorMaxLength) { unanchored += 1; continue }
     if (findings.some(finding => finding.quote === quote)) continue
     findings.push({
       code: logicCheckCode,
@@ -117,7 +128,7 @@ export function parseLogicOutput(content, body) {
     })
     if (findings.length >= 2) break
   }
-  return { findings, reported: items.length, unverifiable }
+  return { findings, reported: items.length, unverifiable, unanchored }
 }
 
 // 只取 findings 的旧形状，调用点（skill 路由、测试）不动。

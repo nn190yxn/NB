@@ -296,12 +296,14 @@ async function runLogicCheck(request, draft) {
   }
   const content = await generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(draftBody, spans))
   // 解析不出来会抛错（MODEL_OUTPUT_INVALID），路由转 502——不能让它变成「已通过」。
-  const { findings, reported, unverifiable } = parseLogicOutput(content, draftBody)
+  const { findings, reported, unverifiable, unanchored } = parseLogicOutput(content, draftBody)
   const suggestions = findings.length ? ['补一段回应它，或者把那句问题删掉。'] : []
   // 「模型报了几条、丢了几条」必须说出来。不说的话，「模型报了但全被引用闸门丢掉」这一种，
   // 在界面上和「模型说没问题」长得一模一样——又一处假阴性。
-  const verifiable = reported - unverifiable
+  // 长度用不了的（太短/整段拄）要另算一笔，不然「只显示前 N 条」会把它们混进「模型报太多」里。
+  const verifiable = reported - unverifiable - unanchored
   if (verifiable > findings.length) suggestions.push(`模型报了 ${verifiable} 条，这里按规则只显示前 ${findings.length} 条。`)
+  if (unanchored > 0) suggestions.push(`模型另外提了 ${unanchored} 条，引句太短或者把整段拄了回来，挂不到正文上，没有报给你。`)
   if (unverifiable > 0) suggestions.push(`模型另外提了 ${unverifiable} 条，引用对不上正文原句（多半是改写或编的），按规则丢弃了，没有报给你。`)
   return {
     status: findings.length ? 'warning' : 'passed',
@@ -1348,9 +1350,9 @@ const server = createServer(async (request, response) => {
       if (!spans.shouldCheck) return send(response, 200, { findings: [], checked: false })
       try {
         const content = await generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(draftBody, spans))
-        // reported / unverifiable 一并返回：调用方要能把「模型报了几条、丢了几条」说出来。
-        const { findings, reported, unverifiable } = parseLogicOutput(content, draftBody)
-        return send(response, 200, { findings, checked: true, reported, unverifiable })
+        // reported / unverifiable / unanchored 一并返回：调用方要能把「模型报了几条、丢了几条」说出来。
+        const { findings, reported, unverifiable, unanchored } = parseLogicOutput(content, draftBody)
+        return send(response, 200, { findings, checked: true, reported, unverifiable, unanchored })
       } catch (error) {
         return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG', 'MODEL_OUTPUT_INVALID'].includes(error.code) ? error.message : '逻辑检查失败，请检查模型配置并重试。', retryable: true })
       }

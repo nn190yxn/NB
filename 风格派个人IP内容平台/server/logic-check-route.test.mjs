@@ -166,4 +166,18 @@ test('草稿检查路由：模型输出不可解析时报 502，模型报的全�
   assert.equal(logic.status, 'passed')
   assert.equal(logic.evidence.length, 0)
   assert.ok(logic.suggestions.some(text => /引用对不上正文原句/.test(text)), '「模型报了但被丢掉」必须说出来，否则和「模型说没问题」长得一样')
+
+  // 情形三：模型报的引句确实在正文里，但只有 4 字，挂不上去。
+  // 真模型实测（2026-09-20）给过 4 字的「为什么？」：它会通过「必须真的在正文里」那道闸门，
+  // 界面上把标记挂在一个虚词上。这类同样是「报了但用不了」，条数必须说出来。
+  const shortBody = checkableBody.replace('编造引用', '短引句为什么？')
+  const shortened = await fetch(`${baseUrl}/api/drafts/${draft.id}`, { method: 'PUT', headers, body: JSON.stringify({ body: shortBody }) })
+  assert.equal(shortened.status, 200, '改正文应当成功')
+  const shortCheck = await fetch(`${baseUrl}/api/drafts/${draft.id}/checks/logic`, { method: 'POST', headers, body: JSON.stringify({ force: true }) })
+  assert.equal(shortCheck.status, 200)
+  const shortLogic = (await shortCheck.json()).checks.logic
+  assert.equal(shortLogic.status, 'passed')
+  assert.equal(shortLogic.evidence.length, 0, '引句太短挂不上去，不能变成一条指不出位置的证据')
+  assert.ok(shortLogic.suggestions.some(text => /引句太短/.test(text)), '「报了但引句太短」必须说出来')
+  assert.ok(!shortLogic.suggestions.some(text => /只显示前/.test(text)), '它不是「模型报太多被截」，不该混进那条说明')
 })

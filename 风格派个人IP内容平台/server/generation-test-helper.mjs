@@ -153,6 +153,9 @@ export async function startGenerationMock({ adaptBody } = {}) {
       const quote = (input.problems || [])[0] || ''
       // 「编造引用」用来测闸门：模型报了一句正文里根本没有的话，必须被丢掉。
       if (String(input.body).includes('编造引用')) return reply(JSON.stringify({ findings: [{ problem: '这句正文里根本没有', explain: '模型自己以为的问题' }] }))
+      // 「短引句」用来测长度闸门：引句确实在正文里，但只有 4 个字（真模型实测给过 4 字的「为什么？」），
+      // 挂上去看不出指哪里。这条必须被丢，且丢的条数要报给用户。
+      if (String(input.body).includes('短引句')) return reply(JSON.stringify({ findings: [{ problem: '为什么？', remedy: '把念头切成碎片', explain: '引句太短，挂不到具体那一处' }] }))
       return reply(JSON.stringify({ findings: [{ problem: quote, remedy: '把念头切成碎片', explain: '治的是不知道说什么' }] }))
     }
     if (system.includes('主张提炼')) {

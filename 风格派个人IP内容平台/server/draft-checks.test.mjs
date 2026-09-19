@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { checkPersona, checkPublishChecklist, checkQuality, draftCheckRewriteNote, hasBlockedCheck, markableIssues, scanGeneratedBodies } from './draft-checks.mjs'
 import { draftBriefPrompt, draftLengthTargets } from './draft-writing.mjs'
+import { prohibitedHits } from './redfox.mjs'
 
 // 语言层命中不再归并成类别：reminders 里已经是一个 code 一条，和 evidence 摊平成同一种条目。
 const issueItems = checked => [...(checked?.evidence || []), ...(checked?.reminders || [])]
@@ -323,6 +324,43 @@ test('具体案例与数字必须有人确认', () => {
   assert.equal(issueItems(question).some(item => item.code === 'case_claim'), false)
   const timeline = checkQuality({ ...baseDraft, body: '上周把这个选题拆成了三条内容，具体怎么拆的下面说。' }, {})
   assert.equal(issueItems(timeline).some(item => item.code === 'case_claim'), false)
+})
+
+test('真模型实测绕过词表的两种写法，现在要能挑出来', () => {
+  // 2026-09-20 真模型在「无素材」条件下生成的原文：
+  // 「我身边有个创业者，情绪极敏感，做内容三天打鱼两天晒网。」
+  // 旧词表里人物前缀只有「我有个」，人物词只到「创始人」，这句从两道口子中间穿过去了。
+  const founderBySide = checkQuality({ ...baseDraft, body: '我身边有个创业者，情绪极敏感，做内容三天打鱼两天晒网。' }, {})
+  const bySide = issueItems(founderBySide).find(item => item.code === 'case_claim')
+  assert.ok(bySide, '「我身边有个创业者」是人物前缀 + 人物词：必须留下证据')
+  assert.match(bySide.message, /案例人物/)
+  assert.match(bySide.message, /创业者/)
+
+  // 人物前缀「有个」单独也认（「有个同行」这类写法）。
+  const peer = checkQuality({ ...baseDraft, body: '有个同行上个月把账号停更了两周。' }, {})
+  assert.match(issueItems(peer).find(item => item.code === 'case_claim').message, /案例人物/)
+
+  // 不能因为新加的前缀就误伤作者自己的经历：第一人称不算「来路不明的案例」。
+  const own = checkQuality({ ...baseDraft, body: '我以前的内耗，就是总想着感觉对了再动，后来我把这种内耗硬改成了生产力。' }, {})
+  assert.equal(issueItems(own).some(item => item.code === 'case_claim'), false)
+})
+
+test('「第一反应」不是极限词；「全网第一」仍然是', () => {
+  // 2026-09-20 真模型实测：正文里的「看到爆款，第一反应不是拆逻辑」
+  // 被当成广告法极限词「第一」，质量门整条判 blocked、工作流进 needs_revision——一篇正常稿子被挡在发布链路外。
+  const reaction = checkQuality({ ...baseDraft, body: '看到爆款，第一反应不是拆逻辑，是这句话好戳我。' }, {})
+  assert.equal(issueItems(reaction).some(item => item.code === 'risk_words'), false, '「第一反应」不是主张')
+  assert.notEqual(reaction.status, 'blocked')
+
+  // 列表用法照旧放过（这个从第一版就排除了）。
+  const listed = checkQuality({ ...baseDraft, body: '第一，这个点能发哪个平台？第二，能改几个版本？第三，有没有反常识？' }, {})
+  assert.equal(issueItems(listed).some(item => item.code === 'risk_words'), false)
+
+  // 真主张不能被一起放过：带前缀的和裸用的都要留着。
+  assert.deepEqual(prohibitedHits('我们是全网第一的内容团队').map(item => item.word), ['第一'])
+  assert.deepEqual(prohibitedHits('这个定位方法在同行里是第一').map(item => item.word), ['第一'])
+  assert.deepEqual(prohibitedHits('他第一时间就到了').map(item => item.word), [], '「第一时间」也是固定词')
+  assert.deepEqual(prohibitedHits('第一印象很关键').map(item => item.word), [], '「第一印象」也是固定词')
 })
 
 test('质量门把咨询腔和工程词标出来', () => {
