@@ -139,6 +139,14 @@ export function defaultContentFormat(platform) {
   return ''
 }
 
+// 形式判断（content-form.mjs）只产出四种：短视频 / 中视频 / 长视频 / 长文。
+// 本期只生成抖音与视频号两条，都只认前三种；不认的值一律落回这两平台的默认形式。
+// 形式判断判完就该按它写，不能等生成完再靠「点一下重写」返工。
+export function resolveVideoFormat(requested) {
+  const raw = String(requested || '').trim()
+  return draftVideoFormats[raw] ? raw : defaultContentFormat(draftVideoPlatforms[0])
+}
+
 // 确认做默认不带 structure_id。空结构时用这四拍，避免模型自己发明说明书体。
 // 用写手能执行的句子，不用「钩子 / 公式 / 骨架」这类会泄漏进正文的词。
 export const defaultDraftStructure = [
@@ -170,7 +178,7 @@ export function groupMaterialsByRole(materials) {
   return groups
 }
 
-export function buildDraftBrief({ topic, structure, quotes, experiences, materials, memories, mechanisms, hookText }) {
+export function buildDraftBrief({ topic, structure, quotes, experiences, materials, memories, mechanisms, hookText, format }) {
   const roleGroups = groupMaterialsByRole(materials)
   const roleCount = draftMaterialRoles.reduce((sum, role) => sum + roleGroups[role].length, 0)
   const librarySteps = Array.isArray(structure?.steps) ? structure.steps.map(step => String(step)).filter(Boolean) : []
@@ -186,6 +194,8 @@ export function buildDraftBrief({ topic, structure, quotes, experiences, materia
     style: (memories || []).map(item => String(item.content || '')).filter(Boolean),
     mechanisms: (mechanisms || []).map(item => ({ content: String(item.content || ''), source: String(item.source_label || '对标账号') })).filter(item => item.content),
     platforms: draftPlatforms,
+    // 形式也得先进简报：prompt 里的体裁与字数都按它算，模型不能自己挑。
+    content_format: String(format || '').trim(),
     // 一条素材都没有时明说，让模型知道自己在裸写，而不是假装有依据。
     material_roles: roleGroups,
     material_gap: roleCount ? null : '这条选题没有可用素材：不要编案例和数字，没有依据的判断直接说成判断，不要说成事实。',
@@ -193,7 +203,20 @@ export function buildDraftBrief({ topic, structure, quotes, experiences, materia
   }
 }
 
-export function draftBriefPrompt(profile = {}) {
+// 层级决定写法（阶段 1「通电」的后半截）：同一句话，拉新层要说得让路人愿意停下，
+// 信任层要说得让人相信，转化层要说得让人知道下一步做什么。
+// 三层各只调最要紧的一处，不动平台基座、体裁和长度。
+export const strategyLayerWriting = {
+  reach: '这条属于泛流量触达：开头用路人也能听懂的具体场面或反常识判断把人留住，别用只有同行才懂的说法；中段不要展开细节，保住节奏。',
+  trust: '这条属于垂直信任：中段要让人看见你具体怎么做的——过程、判断依据、踩过的坑。经历和数字只能用简报里的，没有就讲通用现象，不许编。',
+  conversion: '这条属于核心目标转化：结尾落到一个明确、当下就能做的一步，不要停在泛泛的总结上；整篇围绕「他现在该做什么」写。',
+}
+
+export function strategyLayerNote(layer) {
+  return strategyLayerWriting[String(layer || '')] || ''
+}
+
+export function draftBriefPrompt(profile = {}, format = defaultContentFormat(draftPlatforms[0]), layer = '') {
   const profileFacts = [
     profile.role ? `身份：${profile.role}` : '',
     profile.audiences?.length ? `受众：${profile.audiences.join('、')}` : '',
@@ -213,9 +236,11 @@ export function draftBriefPrompt(profile = {}) {
     '开头第一句直给冲突或结论，必须是完整口播句：含话题，能脱离标题单独听懂；不要自问自答。',
     '主体先驳后立：先点破常见做法，再立判断；连续抽象别超过一小段。简报里有经历、数字就用，没有就讲通用现象。',
     '结尾给可执行的一步或一个明确判断。',
+    strategyLayerNote(layer),
     '本期只写抖音和视频号两条，两者必须是两种读感，不能同一篇改字数。按 platform_forms 写，并按下面的平台基座调读感。',
     `平台基座：抖音（${draftPlatformBaselineText('抖音')}）；视频号（${draftPlatformBaselineText('视频号')}）。`,
-    `长度：两平台都是短视频口播（${draftVideoFormats.短视频.duration}，${draftLengthRange('抖音')} 字），两平台长度目标相同，差异不在字数。把一件事讲清楚比卡时长重要。`,
+    `体裁：两平台都按${format}写——${draftVideoFormats[format].form}`,
+    `长度：两平台都是${format}（${draftVideoFormats[format].duration}，${draftLengthRange(draftPlatforms[0], format)} 字），两平台长度目标相同，差异不在字数。`,
     '只使用简报里的事实和素材，不编造成绩、客户、数字或案例；「具体支撑」只能用简报里的素材或你确知的真实经历，简报里没有案例时改用通用现象或判断说明，宁可少一个案例也不编造。不要写「我有个客户」「服务了无数」。',
     '不要写自我介绍、不要报名字或称呼（例如「大家好，我是某某」），也不要写引导关注、点赞一类话术；直接进入内容。',
     '正文是纯文本：不要写 Markdown 标记（如 # 标题、** 加粗）或结构占位说明（如「1个痛点场景」「1个客户案例（名字+数据）」），也不要在一条草稿里写其他平台的建议；正文只写给读者看的内容。',
@@ -238,11 +263,12 @@ export function draftDeaiPrompt() {
   ].join('')
 }
 
-export function draftGateRewritePrompt(summary) {
+export function draftGateRewritePrompt(summary, format = defaultContentFormat(draftPlatforms[0])) {
   return [
     '上一稿没过验收，必须按原因重写抖音和视频号两条。不要解释。',
     `验收未过：${String(summary || '').trim() || '咨询腔、编客户、设问开头或两平台同一篇'}。`,
-    '两条必须是两种读感，不能同一篇改字数。抖音和视频号都是短视频口播，按平台基座调读感，差异不在字数。',
+    '两条必须是两种读感，不能同一篇改字数。按平台基座调读感，差异不在字数。',
+    `体裁：两平台都按${format}写——${draftVideoFormats[format].form}`,
     `平台基座：抖音（${draftPlatformBaselineText('抖音')}）；视频号（${draftPlatformBaselineText('视频号')}）。`,
     '开头第一句直给冲突或结论，不要自问自答。',
     `删掉咨询腔和工程词：${consultingToneWords.join('、')}。不要编客户和数字。不要自我介绍。`,

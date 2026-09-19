@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { hookKindOf } from './topic-hooks.mjs'
 
 export function interviewInput(doc) {
   return { answers: Object.fromEntries(['0', '1', '2'].map(key => [key, String(doc.interview_answers?.[key] || '').trim()])), monetization_goals: doc.monetization_goals || [], acquisition_goals: doc.acquisition_goals || [] }
@@ -38,7 +39,10 @@ export function parseTopics(content, refs) {
   if (!Array.isArray(result) || result.length < 1 || result.length > 5) throw new Error('模型选题数量无效')
   return result.map(item => {
     if (!['reach', 'trust', 'conversion'].includes(item.strategy_layer)) throw new Error('选题策略无效')
-    if (!Array.isArray(item.source_indexes) || !item.source_indexes.length || item.source_indexes.some(index => !Number.isInteger(index) || !refs[index])) throw new Error('选题缺少有效来源')
-    return { title: text(item.title), rationale: text(item.rationale), content_job: text(item.content_job), strategy_layer: item.strategy_layer, source_refs: [...new Set(item.source_indexes)].map(index => refs[index]) }
+    // 角色约定（README 第 0 节）：一条来源都没有时也要能出选题——这是全新用户的必经之路。
+    // 有来源时仍然严格：模型不许引用不存在的来源编号。
+    if (!Array.isArray(item.source_indexes)) throw new Error('选题缺少 source_indexes 字段')
+    if (refs.length && (!item.source_indexes.length || item.source_indexes.some(index => !Number.isInteger(index) || !refs[index]))) throw new Error('选题缺少有效来源')
+    return { title: text(item.title), rationale: text(item.rationale), content_job: text(item.content_job), strategy_layer: item.strategy_layer, hook_kind: hookKindOf(item.hook_kind), source_refs: [...new Set(item.source_indexes)].map(index => refs[index]).filter(Boolean) }
   })
 }

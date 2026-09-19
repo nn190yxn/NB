@@ -18,7 +18,10 @@ import { callLlmWithFallback, callVision, testApiCapability } from './llm.mjs'
 import { interviewInput, interviewDigest, parsePositioning, fillProfile, parseTopics } from './positioning-generation.mjs'
 import { buildContentContext } from './content-context.mjs'
 import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
-import { briefUsableMaterial, buildDraftBrief, defaultContentFormat, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthRangeFrom, draftLengthTargetOf, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs } from './draft-writing.mjs'
+import { layerLedger, layerLedgerNote } from './layer-ledger.mjs'
+import { hookKindOf, layerOf, topicHookKinds, topicRequestNote, topicStrategyLayers } from './topic-hooks.mjs'
+import { materialPoolOf, materialPoolSummary, materialUseTags, poolFieldsForNew, withPoolFields } from './material-pools.mjs'
+import { briefUsableMaterial, buildDraftBrief, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthRangeFrom, draftLengthTargetOf, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs, resolveVideoFormat } from './draft-writing.mjs'
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
 import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, openingSentence, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
@@ -30,7 +33,7 @@ import { wechatHtmlDocument, wechatStyles } from './wechat-html.mjs'
 import { activeFeatureReplacements, buildPreferenceRecords, draftVersions, finalDraftCandidates, isFeatureId, performanceCandidates, performanceSignalNote } from './return-flow.mjs'
 import { guideColdStartPaths, guideState } from './guide.mjs'
 import { hookIdeasPrompt, hookReadiness, ideaKinds, parseHookIdeas, parseTitleIdeas, titleIdeasPrompt } from './ideas.mjs'
-import { titleFormulaSource } from './title-formulas.mjs'
+import { titleFormulaSource, titleFormulas, titleLibraryOf } from './title-formulas.mjs'
 
 // Requirement 19（冷启动降级路径）：定位、素材库、对标为空时不许把人卡在第一步。
 // 说清缺什么、补上能得到什么，并至少给一条现在就能走的路：小样本 / 收缩边界 / 纯选题无素材初稿。
@@ -628,8 +631,8 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/api/materials' && request.method === 'GET') {
       const params = url.searchParams
-      const hasQuery = ['q', 'format', 'status', 'review_status', 'sort', 'page', 'kind', 'trust', 'unit_type', 'kind_counts'].some(key => params.get(key))
-      if (!hasQuery) return send(response, 200, owned('materials', request).map(item => ({ ...item, material_trust: materialTrustOf(item), unit_type: unitTypeOf(item) })))
+      const hasQuery = ['q', 'format', 'status', 'review_status', 'sort', 'page', 'kind', 'trust', 'unit_type', 'pool', 'kind_counts'].some(key => params.get(key))
+      if (!hasQuery) return send(response, 200, owned('materials', request).map(item => withPoolFields({ ...item, material_trust: materialTrustOf(item), unit_type: unitTypeOf(item) })))
       if (params.get('kind_counts')) {
         const counts = { article: 0, quote: 0, hotspot: 0, insight: 0, experience: 0 }
         const trustCounts = { verified: 0, sourced: 0, derived: 0 }
@@ -643,7 +646,7 @@ const server = createServer(async (request, response) => {
           // article 是容器不是认知单元，不进「待定」——否则待办列表永远是满的。
           else if (String(item.material_kind || 'article') !== 'article') unitCounts.unset = (unitCounts.unset || 0) + 1
         }
-        return send(response, 200, { kind_counts: counts, trust_counts: trustCounts, unit_type_counts: unitCounts })
+        return send(response, 200, { kind_counts: counts, trust_counts: trustCounts, unit_type_counts: unitCounts, pool_summary: materialPoolSummary(owned('materials', request)) })
       }
       const query = (params.get('q') || '').trim().toLowerCase()
       const format = params.get('format') || ''
@@ -652,6 +655,7 @@ const server = createServer(async (request, response) => {
       const kind = params.get('kind') || ''
       const trust = params.get('trust') || ''
       const unit = params.get('unit_type') || ''
+      const pool = ['hot', 'built'].includes(params.get('pool')) ? params.get('pool') : ''
       const sort = ['latest', 'name'].includes(params.get('sort')) ? params.get('sort') : 'latest'
       const page = Math.max(1, Number(params.get('page')) || 1)
       const pageSize = 50
@@ -666,9 +670,10 @@ const server = createServer(async (request, response) => {
       // 「待定」只列真该人工判定的：article 是容器，不该出现在角色筛选里。
       if (unit === 'unset') items = items.filter(item => !unitTypeOf(item) && String(item.material_kind || 'article') !== 'article')
       else if (unitTypes.includes(unit)) items = items.filter(item => unitTypeOf(item) === unit)
+      if (pool) items = items.filter(item => materialPoolOf(item) === pool)
       items = [...items].sort((a, b) => sort === 'name' ? String(a.name).localeCompare(String(b.name), 'zh') : String(b.imported_at || b.created_at || '').localeCompare(String(a.imported_at || a.created_at || '')))
       // 历史素材没有 material_trust 字段，读的时候补齐，缺省 verified。
-      items = items.map(item => ({ ...item, material_trust: materialTrustOf(item), unit_type: unitTypeOf(item) }))
+      items = items.map(item => withPoolFields({ ...item, material_trust: materialTrustOf(item), unit_type: unitTypeOf(item) }))
       const total = items.length
       const start = (page - 1) * pageSize
       return send(response, 200, { items: items.slice(start, start + pageSize), total, page, page_size: pageSize })
@@ -686,7 +691,7 @@ const server = createServer(async (request, response) => {
       }
       const duplicate = originSource ? state.materials.find(item => item.owner_id === userId(request) && !item.deleted_at && item.origin_source_id === originSource.id && item.origin_text === text) : null
       if (duplicate) return send(response, 200, { ...duplicate, duplicate: true })
-      const material = { id: nextId(state.materials), owner_id: userId(request), name: String(body.name || '').trim() || text.slice(0, 40), source_path: null, format: 'text', content: text, url: null, checksum: createHash('sha256').update(`atom:${originSource ? originSource.id : ''}:${text}`).digest('hex'), status: 'ready', error: null, retry_count: 0, extracted_fields: { segments: [], candidate_topics: [], quotes: [] }, review_status: 'pending', strategy_layer: originSource?.strategy_layer || 'trust', goal_refs: originSource?.goal_refs || [], material_kind: body.kind, material_trust: 'verified', unit_type: unitTypes.includes(body.unit_type) ? body.unit_type : unitTypeFromKind(body.kind), source_label: String(body.source_label || '').trim() || null, origin_source_id: originSource ? originSource.id : null, origin_text: text, origin_material_name: originSource ? originSource.name : null, source_refs: originSource ? [sourceRef('material', originSource.id)] : [], imported_at: new Date().toISOString() }
+      const material = { id: nextId(state.materials), owner_id: userId(request), name: String(body.name || '').trim() || text.slice(0, 40), source_path: null, format: 'text', content: text, url: null, checksum: createHash('sha256').update(`atom:${originSource ? originSource.id : ''}:${text}`).digest('hex'), status: 'ready', error: null, retry_count: 0, extracted_fields: { segments: [], candidate_topics: [], quotes: [] }, review_status: 'pending', strategy_layer: originSource?.strategy_layer || 'trust', goal_refs: originSource?.goal_refs || [], material_kind: body.kind, material_trust: 'verified', unit_type: unitTypes.includes(body.unit_type) ? body.unit_type : unitTypeFromKind(body.kind), source_label: String(body.source_label || '').trim() || null, origin_source_id: originSource ? originSource.id : null, origin_text: text, origin_material_name: originSource ? originSource.name : null, source_refs: originSource ? [sourceRef('material', originSource.id)] : [], ...poolFieldsForNew({ kind: body.kind, expiresAt: body.expires_at, useTag: body.use_tag }), imported_at: new Date().toISOString() }
       state.materials.push(material)
       if (originSource && (body.kind === 'quote' || body.kind === 'hotspot')) {
         if (!originSource.extracted_fields) originSource.extracted_fields = {}
@@ -695,7 +700,7 @@ const server = createServer(async (request, response) => {
         if (!bucket.includes(text)) bucket.push(text)
       }
       await saveState('materials')
-      return send(response, 201, material)
+      return send(response, 201, withPoolFields(material))
     }
     const atomDeleteMatch = url.pathname.match(/^\/api\/materials\/atoms\/(\d+)$/)
     if (atomDeleteMatch && request.method === 'DELETE') {
@@ -723,12 +728,29 @@ const server = createServer(async (request, response) => {
       const lines = content.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
       const uploadKinds = ['article', 'quote', 'hotspot', 'insight', 'experience']
       const uploadKind = uploadKinds.includes(body.material_kind) ? body.material_kind : 'article'
-        const material = { id: nextId(state.materials), owner_id: userId(request), name: body.name || '未命名素材', source_path: body.path || null, format, content, url: body.url || null, checksum, status: parsed.status, error: parsed.error, retry_count: 0, extracted_fields: { segments: lines.slice(0, 8), candidate_topics: lines.filter(line => line.length >= 8).slice(0, 5), quotes: lines.filter(line => line.length >= 12).slice(0, 5) }, review_status: 'pending', strategy_layer: body.strategy_layer || 'trust', goal_refs: body.goal_refs || [], material_kind: uploadKind, material_trust: 'verified', unit_type: unitTypeFromKind(uploadKind), source_refs: [sourceRef('material', checksum)], imported_at: new Date().toISOString() }
+        const material = { id: nextId(state.materials), owner_id: userId(request), name: body.name || '未命名素材', source_path: body.path || null, format, content, url: body.url || null, checksum, status: parsed.status, error: parsed.error, retry_count: 0, extracted_fields: { segments: lines.slice(0, 8), candidate_topics: lines.filter(line => line.length >= 8).slice(0, 5), quotes: lines.filter(line => line.length >= 12).slice(0, 5) }, review_status: 'pending', strategy_layer: body.strategy_layer || 'trust', goal_refs: body.goal_refs || [], material_kind: uploadKind, material_trust: 'verified', unit_type: unitTypeFromKind(uploadKind), source_refs: [sourceRef('material', checksum)], ...poolFieldsForNew({ kind: uploadKind, expiresAt: body.expires_at, useTag: body.use_tag }), imported_at: new Date().toISOString() }
       state.materials.push(material)
        await saveState('materials')
-      return send(response, 201, material)
+      return send(response, 201, withPoolFields(material))
     }
     const materialMatch = url.pathname.match(/^\/api\/materials\/(\d+)$/)
+    // 用途签要能改：一条素材是「戳人的」还是「证明的」，往往是用过一阵子才判得出的，
+    // 不该逼人在录入那一刻就定死。没传的字段一律不动。
+    if (materialMatch && request.method === 'PATCH') {
+      const material = state.materials.find(item => item.id === Number(materialMatch[1]) && item.owner_id === userId(request) && !item.deleted_at)
+      if (!material) return send(response, 404, { error: '素材不存在' })
+      const body = await readJson(request)
+      if (body.use_tag !== undefined) {
+        if (body.use_tag !== null && !materialUseTags.includes(body.use_tag)) return send(response, 422, { error: '用途签只认「戳人的」和「证明的」，也可以留空' })
+        material.use_tag = body.use_tag
+      }
+      if (body.expires_at !== undefined) {
+        if (body.expires_at !== null && !Number.isFinite(Date.parse(String(body.expires_at)))) return send(response, 422, { error: '保鲜期格式无效' })
+        material.expires_at = body.expires_at
+      }
+      await saveState('materials')
+      return send(response, 200, withPoolFields(material))
+    }
     if (materialMatch && request.method === 'DELETE') {
       const material = state.materials.find(item => item.id === Number(materialMatch[1]) && item.owner_id === userId(request))
       if (!material || material.deleted_at) return send(response, 404, { error: '素材不存在' })
@@ -1146,7 +1168,7 @@ const server = createServer(async (request, response) => {
       return send(response, 200, { added: items.length, items: owned('research', request) })
     }
     const researchCollectMatch = url.pathname.match(/^\/api\/research\/(\d+)\/collect$/)
-    if (researchCollectMatch && request.method === 'POST') { const item = owned('research', request).find(existing => existing.id === Number(researchCollectMatch[1])); if (!item) return send(response, 404, { error: '研究条目不存在' }); const existing = owned('materials', request).find(material => material.source_type === 'research' && material.source_id === item.id && !material.deleted_at); if (existing) return send(response, 200, { ...existing, duplicate: true }); const material = { id: nextId(state.materials), owner_id: userId(request), name: item.title, material_kind: 'hotspot', material_trust: item.source === 'demo' ? 'derived' : 'sourced', unit_type: unitTypeFromKind('hotspot'), source_type: 'research', source_id: item.id, source_refs: [sourceRef('research', item.id)], url: item.url || null, content: item.title, status: 'ready', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }; state.materials.push(material); item.collected = true; await saveState('materials', 'research'); return send(response, 201, material) }
+    if (researchCollectMatch && request.method === 'POST') { const item = owned('research', request).find(existing => existing.id === Number(researchCollectMatch[1])); if (!item) return send(response, 404, { error: '研究条目不存在' }); const existing = owned('materials', request).find(material => material.source_type === 'research' && material.source_id === item.id && !material.deleted_at); if (existing) return send(response, 200, { ...existing, duplicate: true }); const material = { id: nextId(state.materials), owner_id: userId(request), name: item.title, material_kind: 'hotspot', material_trust: item.source === 'demo' ? 'derived' : 'sourced', unit_type: unitTypeFromKind('hotspot'), source_type: 'research', source_id: item.id, source_refs: [sourceRef('research', item.id)], url: item.url || null, content: item.title, status: 'ready', ...poolFieldsForNew({ kind: 'hotspot' }), created_at: new Date().toISOString(), updated_at: new Date().toISOString() }; state.materials.push(material); item.collected = true; await saveState('materials', 'research'); return send(response, 201, withPoolFields(material)) }
     if (url.pathname === '/api/research/similar' && request.method === 'POST') {
       const body = await readJson(request)
       const account = String(body.account || '').trim()
@@ -1241,15 +1263,24 @@ const server = createServer(async (request, response) => {
       const body = await readJson(request)
       const topic = String(body.topic || '').trim().slice(0, 300)
       if (!topic) return send(response, 422, { error: '选题不能为空' })
+      let judgement
       try {
         const content = await generateStructured(request, contentFormSystemPrompt, { topic })
-        return send(response, 200, parseFormJudgement(content))
+        judgement = parseFormJudgement(content)
       } catch (error) {
         // 模型给了范围外的形式：把契约错误原文透出并标记 retryable: false，
         // 否则使用者会以为是模型服务故障，反复点重试。
         const contractError = error.code === undefined && !/QUOTA|MISSING/.test(String(error.code || ''))
         return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: contractError ? error.message : ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '形式判断失败，请检查模型配置并重试。', retryable: !contractError })
       }
+      // 判完就存到选题上：生成草稿时直接按它写，不用再手抄一遍形式。
+      const target = body.topic_id ? owned('topics', request).find(item => item.id === body.topic_id) : null
+      if (!target) return send(response, 200, judgement)
+      target.content_format = judgement.form
+      target.content_format_reason = judgement.reason
+      target.content_format_judged_at = new Date().toISOString()
+      await saveState('topics')
+      return send(response, 200, { ...judgement, saved_topic_id: target.id })
     }
     if (url.pathname === '/api/skills/claims' && request.method === 'POST') {
       const body = await readJson(request)
@@ -1276,10 +1307,16 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/topics/generate' && request.method === 'POST') {
       const body = await readJson(request)
       const sourceRefs = (body.research_ids || []).filter(id => owned('research', request).some(item => item.id === id)).map(id => sourceRef('research', id)).concat((body.material_ids || []).filter(id => owned('materials', request).some(item => item.id === id)).map(id => sourceRef('material', id)))
-      if (!validateSourceRefs(sourceRefs) || !sourceRefs.length) return send(response, 422, { error: '选题生成至少需要一个有效来源' })
+      if (!validateSourceRefs(sourceRefs)) return send(response, 422, { error: '选题生成的来源引用无效' })
+      // 一条来源都不选是合法请求（全新用户就是这样）。但「点了来源、一条都没找到」是参数问题——
+      // 比如选中的素材已被撤回。这种要说出来，不能静默忽略：否则用户以为用了素材，其实没用。
+      const requestedSourceCount = (body.research_ids || []).length + (body.material_ids || []).length
+      if (requestedSourceCount && !sourceRefs.length) return send(response, 422, { error: '选中的来源都不存在或已撤回，请重新选择；也可以不选来源，直接生成' })
+      // 角色约定（README 第 0 节）：门槛只设在技术做不到的事上，不设在「你还没录入」的事上。
+      // 没有来源、没填定位都照常生成，只把缺口作为提示带回去，由用户自己决定要不要先补。
       const profile = userDocument('profile', request)
       const gaps = profileGaps(profile)
-      if (gaps.length) return send(response, 422, coldStartPayload(gaps, 'IP 档案资料不足'))
+      const coldStart = gaps.length ? coldStartPayload(gaps, 'IP 档案资料不足') : null
       let topics
       try {
         const sources = sourceRefs.map((ref, index) => {
@@ -1288,10 +1325,22 @@ const server = createServer(async (request, response) => {
         })
         // Requirement 17 第 2 条：确认过的发布表现要影响下一轮选题；待确认的不参与。
         const signalNote = performanceSignalNote(owned('performance_snapshots', request))
-        const content = await generateStructured(request, `依据档案及来源生成三个可验证的选题，返回数组，每项为 {"title":"标题","rationale":"依据","content_job":"内容任务","strategy_layer":"reach|trust|conversion","source_indexes":[0]}。只能引用提供的来源编号。${signalNote ? `\n${signalNote}` : ''}`, { profile: { role: profile.role, audiences: profile.audiences, problems: profile.problems, pillars: profile.pillars }, sources })
+        // 通电（阶段 1）：配比不再只是存下来的数字，它决定这一批生成什么层的选题。
+        const strategy = userDocument('strategy', request)
+        // 生成时间要落库，否则配比账没有周期口径可算（老选题没有这个字段，按「本期之前」读）。
+        const createdAt = new Date().toISOString()
+        const ledger = layerLedger({ ratios: strategy.layer_ratios, topics: owned('topics', request), reviewPeriod: strategy.review_period })
+        // 点名了这一批做哪层，就照办——此时不再念配比账，
+        // 否则模型会在「用户要的层」和「账上欠的层」之间自己折中，最后哪边都不算数。
+        const requestedLayer = layerOf(body.strategy_layer)
+        const requestedHook = hookKindOf(body.hook_kind)
+        const requestNote = topicRequestNote({ layer: requestedLayer, hookKind: requestedHook })
+        const ledgerNote = requestedLayer ? '' : layerLedgerNote(ledger, strategy.layer_ratios)
+        const content = await generateStructured(request, `依据档案及来源生成三个可验证的选题，返回数组，每项为 {"title":"标题","rationale":"依据","content_job":"内容任务","strategy_layer":"${topicStrategyLayers.join('|')}","hook_kind":"${topicHookKinds.join('|')}","source_indexes":[0]}。只能引用提供的来源编号。${signalNote ? `\n${signalNote}` : ''}${requestNote ? `\n${requestNote}` : ''}${ledgerNote ? `\n${ledgerNote}` : ''}`, { profile: { role: profile.role, audiences: profile.audiences, problems: profile.problems, pillars: profile.pillars }, sources })
         topics = parseTopics(content, sourceRefs).map((item, index) => {
           const refs = uniqueSourceRefs([...(item.source_refs || []), ...sourceRefs])
-          return defaultTopicFields({ ...item, id: nextId(state.topics) + index, owner_id: userId(request), source_refs: refs, fact_risk: 'needs_review', goal_refs: ['positioning'], generation_context: { profile_version: profile.version, source_count: refs.length } })
+          // 用户点名的层级以他为准，不跟着模型跑；没点名才用模型自己判的。
+          return defaultTopicFields({ ...item, id: nextId(state.topics) + index, owner_id: userId(request), source_refs: refs, fact_risk: 'needs_review', goal_refs: ['positioning'], strategy_layer: requestedLayer || item.strategy_layer, hook_kind: requestedHook || hookKindOf(item.hook_kind), created_at: createdAt, generation_context: { profile_version: profile.version, source_count: refs.length, cold_start: coldStart, layer_ledger: ledger, requested_layer: requestedLayer || null, requested_hook: requestedHook || null } })
         })
       } catch (error) { return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '选题生成失败，请检查模型配置并重试；历史选题保留。', retryable: true }) }
       state.topics.push(...topics)
@@ -1392,9 +1441,12 @@ const server = createServer(async (request, response) => {
       const requestedHook = String(body.hook_text || '').trim()
       const hookValidation = requestedHook ? validateHookText(requestedHook) : null
       if (hookValidation?.status === 'blocked') return send(response, 422, { error: 'Hook 校验未通过', code: 'validation_failed', evidence: hookValidation.evidence })
+      // 形式判断判完存在选题上，生成时按它写——否则判了等于没判，只能等稿子出来再点重写返工。
+      // 一组草稿共用一个形式：抖音与视频号都是抖音系，认同一套形式。
+      const contentFormat = resolveVideoFormat(body.content_format || topic?.content_format)
       const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
       const mechanisms = activeMemories(userId(request)).filter(item => item.memory_type === 'benchmark')
-      const brief = buildDraftBrief({ topic, structure, quotes: quoteMaterials, experiences: experienceMaterials, materials: roleMaterials, memories, mechanisms, hookText: requestedHook })
+      const brief = buildDraftBrief({ topic, structure, quotes: quoteMaterials, experiences: experienceMaterials, materials: roleMaterials, memories, mechanisms, hookText: requestedHook, format: contentFormat })
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       if (!configs.primary && !configs.fallback) return send(response, 422, { code: 'MISSING_CONFIG', reason: 'llm_not_configured', error: '草稿正文由大模型撰写，请先在 API 中心配置文本模型。' })
       if (usesSharedPrimaryLlm(request)) {
@@ -1413,7 +1465,7 @@ const server = createServer(async (request, response) => {
       let unbackedByPlatform = {}
       try {
         const result = await callLlmWithFallback(configs, [
-          { role: 'system', content: draftBriefPrompt(userDocument('profile', request)) },
+          { role: 'system', content: draftBriefPrompt(userDocument('profile', request), contentFormat, brief.strategy_layer) },
           { role: 'user', content: JSON.stringify(brief) },
         ])
         bodies = parseDraftBodies(result.content)
@@ -1425,7 +1477,7 @@ const server = createServer(async (request, response) => {
         if (gateResult.triggered) {
           rewritten = true
           const retry = await callLlmWithFallback(configs, [
-            { role: 'system', content: draftGateRewritePrompt(gateResult.summary) },
+            { role: 'system', content: draftGateRewritePrompt(gateResult.summary, contentFormat) },
             { role: 'user', content: JSON.stringify({ brief, previous: bodies, issues: { summary: gateResult.summary, same_essay: scan.same_essay, unbacked_numbers: unbackedByPlatform } }) },
           ])
           bodies = parseDraftBodies(retry.content)
@@ -1444,7 +1496,7 @@ const server = createServer(async (request, response) => {
       const usableAtoms = [...new Map([...quoteMaterials, ...experienceMaterials, ...roleMaterials].filter(briefUsableMaterial).map(item => [item.id, item])).values()]
       const atomRefs = usableAtoms.map(item => sourceRef('material', item.id))
       const sourceRefs = uniqueSourceRefs([...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs])
-      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: defaultContentFormat(platform), title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: usableAtoms.map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateSummary } }, created_at: new Date().toISOString() }))
+      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: contentFormat, title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: usableAtoms.map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateSummary } }, created_at: new Date().toISOString() }))
       if (persistedTopic?.id) {
         const archivedAt = new Date().toISOString()
         for (const draft of supersededDraftsForRegenerate(state.drafts, { ownerId: userId(request), topicId: persistedTopic.id })) {
@@ -1659,10 +1711,15 @@ const server = createServer(async (request, response) => {
       const kind = String(body.kind || '').trim()
       if (!ideaKinds.includes(kind)) return send(response, 422, { error: '方案类型只能是标题或开头', code: 'validation_failed' })
       if (body.version !== undefined && body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', code: 'version_conflict', current: draft })
-      const count = Math.min(Math.max(Number(body.count || 6) || 6, 1), 10)
+      // 前台一次只给 3 条标题方案（阶段 3「减负」第 2 条）：公式库整份留在后台当弹药，不一次全摆出来。
+      const count = Math.min(Math.max(Number(body.count || (kind === 'title' ? 3 : 6)) || 6, 1), 10)
       const materialIds = (draft.generation_context?.material_ids || []).map(Number)
       const materialText = owned('materials', request).filter(item => materialIds.includes(Number(item.id)) && !item.deleted_at).map(item => String(item.content || '')).filter(Boolean).join('\n')
       const ideas = { ...(draft.ideas || {}) }
+      // 换一换（阶段 3 补）：把之前给过的公式编号全部记下来，这一轮一条都不许再用。
+      // 记在服务端而不是堆在前端，刷新、换设备都不会把「看过哪些」弄丢。
+      const swap = Boolean(body.swap)
+      const shownBefore = kind === 'title' && swap && Array.isArray(ideas.title?.shown_formula_ids) ? ideas.title.shown_formula_ids.map(Number).filter(Number.isInteger) : []
       // 开头先过源技能 Phase 2 的素材检查：素材为零就直接停，不拿大模型去补一个没有素材的开头。
       const readiness = kind === 'hook' ? hookReadiness({ body: draft.body, materialText }) : null
       if (readiness && !readiness.canGenerate) {
@@ -1679,13 +1736,17 @@ const server = createServer(async (request, response) => {
       }
       try {
         const prompt = kind === 'title'
-          ? titleIdeasPrompt({ platform: draft.platform, topic: draft.title, body: draft.body, currentTitle: draft.title, count })
+          ? titleIdeasPrompt({ platform: draft.platform, topic: draft.title, body: draft.body, currentTitle: draft.title, count, excludeIds: shownBefore })
           : hookIdeasPrompt({ platform: draft.platform, topic: draft.title, body: draft.body, diagnosis: readiness, count })
         const result = await callLlmWithFallback(configs, [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }])
-        const plans = kind === 'title' ? parseTitleIdeas(result.content, draft.platform) : parseHookIdeas(result.content)
+        const parsed = kind === 'title' ? parseTitleIdeas(result.content, draft.platform) : parseHookIdeas(result.content)
+        // 模型不一定听「不许再用」的话，所以排除要在服务端再卡一道，不靠它自觉。
+        const plans = kind === 'title' ? parsed.filter(plan => !shownBefore.includes(Number(plan.formula_id))) : parsed
         // 一条能溯源的方案都没有就不落库：宁可不给，不给编的。
-        if (!plans.length) return send(response, 502, { code: 'IDEAS_UNTRACEABLE', error: '这一轮没给出能溯源的方案（公式编号不存在或方法名不认识），没有落库。可以再试一次。', retryable: true })
-        ideas[kind] = { plans, readiness, generated_at: new Date().toISOString(), draft_version: draft.version, provider: result.provider, source: kind === 'title' ? titleFormulaSource : hookMethodSource, methods: kind === 'hook' ? hookMethods : null }
+        if (!plans.length) return send(response, 502, { code: 'IDEAS_UNTRACEABLE', error: swap && shownBefore.length ? '这一轮换出来的公式和之前重复了，没落库。再点一次「换一换」试试。' : '这一轮没给出能溯源的方案（公式编号不存在或方法名不认识），没有落库。可以再试一次。', retryable: true })
+        // 当场看到的 3 条 + 之前所有轮次看过的，一起记下来，下次换一换就靠它排除。
+        const shownNow = kind === 'title' ? [...new Set([...shownBefore, ...plans.map(plan => Number(plan.formula_id))])] : null
+        ideas[kind] = { plans, readiness, generated_at: new Date().toISOString(), draft_version: draft.version, provider: result.provider, source: kind === 'title' ? titleFormulaSource : hookMethodSource, source_note: kind === 'title' ? (titleLibraryOf(draft.platform)?.exampleNote || '') : '', shown_formula_ids: shownNow, formula_total: kind === 'title' ? titleFormulas.length : null, methods: kind === 'hook' ? hookMethods : null }
         draft.ideas = ideas
         await saveState('drafts')
         return send(response, 200, draft)

@@ -20,3 +20,4 @@ server/preview-api*.log
 .preview-pids
 .superpowers/
 .ohmyagent/
+server/data.json.bak* 

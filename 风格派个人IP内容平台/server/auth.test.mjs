@@ -192,8 +192,9 @@ test('session 支持创建、复用和注销', async t => {
     headers: { cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ material_ids: [material.id] }),
   })
-  assert.equal(incompleteProfile.status, 422)
-  const incompleteProfileBody = await incompleteProfile.json()
+  // 角色约定：缺定位不拦停。照常生成，只把缺口作为提示带回来。
+  assert.equal(incompleteProfile.status, 201)
+  const incompleteProfileBody = (await incompleteProfile.json())[0].generation_context.cold_start
   // 冷启动不给死路：要说清缺什么、补上能得到什么，并给出至少一条现在就能走的路。
   assert.match(incompleteProfileBody.error, /^IP 档案资料不足：还缺 身份定位、服务对象、内容支柱/)
   assert.match(incompleteProfileBody.error, /补上 .* 之后，系统才能按你的定位生成选题/)
@@ -315,7 +316,12 @@ test('session 支持创建、复用和注销', async t => {
     headers: { cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ material_ids: [] }),
   })
-  assert.equal(missingSources.status, 422)
+  // 角色约定：一条来源都没有也要能生成选题——这是全新用户的必经之路。
+  assert.equal(missingSources.status, 201)
+  const noSourceTopics = await missingSources.json()
+  assert.ok(noSourceTopics.length > 0, '没有来源也要真的产出选题，不空手返回')
+  assert.equal(noSourceTopics[0].generation_context.source_count, 0)
+  assert.equal(noSourceTopics[0].generation_context.cold_start, null, '定位齐全时不该出现冷启动提示')
 
   const draftResponse = await fetch(`${baseUrl}/api/drafts/generate`, {
     method: 'POST',

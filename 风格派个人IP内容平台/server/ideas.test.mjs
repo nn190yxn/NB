@@ -60,7 +60,14 @@ test('标题方案要多个，每条带公式编号与分类，编的编号被�
   // 三条方案里有一条编号不存在，落到用户面前只能剩两条。
   assert.equal(ideas.plans.length, 2)
   assert.deepEqual(ideas.plans.map(item => item.formula_id), [34, 17])
-  assert.equal(ideas.source.includes('小红书'), true, '原始举例的来源要标清')
+  assert.equal(ideas.source.includes('小红书'), true, '举例的来源要标清')
+  // 阶段 3「减负」第 2 条：例子照给，但得说清它不是这个平台的，并告诉你该改哪。
+  assert.match(ideas.source_note, /小红书/, '要说清举例来自小红书')
+  assert.match(ideas.source_note, /抖音/, '要说清在抖音该注意什么')
+  assert.match(ideas.source_note, /别直接照搬/, '光说来源不够，要给出可执行的提醒')
+  // 前台一次只给 3 条：公式库整份留在后台当弹药，不一次全摆出来。
+  assert.equal(JSON.parse(llmMock.lastUser()).要几条方案, 3, '标题方案默认只问模型要 3 条')
+  assert.ok(ideas.plans.length <= 3, '前台最多 3 条')
 
   // AC 要求的四项溯源字段都要带上，用户才看得到「为什么是这条公式」。
   const first = ideas.plans[0]
@@ -86,6 +93,48 @@ test('标题方案要多个，每条带公式编号与分类，编的编号被�
     // 这条草稿的素材判定为「零素材」时源技能要求直接停，不出方案。
     assert.match(hookDraft.ideas.hook.blocked, /素材/)
   }
+})
+
+// 换一换：从公式库里换出没给过的，而不是把同样几条再摆一遍。
+test('换一换只给没看过的公式，全看完了就如实说换不出来', async t => {
+  const port = testPort(42300, 150)
+  const workspace = makeWorkspace()
+  const server = await startServer(port, workspace.dataFile)
+  t.after(() => { server.kill(); rmSync(workspace.dir, { recursive: true, force: true }) })
+  const base = `http://127.0.0.1:${port}`
+  const headers = bearer('ideas-swap')
+
+  const drafts = await generateDrafts(base, headers, { topic: { title: '换一换试试', strategy_layer: 'trust', goal_refs: [] } })
+  const first = await postIdeas(base, headers, drafts[0], 'title')
+  const roundOne = first.ideas.title.plans.map(item => item.formula_id)
+  assert.deepEqual(roundOne, [34, 17], '第一次照旧：999 是编的编号，丢掉')
+  // 第一次生成不是换一换，所以不该排除任何东西。
+  assert.deepEqual(JSON.parse(llmMock.lastUser())['不许再用的公式编号'], [], '第一次生成不排除任何公式')
+  assert.deepEqual(first.ideas.title.shown_formula_ids, [34, 17])
+  assert.equal(first.ideas.title.formula_total, 75, '要告诉界面公式库一共多少条')
+
+  const swap = () => fetch(`${base}/api/drafts/${first.id}/ideas`, { method: 'POST', headers, body: JSON.stringify({ kind: 'title', version: first.version, swap: true }) })
+
+  const second = await (await swap()).json()
+  const roundTwo = second.ideas.title.plans.map(item => item.formula_id)
+  assert.deepEqual(roundTwo, [36, 18], '换一换给的是没见过的公式')
+  assert.ok(roundTwo.every(id => !roundOne.includes(id)), '一条都不许和上一轮重复')
+  assert.deepEqual(JSON.parse(llmMock.lastUser())['不许再用的公式编号'], [34, 17], '上一轮看过的要报给模型')
+  assert.deepEqual(second.ideas.title.shown_formula_ids, [34, 17, 36, 18], '看过的要累积记住')
+
+  const third = await (await swap()).json()
+  const roundThree = third.ideas.title.plans.map(item => item.formula_id)
+  assert.ok(roundThree.every(id => ![...roundOne, ...roundTwo].includes(id)), '第三轮还是不许重复')
+  assert.deepEqual(third.ideas.title.shown_formula_ids, [34, 17, 36, 18, 22])
+
+  // 池子里没给过的都用完了：如实说换不出来，不把旧公式重新端上来。
+  const exhausted = await swap()
+  assert.equal(exhausted.status, 502, '换不出来要报错，不能假装成功')
+  const payload = await exhausted.json()
+  assert.match(payload.error, /重复/, '错误要说清是「换出来的和之前重复」')
+  // 换失败不落库，看过的名单不能被弄脏，否则用户越换越少。
+  const list = await (await fetch(`${base}/api/drafts`, { headers })).json()
+  assert.deepEqual(list[0].ideas.title.shown_formula_ids, [34, 17, 36, 18, 22], '换失败不该动已看过的名单')
 })
 
 test('素材为零时开头不出方案，直接照源技能停下来让人去补', async t => {

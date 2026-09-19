@@ -10,13 +10,14 @@ import { dimensionPassScore, evaluateTopic } from './topic-evaluation.mjs'
 
 const recent = () => new Date().toISOString()
 
-test('选题把关：全部维度不达标才拦停，并给出「不建议做」与第一步', () => {
-  const blocked = evaluateTopic({ title: '第一最好最强的内容', strategy_layer: 'reach' }, { research: [], materials: [], structures: [], profile: {}, strategy: {} })
-  assert.equal(blocked.blocked, true, '七个维度全部低于及格线，就该明确不建议做')
-  assert.equal(blocked.decision, 'defer', '拦停时决策必须落到暂缓，不能还留「建议改方向」')
-  assert.match(blocked.conclusion, /不建议做/)
-  assert.match(blocked.first_step, /先别做这一条/)
-  const scores = Object.values(blocked.dimensions).map(item => item.score)
+test('选题把关：全部维度不达标只给建议，不否决', () => {
+  const weak = evaluateTopic({ title: '第一最好最强的内容', strategy_layer: 'reach' }, { research: [], materials: [], structures: [], profile: {}, strategy: {} })
+  assert.equal(weak.all_weak, true, '七个维度全部低于及格线要标出来，但那只是信息，不是否决')
+  assert.equal(weak.decision, 'defer', '全维度不达标时决策落到暂缓')
+  assert.match(weak.conclusion, /建议是先放一放/)
+  assert.equal(weak.blocked, undefined, '否决字段必须彻底消失：评估只给建议，不发许可')
+  assert.doesNotMatch(weak.first_step, /先别做/, '全维度不达标也要给现在能走的第一步，不能把人打发走')
+  const scores = Object.values(weak.dimensions).map(item => item.score)
   assert.equal(scores.length, 7, '维度数量要保持七个，不因为「五维诊断」的说法砍掉制作成本和合规风险')
   assert.ok(scores.every(score => score < dimensionPassScore))
 })
@@ -30,7 +31,7 @@ test('选题把关：只要有一个维度达标就不拦停，第一步取自�
     strategy: {},
   }
   const result = evaluateTopic({ title: '客户为什么不来问价', strategy_layer: 'trust' }, context)
-  assert.equal(result.blocked, false, '还有维度达标就不该拦停：误杀比放过贵')
+  assert.equal(result.all_weak, false, '还有维度达标就不该标成全弱：误杀比放过贵')
   assert.notEqual(result.decision, 'defer')
   assert.match(result.conclusion, /建议/)
   assert.doesNotMatch(result.conclusion, /不建议做/)
@@ -65,7 +66,7 @@ test('内容质量差的选题走完生成也不拦停：稿子照常入库，�
 
   // 这条选题在把关里是七维全部不达标的（风险词命中、没有来源、没有素材）。
   const badTopic = { title: '第一最好绝对靠谱的方法', strategy_layer: 'reach', goal_refs: [] }
-  assert.equal(evaluateTopic(badTopic, { research: [], materials: [], structures: [], profile: {}, strategy: {} }).blocked, true, '前提：这条选题在关里是被拦的')
+  assert.equal(evaluateTopic(badTopic, { research: [], materials: [], structures: [], profile: {}, strategy: {} }).all_weak, true, '前提：这条选题在关里是七维全弱的')
 
   const response = await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers, body: JSON.stringify({ topic: badTopic }) })
   assert.ok(response.ok, `生成链路不得因为内容质量返回 4xx/5xx，实际 ${response.status}`)

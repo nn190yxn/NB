@@ -9,19 +9,23 @@ import { titleFormulaCatalog, titleFormulaSource, validateTitlePlans } from './t
 export const ideaKinds = ['title', 'hook']
 
 // 标题方案。公式目录整份喂进去，模型只许从里面挑，并且必须报出编号。
-export function titleIdeasPrompt({ platform, topic = '', body = '', currentTitle = '', count = 6 } = {}) {
+// excludeIds：已经给过用户的公式编号，换一换时传进来，这一轮一条都不许再用。
+export function titleIdeasPrompt({ platform, topic = '', body = '', currentTitle = '', count = 6, excludeIds = [] } = {}) {
+  const banned = [...new Set((Array.isArray(excludeIds) ? excludeIds : []).map(Number).filter(Number.isInteger))]
   const system = [
     `你在给${platform}内容挑标题。只能从下面给出的公式里挑，不许自己发明公式。`,
     '每条方案都必须写明用了第几号公式，以及为什么这条公式配这个话题。',
     `公式里的「原始举例」来自${titleFormulaSource}，那是别的平台的爆款，只用来理解这条公式被验证过什么样，不要把举例里的行业词硬套到这个话题上。`,
     '给不同公式的方案，不要一条公式出好几条。',
-  ].join('')
+    banned.length ? `这几条公式之前已经给过了，这一轮一条都不许再用：${banned.join('、')}。请从目录里挑没用过的编号。` : '',
+  ].filter(Boolean).join('')
   const user = JSON.stringify({
     平台: platform,
     话题: topic,
     现在的标题: currentTitle,
     正文: String(body || '').slice(0, 1200),
     要几条方案: count,
+    不许再用的公式编号: banned,
     公式目录: titleFormulaCatalog(platform),
     输出格式: { plans: [{ formula_id: '公式编号（数字）', title: '标题', why: '为什么这条公式配这个话题' }] },
   })

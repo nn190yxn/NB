@@ -145,8 +145,10 @@ export function checkQuality(draft, profile = {}, options = {}) {
   // 语言层提醒单独放：一次一条展示，不混进 evidence。
   let reminders = []
   if (!body) { evidence.push(evidenceItem('body_missing', '正文不能为空', 'blocked')); suggestions.push('补充正文内容') }
-  if (!openingReady) { evidence.push(evidenceItem('opening_missing', '尚未用「开头句」槽位确定开头范式', 'blocked')); suggestions.push('点草稿的「开头句」槽位，从方法库选一个开头范式') }
-  if (!sourceValid || sourceCount(draft) === 0) { evidence.push(evidenceItem('source_missing', '草稿缺少有效来源引用', 'blocked')); suggestions.push('补回选题、素材或方法来源') }
+  // 角色约定（README 第 0 节）：判断性判据不设卡，只作为可改项。
+  // 没选开头范式、缺来源引用、综合分低，都是「我的看法」，不是「你做不到」。
+  if (!openingReady) { evidence.push(evidenceItem('opening_missing', '尚未用「开头句」槽位确定开头范式')); suggestions.push('点草稿的「开头句」槽位，从方法库选一个开头范式') }
+  if (!sourceValid || sourceCount(draft) === 0) { evidence.push(evidenceItem('source_missing', '草稿缺少有效来源引用')); suggestions.push('补回选题、素材或方法来源；自己心里有数也可以不补') }
   if (riskHits.length) { evidence.push(evidenceItem('risk_words', `正文命中风险表达：${riskHits.join('、')}`, 'blocked')); suggestions.push('修改风险表达后重新检查') }
   if (body && structureScore < 100) { evidence.push(evidenceItem('structure_weak', '正文长度或段落结构仍需加强')); suggestions.push('补充真实过程、证据和可执行步骤') }
   // 受众/支柱的命中靠「正文里出现档案里的原话」。档案里写成了整句时（实测他现在的受众是 17 字整句），
@@ -176,9 +178,9 @@ export function checkQuality(draft, profile = {}, options = {}) {
   reminders = replacedFeatureIds && replacedFeatureIds.size
     ? writing.reminders.filter(item => { const feature = featureForCode(item.code); return !(feature && replacedFeatureIds.has(Number(feature.id))) })
     : writing.reminders
-  const scoreBlocked = score < 60
-  if (scoreBlocked) evidence.push(evidenceItem('score_low', '质量综合分低于 60 分', 'blocked'))
-  const blocked = evidence.some(item => item.severity === 'blocked') || scoreBlocked
+  // 综合分是判断，不是事实：低分只作为可改项，不封堵。
+  if (score < 60) evidence.push(evidenceItem('score_low', '质量综合分低于 60 分'))
+  const blocked = evidence.some(item => item.severity === 'blocked')
   return result(blocked ? 'blocked' : 'passed', { score, dimensions, evidence, suggestions, reminders, draftVersion: currentVersion(draft) })
 }
 
@@ -234,7 +236,8 @@ export function draftCheckRewriteNote(draft) {
   for (const key of ['persona', 'quality']) {
     const item = draft?.checks?.[key]
     if (!item || Number(item.draft_version || 0) !== version) continue
-    if (item.status === 'passed') continue
+    // 不看整体状态：状态是「整体过没过」，而 evidence 里还挂着字数、语言层这类可改项。
+    // 以前只在未通过时才抽指令，于是「整体通过但字数超了」时，改写指令里反而没有字数要求。
     for (const evidence of item.evidence || []) {
       if (seen.has(evidence.code)) continue
       seen.add(evidence.code)

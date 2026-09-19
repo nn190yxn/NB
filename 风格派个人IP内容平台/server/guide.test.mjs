@@ -14,7 +14,8 @@ const coldStartPaths = guideColdStartPaths
 test('单步路由：没做过就带他走一遍，做到一半指出下一步，走完转成任务后导航', () => {
   const empty = guideState({}, { coldStartPaths })
   assert.equal(empty.mode, '新手教程')
-  assert.equal(empty.next.id, 'positioning')
+  // 阶段 3「减负」：主线从选题开始，定位/素材/对标/结构库改成随时可补的资产。
+  assert.equal(empty.next.id, 'topics')
   assert.equal(empty.next.index, 1)
   assert.equal(empty.done_count, 0)
   // 引导覆盖从定位到发布的完整链路：十一个环节，每个都给出一个动作。
@@ -26,7 +27,7 @@ test('单步路由：没做过就带他走一遍，做到一半指出下一步�
 
   const halfway = guideState({ positioning: { positioning_statement: '服务做过内容但没成交的人' }, materials: [{ id: 1, content: '素材' }] }, { coldStartPaths })
   assert.equal(halfway.mode, '任务前路由')
-  assert.equal(halfway.next.id, 'research')
+  assert.equal(halfway.next.id, 'topics', '资产做了一半也仍在主线上，主线起点是选题')
   assert.deepEqual(halfway.completed, ['定位', '素材'])
   // 非强制线性：所有环节都带 done 状态摆出来，界面可以随便跳，不是必须顺着走。
   assert.equal(halfway.stages.filter(stage => stage.done).length, 2)
@@ -85,7 +86,7 @@ test('新手进来只看到一个动作，冷启动降级路径一并给到', as
   const guide = await response.json()
   assert.equal(response.status, 200, `取路由失败：${JSON.stringify(guide).slice(0, 200)}`)
   assert.equal(guide.mode, '新手教程')
-  assert.equal(guide.next.id, 'positioning')
+  assert.equal(guide.next.id, 'topics')
   assert.equal(guide.next.index, 1)
   assert.equal(guide.degraded.active, true)
   assert.ok(guide.degraded.paths.length >= 1, '缺素材缺定位的时候要给出降级路径，而不是直接进重流程')
@@ -100,5 +101,6 @@ test('新手进来只看到一个动作，冷启动降级路径一并给到', as
   const after = await (await fetch(`${base}/api/guide`, { headers })).json()
   assert.equal(after.degraded.active, false)
   assert.deepEqual(after.completed, ['定位'])
-  assert.equal(after.next.id, 'materials')
+  // 补上定位之后降级提示消失。但主线不再跟到素材——定位是资产，主线仍然从选题开始。
+  assert.equal(after.next.id, 'topics', '补了资产不等于进了主线，下一步还是选题')
 })

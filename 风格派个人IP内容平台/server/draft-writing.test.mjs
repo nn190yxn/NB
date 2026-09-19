@@ -125,6 +125,32 @@ test('平台收敛到抖音与视频号，历史平台仍可读，平台基座�
   assert.equal(draftPlatformRevisePrompt('公众号', '长文').includes('平台读感'), false)
 })
 
+test('层级进生成提示词：三层各给一套写法，选哪层只调哪层', () => {
+  // 通电（阶段 1）：strategy_layer 以前只躺在简报里，提示词看都不看——
+  // 同一个题目写成拉新还是写成转化，稿子一模一样。
+  const reach = draftBriefPrompt({}, undefined, 'reach')
+  const trust = draftBriefPrompt({}, undefined, 'trust')
+  const conversion = draftBriefPrompt({}, undefined, 'conversion')
+  assert.match(reach, /泛流量触达/)
+  assert.match(trust, /垂直信任/)
+  assert.match(conversion, /核心目标转化/)
+  assert.notEqual(reach, trust)
+  assert.notEqual(trust, conversion)
+  assert.doesNotMatch(reach, /垂直信任|核心目标转化/, '选一层只调一层，不能把三层都塞进去')
+  assert.doesNotMatch(trust, /泛流量触达/)
+
+  // 没给层级（老调用方式）时维持原样，不塞进任何层级话术。
+  const plain = draftBriefPrompt({})
+  assert.doesNotMatch(plain, /泛流量触达|垂直信任|核心目标转化/)
+  assert.equal(draftBriefPrompt({}, undefined, '不存在的层'), plain, '不认识的层级退回原样，不抛错')
+
+  // 加了层级不能把平台基座、体裁、长度这些挤掉。
+  for (const prompt of [reach, trust, conversion]) {
+    for (const platform of draftPlatforms) assert.ok(prompt.includes(draftPlatformBaselineText(platform)))
+    assert.match(prompt, /"抖音":"\.\.\."/)
+  }
+})
+
 test('未配置模型时草稿生成 422 且不落库', async t => {
   const server = await startServer()
   t.after(() => server.kill())

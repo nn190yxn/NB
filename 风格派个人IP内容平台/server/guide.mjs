@@ -9,6 +9,12 @@
 //   任务前路由 = 做到一半，指出下一个动作；
 //   任务后导航 = 链路走完，往回接新一轮选题。
 
+// 主线从「选题」开始（阶段 3「减负」第 4 条）：定位 / 素材 / 对标 / 结构库这四段移出主线，
+// 变成「随时可补的资产」——主线回答「这一条做什么」，资产回答「手头有什么」。
+//
+// 一段都没删，只改了它们出现在哪里：新用户不该被四段准备工作挡在门外。
+const guideAssetStageIds = ['positioning', 'materials', 'research', 'structures']
+
 export const guideStages = [
   { id: 'positioning', label: '定位', question: '你的账号打给谁、凭什么', action: '生成定位候选，选一个', needs: '定位', gain: '后面所有诊断都拿它当尺子' },
   { id: 'materials', label: '素材', question: '有什么是你自己经历过的', action: '录一条素材，或导入一段录音', needs: '至少一条素材', gain: '初稿才写得出别人写不出的细节' },
@@ -24,6 +30,11 @@ export const guideStages = [
 ]
 
 export const guideMods = ['新手教程', '任务前路由', '任务后导航']
+
+export const guideStageTrack = stage => guideAssetStageIds.includes(stage?.id) ? 'asset' : 'main'
+// 主线：这一条内容从选题走到回流。资产：手头有什么，随时能补。
+export const guideMainStages = guideStages.filter(stage => guideStageTrack(stage) === 'main')
+export const guideAssetStages = guideStages.filter(stage => guideStageTrack(stage) === 'asset')
 
 // Requirement 19：定位、素材、对标全空时给这三条，不拿选题生成那套「缺身份定位」文案顶上来。
 export const guideColdStartPaths = [
@@ -71,8 +82,10 @@ export function guideProgress(data = {}) {
 
 export function guideState(data = {}, { coldStartPaths = guideColdStartPaths } = {}) {
   const done = guideProgress(data)
-  const next = guideStages.find(stage => !done[stage.id]) || null
+  // 下一步只在主线上找：资产类（定位/素材/对标/结构库）没做也照样能出选题，不挡路。
+  const next = guideMainStages.find(stage => !done[stage.id]) || null
   const doneCount = guideStages.filter(stage => done[stage.id]).length
+  const mainDoneCount = guideMainStages.filter(stage => done[stage.id]).length
   const mode = doneCount === 0 ? '新手教程' : next ? '任务前路由' : '任务后导航'
 
   // 冷启动降级：定位、素材、对标三样全空的时候，不走重流程。
@@ -83,11 +96,15 @@ export function guideState(data = {}, { coldStartPaths = guideColdStartPaths } =
 
   return {
     mode,
-    stages: guideStages.map(stage => ({ ...stage, done: done[stage.id] })),
+    stages: guideStages.map(stage => ({ ...stage, track: guideStageTrack(stage), done: done[stage.id] })),
     done_count: doneCount,
     total: guideStages.length,
+    // 主线进度单独给一份：界面该让他看到「这一条走到哪」，不是「十一件事做了几件」。
+    main_done_count: mainDoneCount,
+    main_total: guideMainStages.length,
+    asset_stages: guideAssetStages.map(stage => ({ ...stage, track: 'asset', done: done[stage.id] })),
     // 单步：只把这个动作摆到最前面；其余环节仍然可点，不强制线性。
-    next: next ? { ...next, index: guideStages.findIndex(stage => stage.id === next.id) + 1 } : null,
+    next: next ? { ...next, track: guideStageTrack(next), index: guideMainStages.findIndex(stage => stage.id === next.id) + 1 } : null,
     completed: guideStages.filter(stage => done[stage.id]).map(stage => stage.label),
     degraded,
   }

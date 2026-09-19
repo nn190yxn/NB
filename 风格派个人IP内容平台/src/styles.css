@@ -129,7 +129,22 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .topic-evaluation-card { align-items: flex-start; }.topic-evaluation-card > div:first-child { min-width: 0; }.topic-score-row { display: flex; align-items: baseline; gap: 10px; margin-top: 12px; }.topic-score-row strong { color: var(--accent); font: 600 20px var(--font-mono); }.topic-score-row span { color: var(--accent-ink); font-size: 12.5px; font-weight: 700; }.topic-score-row small { color: var(--muted); font-size: 11.5px; }.topic-dimensions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 12px; }.topic-dimensions span { display: flex; flex-direction: column; gap: 4px; padding: 8px 9px; border-radius: 8px; background: var(--canvas); }.topic-dimensions b { color: var(--muted); font-size: 10.5px; font-weight: 500; }.topic-dimensions strong { color: var(--ink); font: 600 14px var(--font-mono); }.topic-evidence { margin-top: 11px; color: var(--muted); font-size: 11.5px; }.topic-evidence summary { cursor: pointer; color: var(--accent-ink); }.topic-evidence ul { margin: 8px 0; padding-left: 18px; line-height: 1.7; }.topic-evidence p { color: var(--accent-ink); }.topic-pending { margin-top: 10px !important; }.topic-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }.topic-actions .outline-action { padding: 7px 0; }.topic-actions .primary-action { margin: 0; padding: 9px 14px; font-size: 12.5px; white-space: nowrap; }
 @media (max-width: 680px) { .topic-evaluation-card > div:first-child { width: 100%; flex: 1 1 100%; min-width: 0; }.topic-dimensions { grid-template-columns: repeat(2, minmax(0, 1fr)); }.topic-actions { width: 100%; flex: 1 1 100%; margin-left: 0; }.topic-actions .outline-action { padding: 8px; } }
 .claims-list { margin: 10px 0 0; padding-left: 18px; color: var(--ink); font-size: 13px; line-height: 1.75; }
-.deconstruct-input textarea { min-height: 96px; resize: vertical; line-height: 1.7; }
+.deconstruct-input textarea { width: 100%; min-height: 120px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-strong); color: var(--ink); font: inherit; font-size: 13.5px; line-height: 1.75; outline: none; resize: vertical; }
+.deconstruct-input textarea:focus { border-color: var(--accent); }
+
+/* 拆概念 / 提主张 / 形式判断：左输入、右结果。输入和它触发的按钮在同一栏，不再隔一个页宽。 */
+.workspace-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 20px; align-items: start; margin-top: 20px; }
+.workspace-pane { display: flex; flex-direction: column; gap: 13px; min-width: 0; }
+.workspace-pane .deconstruct-input { margin-bottom: 0; }
+.workspace-pane .deconstruct-input select { width: auto; max-width: 100%; }
+.workspace-pane .deconstruct-input textarea { min-height: 200px; }
+.workspace-pane .deconstruct-source { margin-bottom: 0; }
+.workspace-pane .structure-empty { padding: 26px 22px; }
+.workspace-pane-actions { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; }
+.workspace-pane-actions .primary-action { margin: 0; }
+.workspace-pane-actions small { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+@media (max-width: 1100px) { .workspace-split { display: block; }.workspace-pane + .workspace-pane { margin-top: 18px; } }
+@media (max-width: 680px) { .workspace-pane .deconstruct-input textarea { min-height: 150px; }.workspace-pane-actions { align-items: stretch; flex-direction: column; }.workspace-pane-actions .primary-action { width: 100%; justify-content: center; } }
 
 /* 内容创作 · 多平台发布 */
 .draft-publish { margin-top: 12px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); }
@@ -319,3 +334,60 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .replace-plan .replace-new { color: #1f6feb; font-weight: 600; }
 .replace-plan .replace-dropped { color: var(--muted); font-size: 11px; }
 @media (max-width: 680px) { .draft-edit-bar { align-items: stretch; flex-direction: column; }.draft-edit-actions { width: 100%; }.draft-edit-actions button { flex: 1; } }
+
+/* 从素材库选一条当输入：三个加工面板共用，省掉复制粘贴与来回切页面 */
+.deconstruct-input select { width: 100%; padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-strong); color: var(--ink); font: inherit; font-size: 13.5px; outline: none; }
+.deconstruct-input select:focus { border-color: var(--accent); }
+.deconstruct-source { margin-bottom: 14px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.deconstruct-source > p { margin: 0 0 8px; }
+.deconstruct-source-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-bottom: 8px; color: var(--muted); font-size: 11.5px; }
+.deconstruct-source-chips .outline-action { padding: 3px 10px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-strong); font-size: 11.5px; }
+.deconstruct-source summary { cursor: pointer; color: var(--accent); font-size: 12.5px; }
+.deconstruct-source details p { margin: 8px 0 0; }
+
+/* 料台（阶段 2）：素材库分「热点素材 / 自建素材」两池。取自原型 mockups/素材库-新料台.html。 */
+.material-pool { margin-top: 22px; }
+.pool-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.pool-head h2 { margin: 0; font: 600 19px var(--font-heading); letter-spacing: -.04em; }
+.pool-head p { flex: 1 1 100%; margin: 0; color: var(--muted); font-size: 12.5px; }
+.pool-pill { padding: 3px 9px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+.pool-pill.hot { color: var(--amber); background: color-mix(in srgb, var(--amber) 13%, transparent); }
+.pool-pill.built { color: var(--positive); background: color-mix(in srgb, var(--positive) 12%, transparent); }
+.pool-hot .material-group { margin-top: 12px; }
+.pool-built .material-group { margin-top: 12px; }
+.pool-tags { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 9px; }
+.pool-tags .chip { padding: 3px 10px; font-size: 11px; }
+.shelf { padding: 3px 9px; border-radius: 99px; color: var(--muted); background: var(--surface); font: 11px var(--font-mono); }
+.shelf.warn { color: var(--amber); background: color-mix(in srgb, var(--amber) 13%, transparent); }
+.shelf.urgent { color: var(--coral); background: color-mix(in srgb, var(--coral) 13%, transparent); }
+.shelf.expired { color: var(--muted); text-decoration: line-through; }
+.counter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13.5px; }
+.counter { padding: 19px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-strong); box-shadow: var(--shadow); }
+.counter span { display: block; color: var(--muted); font: 500 11.5px var(--font-mono); letter-spacing: .06em; }
+.counter strong { display: block; margin: 11px 0 6px; font: 600 32px/1 var(--font-mono); letter-spacing: -.04em; }
+.counter small { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.counter.hot { border-left: 3px solid var(--amber); }.counter.hot strong { color: var(--amber); }
+.counter.pierce strong { color: var(--coral); }
+.counter.proof strong { color: var(--accent); }
+@media (max-width: 900px) { .counter-grid { grid-template-columns: 1fr; } }
+
+/* 选题评估：前台先给两句话（做不做、先做什么），七维收进折叠里。 */
+.topic-verdict { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 3px; }
+.topic-verdict strong { padding: 3px 11px; border-radius: 99px; font-size: 12.5px; font-weight: 600; }
+.topic-verdict small { color: var(--ink); font-size: 13px; line-height: 1.6; }
+.topic-verdict.do strong { color: var(--positive); background: color-mix(in srgb, var(--positive) 13%, transparent); }
+.topic-verdict.revise strong { color: var(--amber); background: color-mix(in srgb, var(--amber) 13%, transparent); }
+.topic-verdict.defer strong { color: var(--muted); background: var(--surface); }
+
+/* 标题举例的平台差异提示：例子是真的，但不是这个平台的，要说清楚。 */
+.draft-ideas-caveat { display: block; margin: 6px 0 0; color: var(--amber); font-size: 11.5px; line-height: 1.6; }
+
+/* 诊断主角位：开头多维诊断从脚注提到台前；语言层 22 特征降为可选层（点开才看）。 */
+.opening-diagnosis { margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--amber); border-radius: 8px; }
+.opening-diagnosis strong { display: block; margin-bottom: 6px; font-size: 12.5px; }
+.opening-diagnosis-dims { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 5px; }
+.opening-diagnosis-dims span { padding: 2px 9px; border-radius: 99px; background: var(--surface); color: var(--muted); font-size: 11.5px; }
+.opening-diagnosis-dims span.ok { color: var(--positive); background: color-mix(in srgb, var(--positive) 12%, transparent); }
+.opening-diagnosis-dims span.problem { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+.opening-diagnosis small { color: var(--muted); font-size: 11.5px; }
+.draft-report-details summary { cursor: pointer; color: var(--muted); font-size: 12px; }

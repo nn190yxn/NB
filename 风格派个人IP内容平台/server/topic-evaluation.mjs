@@ -90,23 +90,25 @@ export function scoreTopic(topic, context) {
 export function evaluateTopic(topic, context, now = new Date().toISOString()) {
   const dimensions = scoreTopic(topic, context)
   const score = clamp(dimensions.reduce((sum, item) => sum + item.score, 0) / dimensions.length)
-  // 全部维度都不达标才叫「不建议做」。这是内容层唯一允许拦停的位置：
-  // 宁可少拦也不要误杀——误杀一条能做的选题，比放过一条差的贵。
+  // 全部维度都不达标只作为「建议先放一放」，不是否决。角色约定（README 第 0 节）：
+  // 系统给的是建议，不是许可——创作者可能就是要做，因为他知道自己的观众，而系统不知道。
   const failed = dimensions.filter(item => item.score < dimensionPassScore)
-  const blocked = failed.length === dimensions.length
-  const decision = blocked ? 'defer' : score >= 70 ? 'do' : score >= 50 ? 'revise' : 'defer'
+  const allWeak = failed.length === dimensions.length
+  const decision = score >= 70 ? 'do' : score >= 50 ? 'revise' : 'defer'
   const evidence = dimensions.flatMap(item => item.evidence.map(message => ({ dimension: item.key, message })))
   const suggestions = [...new Set(dimensions.flatMap(item => item.suggestions))]
   const weakest = [...failed].sort((left, right) => left.score - right.score)[0]
-  const first_step = blocked ? '先别做这一条：换一条选题，或把定位、素材、来源补齐之后再回来。' : weakest?.suggestions[0] || suggestions[0] || '先按当下判断写一版，用真实反馈再定去留。'
-  const conclusion = blocked ? `不建议做：${dimensions.length} 个维度全部未达标（每个都低于 ${dimensionPassScore} 分），换一条比硬做便宜。` : `${conclusionLabels[decision]}（总分 ${score}）`
+  const first_step = weakest?.suggestions[0] || suggestions[0] || '先按当下判断写一版，用真实反馈再定去留。'
+  const conclusion = allWeak
+    ? `${dimensions.length} 个维度都没过线（总分 ${score}）。我的建议是先放一放；你要是就想做，从这一步开始：${first_step}`
+    : `${conclusionLabels[decision]}（总分 ${score}）`
   return {
     score,
     decision,
     dimensions: Object.fromEntries(dimensions.map(item => [item.key, { score: item.score, evidence: item.evidence, suggestions: item.suggestions }])),
     evidence,
     suggestions,
-    blocked,
+    all_weak: allWeak,
     first_step,
     conclusion,
     evaluated_at: now,
@@ -122,6 +124,9 @@ export function defaultTopicFields(topic) {
     decision_reason: topic.decision_reason || '',
     evidence: Array.isArray(topic.evidence) ? topic.evidence : [],
     suggestions: Array.isArray(topic.suggestions) ? topic.suggestions : [],
+    // 形式判断判完存这里，生成草稿时按它写。没判过就是空，生成时落回平台默认。
+    content_format: topic.content_format || '',
+    content_format_reason: topic.content_format_reason || '',
   }
 }
 

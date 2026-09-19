@@ -18,6 +18,7 @@ export const mockBodies = title => ({
 export async function startGenerationMock({ adaptBody } = {}) {
   let mode = 'success'
   let lastSystem = ''
+  let lastUser = ''
   const server = createServer(async (req, res) => {
     if (mode === 'failed') { res.writeHead(503); res.end('test failure'); return }
     let raw = ''
@@ -26,6 +27,7 @@ export async function startGenerationMock({ adaptBody } = {}) {
     const system = String(payload.messages?.[0]?.content || '')
     lastSystem = system
     const last = String(payload.messages?.at(-1)?.content || '')
+    lastUser = last
     const reply = content => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: mode === 'invalid' ? 'invalid JSON' : content } }] })) }
 
     const sermon = '很多人做IP内容评估，靠的是拍完后的感觉。钱是唯一诚实的反馈。我有个客户花了三天写文案，结果数据惨淡。把内容拆到颗粒度再评估。内容不是艺术品，内容是产品。你只看点赞就是在蒙眼射箭。'.repeat(2)
@@ -75,11 +77,12 @@ export async function startGenerationMock({ adaptBody } = {}) {
     if (system.includes('说回自己')) return reply('改成自己说法之后的正文')
     // Requirement 14：标题与开头的多方案输出。各带一条不合规的，测溯源校验真会丢掉。
     if (system.includes('挑标题')) {
-      return reply(JSON.stringify({ plans: [
-        { formula_id: 34, title: '90 天把内容做成能成交的系统', why: '结果承诺型，时间和结果都具体' },
-        { formula_id: 17, title: '警告！这 3 件事让你的内容白写', why: '损失规避，制造不看就亏' },
-        { formula_id: 999, title: '这条公式编号不存在', why: '故意给一个不存在的编号' },
-      ] }))
+      // 换一换要真的换出不同的公式：桩模型读「不许再用的编号」，挑一批没给过的。
+      // 池子顺序有点讲究：第一次必须先碰到 999（不存在的编号），好让溯源校验那条测试看到「编的被丢掉」。
+      const banned = new Set((JSON.parse(last)['不许再用的公式编号'] || []).map(Number))
+      const why = { 34: '结果承诺型，时间和结果都具体', 17: '损失规避，制造不看就亏', 36: '认知冲突，让人想反驳', 18: '好奇缺口，留一个没说完的点', 22: '身份代入，点名人群', 999: '故意给一个不存在的编号' }
+      const picked = [34, 17, 999, 36, 18, 22].filter(id => !banned.has(id)).slice(0, 3)
+      return reply(JSON.stringify({ plans: picked.map(id => ({ formula_id: id, title: `标题 ${id}`, why: why[id] })) }))
     }
     if (system.includes('写开头')) {
       return reply(JSON.stringify({ plans: [
@@ -159,13 +162,14 @@ export async function startGenerationMock({ adaptBody } = {}) {
     const input = JSON.parse(last)
     const result = input.answers
       ? Array.from({ length: 3 }, (_, index) => ({ name: `方向${index + 1}`, positioning_statement: input.answers['0'] || '根据能力形成内容', audiences: ['创业者'], problems: ['内容难以持续'], pillars: ['真实复盘'], uncertainties: ['需要验证需求'], answer_refs: Object.keys(input.answers).filter(key => input.answers[key]) }))
-      : Array.from({ length: 3 }, (_, index) => ({ title: `${input.profile.role}的${input.sources[0].title}分析${index + 1}`, rationale: '基于提供的来源', content_job: '分享经验', strategy_layer: 'trust', source_indexes: [0] }))
+      : Array.from({ length: 3 }, (_, index) => ({ title: `${input.profile.role}的${input.sources[0]?.title || '当前没有来源'}分析${index + 1}`, rationale: '基于提供的来源', content_job: '分享经验', strategy_layer: 'trust', source_indexes: input.sources.length ? [0] : [] }))
     return reply(JSON.stringify(result))
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const mock = {
     setMode: value => { mode = value },
     lastSystem: () => lastSystem,
+    lastUser: () => lastUser,
     env: { PROJECT_LLM_BASE_URL: `http://127.0.0.1:${server.address().port}`, PROJECT_LLM_API_KEY: 'test-only', PROJECT_LLM_MODEL: 'mock', LLM_DAILY_LIMIT: '100' },
     close: () => { server.closeAllConnections(); server.close() },
   }

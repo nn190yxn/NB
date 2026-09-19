@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>素材库 · 新料台（原型）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { background: var(--canvas); color: var(--ink); font-family: var(--font-body); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; border: 0; background: transparent; cursor: pointer; }
+
+.app {
+  --font-body: 'Inter', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-heading: 'Noto Serif SC', 'Noto Sans SC', 'PingFang SC', serif;
+  --font-mono: 'DM Mono', ui-monospace, 'SF Mono', monospace;
+  --canvas: #ffffff; --surface: #f6f8fa; --surface-strong: #ffffff;
+  --ink: #1f2328; --muted: #656d76; --line: #d0d7de;
+  --accent: #0969da; --accent-soft: #ddf4ff; --accent-ink: #0550ae;
+  --amber: #9a6700; --amber-soft: #fff8c5;
+  --coral: #cf222e; --coral-soft: #ffebe9;
+  --positive: #1a7f37; --positive-soft: #dafbe1;
+  --btn-bg: #1f2328; --btn-fg: #ffffff; --accent-contrast: #ffffff;
+  --shadow: 0 13.5px 30px rgba(27,31,36,.08); --radius: 13.5px;
+  min-height: 100vh; display: flex; transition: background .3s, color .3s;
+}
+.app.theme-warm { --canvas:#f6f4ef; --surface:#ffffff; --surface-strong:#ffffff; --ink:#26221b; --muted:#6e675b; --line:#e7e2d8; --accent:#e0521f; --accent-soft:#fcede5; --accent-ink:#b23a10; --amber:#c0880f; --amber-soft:#fdf3dd; --coral:#d6336c; --coral-soft:#fdeaef; --positive:#0e8a6c; --positive-soft:#e2f5ef; --btn-bg:#e0521f; --btn-fg:#ffffff; --accent-contrast:#ffffff; --shadow:0 1px 2px rgba(38,30,20,.05), 0 4px 16px rgba(38,30,20,.06); }
+.app.theme-fresh { --canvas:#fbfcfc; --surface:#f2f5f4; --surface-strong:#ffffff; --ink:#18211e; --muted:#5d6b65; --line:#d5dfdc; --accent:#0d9488; --accent-soft:#dff5f1; --accent-ink:#0b6f66; --amber:#8f6b1f; --amber-soft:#fbf3e2; --coral:#c55a4d; --coral-soft:#fbeae7; --positive:#2d7d5a; --positive-soft:#e3f3ec; --btn-bg:#18211e; --btn-fg:#ffffff; --accent-contrast:#ffffff; }
+.app.theme-midnight { --canvas:#0c0e12; --surface:#15171c; --surface-strong:#1b1f26; --ink:#e6e8eb; --muted:#aab1bb; --line:#2a2f38; --accent:#4c9df0; --accent-soft:#1a2c46; --accent-ink:#8ec2f7; --amber:#e0a04a; --amber-soft:#33280f; --coral:#ef7f6d; --coral-soft:#3a1d19; --positive:#4ade80; --positive-soft:#12301f; --btn-bg:#4c9df0; --btn-fg:#0c0e12; --accent-contrast:#0c0e12; --shadow:0 16px 40px rgba(0,0,0,.5); }
+
+/* ---------- 骨架 ---------- */
+.sidebar { width: 252px; min-height: 100vh; flex-shrink: 0; padding: 20px 18px 16px; background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+.brand { display: flex; align-items: center; gap: 11.5px; padding: 0 11.5px 16px; }
+.brand-mark { width: 31px; height: 31px; display: grid; place-items: center; border: 1px solid var(--accent); color: var(--accent); font: 500 12.5px var(--font-mono); letter-spacing: -1px; border-radius: 8px; }
+.brand strong { display: block; font-size: 16px; }
+.brand span { display: block; margin-top: 2px; color: var(--muted); font-size: 11.5px; letter-spacing: .08em; }
+.nav-label { padding: 0 12.5px; color: var(--muted); font: 500 11.5px var(--font-mono); letter-spacing: .12em; }
+.nav-item { display: flex; align-items: center; width: 100%; gap: 13.5px; padding: 10.5px 12.5px; margin: 2px 0; border-radius: 10.5px; color: var(--ink); opacity: .82; font-size: 13.5px; text-align: left; }
+.nav-item.active { color: var(--accent-ink); opacity: 1; background: var(--accent-soft); font-weight: 700; }
+.nav-item b { margin-left: auto; color: var(--accent); font: 500 11.5px var(--font-mono); }
+.secondary { display: block; margin-top: 15px; }
+
+.content-shell { flex: 1; min-width: 0; }
+.topbar { position: sticky; top: 0; z-index: 8; height: 72px; padding: 0 5.5%; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 82%, transparent); backdrop-filter: blur(11.5px); }
+.breadcrumbs { display: flex; gap: 13.5px; color: var(--muted); font-size: 12.5px; }
+.breadcrumbs strong { color: var(--ink); }
+.theme-picker { display: flex; align-items: center; gap: 6px; }
+.theme-picker button { padding: 7px 11px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: 12px; }
+.theme-picker button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 700; }
+
+.page-content { max-width: 1200px; margin: 0 auto; padding: 42px 5.5% 60px; }
+.eyebrow { margin: 0 0 15px; color: var(--muted); font: 500 11.5px var(--font-mono); letter-spacing: .12em; }
+.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 22px; }
+.page-heading h1 { margin: 0; font: 600 clamp(30px, 4vw, 46px)/1.1 var(--font-heading); letter-spacing: -.05em; }
+.lede { margin: 15px 0 0; color: var(--muted); font-size: 14.5px; }
+.primary-action { display: flex; align-items: center; gap: 8px; padding: 13.5px 16px; border-radius: 10.5px; background: var(--btn-bg); color: var(--btn-fg); font-size: 13.5px; font-weight: 700; white-space: nowrap; }
+.outline-action { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.outline-action:hover { color: var(--accent); }
+
+/* ---------- 料台总览 ---------- */
+.counter-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14.5px; margin-top: 38px; }
+.counter { padding: 21px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-strong); box-shadow: var(--shadow); }
+.counter span { display: block; color: var(--muted); font: 500 11.5px var(--font-mono); letter-spacing: .08em; }
+.counter strong { display: block; margin: 12px 0 6px; font: 600 34px/1 var(--font-mono); letter-spacing: -.04em; }
+.counter small { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.counter.hot { border-left: 3px solid var(--amber); }
+.counter.hot strong { color: var(--amber); }
+.counter.pierce strong { color: var(--coral); }
+.counter.proof strong { color: var(--accent); }
+
+/* ---------- 池子 ---------- */
+.pool { margin-top: 54px; }
+.pool-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 22px; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
+.pool-title { display: flex; align-items: center; gap: 10px; }
+.pool-title h2 { margin: 0; font: 600 22px var(--font-heading); letter-spacing: -.04em; }
+.pool-title .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.pool.hot .dot { background: var(--amber); }
+.pool.built .dot { background: var(--positive); }
+.pill { padding: 4px 9px; border-radius: 99px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.pill.hot { color: var(--amber); background: var(--amber-soft); }
+.pill.built { color: var(--positive); background: var(--positive-soft); }
+.pool-head p { margin: 9px 0 0; color: var(--muted); font-size: 12.5px; }
+
+.card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14.5px; margin-top: 21px; }
+.mat { display: flex; flex-direction: column; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-strong); box-shadow: var(--shadow); }
+.mat-top { display: flex; align-items: center; gap: 8px; }
+.mat-src { color: var(--muted); font: 500 11.5px var(--font-mono); }
+.mat-top .spacer { margin-left: auto; }
+.mat h3 { margin: 15px 0 0; font: 500 15.5px/1.65 var(--font-heading); letter-spacing: -.02em; }
+.mat-can { margin: 13px 0 0; padding: 11px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-ink); font-size: 12.5px; line-height: 1.6; }
+.mat-can b { font: 500 10.5px var(--font-mono); letter-spacing: .08em; display: block; margin-bottom: 4px; opacity: .8; }
+.mat-foot { display: flex; align-items: center; gap: 13.5px; margin-top: auto; padding-top: 17px; }
+.mat-foot .text-link { color: var(--muted); font-size: 12.5px; }
+.mat-foot .text-link.strong { color: var(--accent); font-weight: 700; }
+.mat-foot .used { margin-left: auto; color: var(--muted); font: 11.5px var(--font-mono); }
+
+.shelf { margin-top: 16px; }
+.shelf-bar { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font: 11.5px var(--font-mono); }
+.shelf-bar .days { font-weight: 500; }
+.shelf-bar .days.warn { color: var(--amber); }
+.shelf-bar .days.urgent { color: var(--coral); }
+.track { height: 3px; margin-top: 7px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.track i { display: block; height: 100%; border-radius: 3px; background: var(--positive); }
+.track i.warn { background: var(--amber); }
+.track i.urgent { background: var(--coral); }
+
+.notice { display: flex; align-items: center; gap: 10px; margin-top: 42px; padding: 13px 15px; border: 1px dashed var(--line); border-radius: 11.5px; color: var(--muted); font-size: 12.5px; }
+.notice b { color: var(--ink); font-weight: 600; }
+
+@media (max-width: 980px) {
+  .sidebar { display: none; }
+  .card-grid, .counter-grid { grid-template-columns: 1fr; }
+  .page-heading { align-items: flex-start; flex-direction: column; }
+  .page-content { padding: 34px 18px 40px; }
+  .topbar { padding: 0 18px; }
+}
+</style>
+</head>
+<body>
+<div class="app theme-warm" id="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">风</div>
+      <div><strong>风格派</strong><span>CONTENT OS</span></div>
+    </div>
+    <div class="nav-label">工作区</div>
+    <button class="nav-item">今日工作台</button>
+    <button class="nav-item">定位发现</button>
+    <button class="nav-item">热点研究 <b>48</b></button>
+    <button class="nav-item active">素材库 <b>19</b></button>
+    <button class="nav-item">爆款方法库 <b>27</b></button>
+    <button class="nav-item">拆概念</button>
+    <button class="nav-item">提主张</button>
+    <button class="nav-item">形式判断</button>
+    <button class="nav-item">选题助手 <b>4</b></button>
+    <button class="nav-item">内容创作</button>
+    <button class="nav-item">内容日历</button>
+    <div class="nav-label secondary">资产</div>
+    <button class="nav-item">今日拍摄</button>
+    <button class="nav-item">IP 档案</button>
+  </aside>
+
+  <div class="content-shell">
+    <header class="topbar">
+      <div class="breadcrumbs"><span>我的内容工作台</span><span>/</span><strong>素材库</strong></div>
+      <div class="theme-picker">
+        <button data-theme="theme-editorial">默认</button>
+        <button data-theme="theme-warm" class="on">暖调</button>
+        <button data-theme="theme-fresh">清透</button>
+        <button data-theme="theme-midnight">夜间</button>
+      </div>
+    </header>
+
+    <main class="page-content">
+
+      <p class="eyebrow">MATERIALS / 料台</p>
+      <div class="page-heading">
+        <div>
+          <h1>素材库</h1>
+          <p class="lede">你手上这些料，能撑起什么。</p>
+        </div>
+        <button class="primary-action">按关键词搜一轮热点</button>
+      </div>
+
+      <div class="counter-grid">
+        <div class="counter hot">
+          <span>热点素材 · 没过期的由头</span>
+          <strong>5</strong>
+          <small>这周有 5 个由头可以拍。最快的 3 天后过期。</small>
+        </div>
+        <div class="counter pierce">
+          <span>戳人的</span>
+          <strong>7</strong>
+          <small>够起 7 个角度。找角度的时候先翻这里。</small>
+        </div>
+        <div class="counter proof">
+          <span>证明的</span>
+          <strong>6</strong>
+          <small>够撑 6 条内容的中段。撑中段的时候先翻这里。</small>
+        </div>
+      </div>
+
+      <!-- ============ 热点素材 ============ -->
+      <section class="pool hot">
+        <div class="pool-head">
+          <div>
+            <div class="pool-title">
+              <span class="dot"></span>
+              <h2>热点素材</h2>
+              <span class="pill hot">会过期</span>
+            </div>
+            <p>搜进来的热点和资讯。过期自动沉底，不删，只是不再挡在你眼前。</p>
+          </div>
+          <button class="outline-action">全部 7 条 &rsaquo;</button>
+        </div>
+
+        <div class="card-grid">
+
+          <article class="mat">
+            <div class="mat-top">
+              <span class="mat-src">抖音热搜 · 3 天前存</span>
+              <span class="spacer"></span>
+              <span class="pill" style="color:var(--coral);background:var(--coral-soft)">戳人的</span>
+            </div>
+            <h3>某大厂 35 岁被裁后去开面馆，三个月关门了</h3>
+            <p class="mat-can"><b>已经想好能怎么用</b>不是所有被裁的人都该创业。被裁逼出来的创业，多数是拿积蓄买了个更累的班上。</p>
+            <div class="shelf">
+              <div class="shelf-bar"><span>保鲜期</span><span class="days warn">剩 6 天</span></div>
+              <div class="track"><i class="warn" style="width:57%"></i></div>
+            </div>
+            <div class="mat-foot">
+              <button class="text-link strong">用它做选题</button>
+              <button class="text-link">再留 7 天</button>
+              <button class="text-link">埋掉</button>
+            </div>
+          </article>
+
+          <article class="mat">
+            <div class="mat-top">
+              <span class="mat-src">平台公告 · 5 天前存</span>
+              <span class="spacer"></span>
+              <span class="pill" style="color:var(--accent);background:var(--accent-soft)">证明的</span>
+            </div>
+            <h3>抖音上线内容质量分，低质内容开始限流</h3>
+            <div class="shelf">
+              <div class="shelf-bar"><span>保鲜期</span><span class="days urgent">剩 3 天</span></div>
+              <div class="track"><i class="urgent" style="width:21%"></i></div>
+            </div>
+            <div class="mat-foot">
+              <button class="text-link strong">用它做选题</button>
+              <button class="text-link">再留 7 天</button>
+              <button class="text-link">埋掉</button>
+            </div>
+          </article>
+
+          <article class="mat">
+            <div class="mat-top">
+              <span class="mat-src">对标账号 · 2 天前存</span>
+              <span class="spacer"></span>
+              <span class="pill" style="color:var(--coral);background:var(--coral-soft)">戳人的</span>
+            </div>
+            <h3>某百万粉博主公开承认：我 90% 的内容是废的</h3>
+            <p class="mat-can"><b>已经想好能怎么用</b>你刷到的那一条，是他废掉 90 条换来的。你才做了 20 条，凭什么要求条条有效。</p>
+            <div class="shelf">
+              <div class="shelf-bar"><span>保鲜期</span><span class="days">剩 9 天</span></div>
+              <div class="track"><i style="width:64%"></i></div>
+            </div>
+            <div class="mat-foot">
+              <button class="text-link strong">用它做选题</button>
+              <button class="text-link">再留 7 天</button>
+              <button class="text-link">埋掉</button>
+            </div>
+          </article>
+
+          <article class="mat">
+            <div class="mat-top">
+              <span class="mat-src">抖音热搜 · 1 天前存</span>
+              <span class="spacer"></span>
+              <span class="pill" style="color:var(--coral);background:var(--coral-soft)">戳人的</span>
+            </div>
+            <h3>「做 IP 不如打工」的讨论量，一个月涨了 400%</h3>
+            <p class="mat-can"><b>已经想好能怎么用</b>说「做 IP 不如打工」的人，其实在说「我做了 IP 没赚到钱」。这两句不是一回事。</p>
+            <div class="shelf">
+              <div class="shelf-bar"><span>保鲜期</span><span class="days">剩 13 天</span></div>
+              <div class="track"><i style="width:93%"></i></div>
+            </div>
+            <div class="mat-foot">
+              <button class="text-link strong">用它做选题</button>
+              <button class="text-link">再留 7 天</button>
+              <button class="text-link">埋掉</button>
+            </div>
+          </article>
+
+        </div>
+      </section>
+
+      <!-- ============ 自建素材 ============ -->
+      <section class="pool built">
+        <div class="pool-head">
+          <div>
+            <div class="pool-title">
+              <span class="dot"></span>
+              <h2>自建素材</h2>
+              <span class="pill built">不会过期</span>
+            </div>
+            <p>你的经历、案例、客户原话。越用越厚，是你最值钱的东西。</p>
+          </div>
+          <button class="outline-action">录一条 &rsaquo;</button>
+        </div>
+
+        <div class="card-grid">
+
+          <article class="mat">
+            <div class="mat-top">
+              <span class="mat-src">我的判断</span>
+              <span class="spacer"></span>
+              <span class="pill" style="color:var(--accent);background:var(--accent-soft)">证明的</span>
+            </div>
+            <h3>我看了 100 个做不起来的号，97 个死在同一个地方：选题太窄。</h3>
+            <div class="mat-foot">
+              <button class="text-link strong">用它做选题</button>
+              <span class="used">用过 3 次</span>
+            </div>
+          </article>
+
+          <article class="mat">
+            <div class="mat-top">
+              <span class="mat-src">客户原话 · 4 月通话</span>
+              <span class="spacer"></span>
+              <span class="pill" style="color:var(--coral);background:var(--coral-soft)">戳人的</span>
+            </div>
+            <h3>「我不是不知道要垂直，我是舍不得。」</h3>
+            <div class="mat-foot">
+              <button class="text-link strong">用它做选题</button>
+              <span class="used">用过 1 次</span>
+            </div>
+          </article>
+
+          <article class="mat">
+            <div class="mat-top">
+              <span class="mat-src">交付案例</span>
+              <span class="spacer"></span>
+              <span class="pill" style="color:var(--accent);background:var(--accent-soft)">证明的</span>
+            </div>
+            <h3>陪跑 32 岁宝妈：她前 20 条全废，第 21 条爆了。前 20 条不是白发的。</h3>
+            <div class="mat-foot">
+              <button class="text-link strong">用它做选题</button>
+              <span class="used">用过 2 次</span>
+            </div>
+          </article>
+
+          <article class="mat">
+            <div class="mat-top">
+              <span class="mat-src">我的判断</span>
+              <span class="spacer"></span>
+              <span class="pill" style="color:var(--coral);background:var(--coral-soft)">戳人的</span>
+            </div>
+            <h3>定位不是找优势，是删可能。</h3>
+            <div class="mat-foot">
+              <button class="text-link strong">用它做选题</button>
+              <span class="used">用过 5 次</span>
+            </div>
+          </article>
+
+          <article class="mat">
+            <div class="mat-top">
+              <span class="mat-src">客户原话 · 上个月私信</span>
+              <span class="spacer"></span>
+              <span class="pill" style="color:var(--coral);background:var(--coral-soft)">戳人的</span>
+            </div>
+            <h3>「我发了 300 条，一条没转化。」</h3>
+            <div class="mat-foot">
+              <button class="text-link strong">用它做选题</button>
+              <span class="used">还没用过</span>
+            </div>
+          </article>
+
+          <article class="mat">
+            <div class="mat-top">
+              <span class="mat-src">我的经历</span>
+              <span class="spacer"></span>
+              <span class="pill" style="color:var(--accent);background:var(--accent-soft)">证明的</span>
+            </div>
+            <h3>第一次做号，日更 60 天，涨了 47 个粉。那 60 天教会我的比涨粉多。</h3>
+            <div class="mat-foot">
+              <button class="text-link strong">用它做选题</button>
+              <span class="used">用过 1 次</span>
+            </div>
+          </article>
+
+        </div>
+      </section>
+
+      <p class="notice">
+        <b>原型说明：</b>以上全部是示例数据，不是你的真实素材。这一版只调整「打开素材库看到什么」，底层存储不动。
+      </p>
+
+    </main>
+  </div>
+</div>
+
+<script>
+  const app = document.getElementById('app')
+  document.querySelectorAll('.theme-picker button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      app.className = 'app ' + btn.dataset.theme
+      if (btn.dataset.theme === 'theme-editorial') app.className = 'app'
+      document.querySelectorAll('.theme-picker button').forEach(b => b.classList.toggle('on', b === btn))
+    })
+  })
+</script>
+</body>
+</html>

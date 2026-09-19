@@ -118,14 +118,14 @@ export const titleLibraries = {
     preferred: ['认知冲突', '好奇缺口', '争议挑衅', '恐惧损失'],
     preferredNote: '按抖音「前 3 秒决定完播」取的：优先能制造停留的前几类。这是本项目的取用建议，不是平台官方数据。',
     exampleSource: titleFormulaSource,
-    exampleNote: '原始举例全部是小红书爆款，抖音没有对应素材。不做改写，也不编一份抖音版出来。',
+    exampleNote: '举例来自小红书爆款。抖音前 3 秒决定完播，同一个公式在抖音往往要把冲突或数字提到最前面，别直接照搬。',
   },
   视频号: {
     platform: '视频号',
     preferred: ['身份代入', '社会证明', '权威借力', '场景条件'],
     preferredNote: '按视频号「熟人转发、信任先于好奇」取的：优先人群精准与可信度那几类。这是本项目的取用建议，不是平台官方数据。',
     exampleSource: titleFormulaSource,
-    exampleNote: '原始举例全部是小红书爆款，视频号没有对应素材。不做改写，也不编一份视频号版出来。',
+    exampleNote: '举例来自小红书爆款。视频号靠熟人转发、信任先于好奇，同一个公式在视频号往往要把身份和可信度提到最前面，别直接照搬。',
   },
 }
 

@@ -187,8 +187,8 @@ test('发布能力并入内容创作，侧栏不再单独列出发布中心', ()
 test('选题评估与决策入口用主按钮，关键动作不被当成正文', () => {
   const source = readFileSync(join(process.cwd(), 'src/main.tsx'), 'utf8')
   assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => evaluateTopicItem\(topic\)\}>七维评估<\/button>/)
-  // 「确认做」在把关拦停时必须不可点，并直接显示「不建议做」：这是内容层唯一允许拦停的位置。
-  assert.match(source, /<button className="primary-action" disabled=\{busy \|\| evaluation\.blocked\} onClick=\{\(\) => decideTopic\(topic, 'do'\)\}>\{evaluation\.blocked \? '不建议做' : '确认做'\}<\/button>/)
+  // 角色约定：评估只给建议，不发许可。「确认做」不再被 blocked 禁用，文案也不再变成「不建议做」。
+  assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => decideTopic\(topic, 'do'\)\}>确认做<\/button>/)
   assert.match(source, /<button className="primary-action" disabled=\{busy\} onClick=\{\(\) => openComposeFor\(topic\)\}>查看这组草稿<\/button>/)
   assert.match(source, /topic_id: topic\.id/)
   assert.match(source, /选题已确认，但草稿生成失败/)
@@ -312,4 +312,62 @@ test('AI 记忆层前端特征', () => {
   const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
   assert.match(styles, /\.memory-item\s*\{/)
   assert.match(styles, /\.memory-type-tag\s*\{/)
+})
+
+// 三步之间要能带得进、带得走：输入能从已有内容选，产出能标出来源，切页面不丢上下文。
+test('拆概念与提主张能直接选素材、产出记来源，形式判断判完存到选题上', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  // 输入能从素材库选，不用再从素材库复制、切页面、粘贴。
+  assert.match(source, /function useMaterialLibrary\(\)/)
+  assert.match(source, /function SourceMaterialSelect\(/)
+  assert.match(source, /label="从素材库选一条来拆"/)
+  assert.match(source, /label="从素材库选一条来提炼"/)
+  // 提主张选中素材直接把正文填进输入框。
+  assert.match(source, /setText\(item && item\.content \? String\(item\.content\) : ''\)/)
+  // 产出记来源：两个面板确认入库时都带上 source_id，服务端据此记血缘。
+  assert.equal(source.match(/\.\.\.\(source \? \{ source_id: source\.id \} : \{\}\)/g)?.length, 2)
+  // 形式判断能从选题选，并把判完的形式与理由存到那条选题上。
+  assert.match(source, /aria-label="从选题里选一条"/)
+  assert.match(source, /topic_id: Number\(topicId\)/)
+  assert.match(source, /saved_topic_id/)
+})
+
+test('生成草稿时把形式带过去，三个加工面板切页面不卸载', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  // 判了就按它写，不能等稿子出来再点重写返工。
+  assert.match(source, /\.\.\.\(contentFormat \? \{ content_format: contentFormat \} : \{\}\)/)
+  assert.match(source, /按平台默认形式（覆盖选题上判的结果）/)
+  assert.match(source, /按平台默认形式（可在「形式判断」里先定）/)
+  assert.match(source, /videoFormatOptions\.map\(format =>/)
+  // 切页面只隐藏、不卸载：输入和提案都是手打的，不能切一次丢一次。
+  assert.match(source, /if \(section === '拆概念' \|\| section === '提主张' \|\| section === '形式判断'\) return <>/)
+  assert.match(source, /display: section === '拆概念' \? undefined : 'none'/)
+  const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
+  assert.match(styles, /\.deconstruct-input select\s*\{/)
+  assert.match(styles, /\.deconstruct-source-chips\s*\{/)
+})
+
+// 多行框曾漏写宽度、内边距、边框、背景，退回浏览器默认的 20 字符宽，看着像坏掉。
+test('拆概念/提主张/形式判断是左输入右结果，多行框样式完整', () => {
+  const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
+  const textareaRule = styles.slice(styles.indexOf('.deconstruct-input textarea {'), styles.indexOf('}', styles.indexOf('.deconstruct-input textarea {')))
+  for (const declaration of ['width: 100%', 'min-height:', 'padding:', 'border: 1px solid var(--line)', 'border-radius:', 'background:', 'font: inherit']) {
+    assert.ok(textareaRule.includes(declaration), `${declaration} 缺失时多行框会退回浏览器默认尺寸`)
+  }
+  assert.match(styles, /\.workspace-split \{[^}]*grid-template-columns/)
+  assert.match(styles, /@media \(max-width: 1100px\) \{ \.workspace-split \{ display: block;/)
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  // 三个面板各一份：输入栏 + 结果栏 + 跟着输入走的按钮行。
+  assert.equal(source.match(/<div className="workspace-split">/g)?.length, 3)
+  assert.equal(source.match(/<div className="workspace-pane">/g)?.length, 6)
+  assert.equal(source.match(/className="workspace-pane-actions"/g)?.length, 3)
+  // 按钮不再留在标题行右上角，否则会隔一个页宽才对得上它作用的输入框。
+  for (const kicker of ['WORKSPACE / 拆概念', 'WORKSPACE / 提主张', 'WORKSPACE / 形式判断']) {
+    const start = source.indexOf(kicker)
+    assert.ok(start > 0, `${kicker} 找不到`)
+    const headEnd = source.indexOf('\n', start)
+    assert.doesNotMatch(source.slice(start, headEnd), /<button/)
+    // 标题行后面必须紧跟报错提示：改结构时很容易连它一起删掉，面板就把错误吞了。
+    assert.match(source.slice(headEnd, headEnd + 220), /\{error && <p className="structure-error"/, `${kicker} 后面的报错提示丢了`)
+  }
 })
