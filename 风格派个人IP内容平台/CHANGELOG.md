@@ -1,3 +1,21 @@
+## 2026-09-19 · 素材库清出 13 条「对标dbs·洞察」，导入器不再收方法类原子
+
+**缺陷**：素材库里的 13 条「对标dbs·洞察」是资料包里的账号运营方法论（开头引擎统计、选题公式、平台分工、产品取舍等），不是能引用的素材。它们在库里同时具备三个错位：
+
+1. `unit_type` 为空——`unitTypeFromKind` 故意不给 insight 映射角色（注释：留空等人工判定），而 `/api/materials/:id` 只有 DELETE、没有修改接口，**“等人工判定”等不到**；
+2. 装配选不上——写稿面板只加载 `kind=quote` 与 `kind=experience`，角色为空的料进不了 `material_roles`，属于死料；
+3. 信任度显示为「已确认」——资料包导入走 `POST /api/materials/atoms`，该路由无条件写 `material_trust: 'verified'`，而 `validation.mjs` 定义的 `verified` 是「自己确认过的」；对标账号的结论被归成了他本人的确认。
+
+**修法分两层**。数据层：13 条全部移出素材库——5 条进 AI 记忆·对标机制（开头引擎统计 / 反共识清单 / 数据基线 / 观点库三方法 / 人设六支柱），8 条移除。8 条里 4 条在别处已有副本（选题公式、配比纪律、冷启动数据、标题即开头，重合度 0.26–0.79），另 4 条是账号级运营与生意模式，留在 git 里的资料包源文件即可。素材库从 33 条降到 20 条，`kind=insight` 归零。
+
+代码层：`scripts/import-benchmark.mjs` 拒收 `kind: insight` 且未声明 `unit_type` 的原子，导入报告新增「退回 N 条」并解释该放哪。重跑实测「新增 0，跳过 20，退回 13」，幂等且不动存量。
+
+**未改**：`materialTrustOf` 的缺值兜底仍是 `verified`（`validation.mjs:65` 写明是刻意的历史兼容），存量 20 条对标金句仍显示「已确认」；素材库仍无修改接口；`review_status` 仍无出口。这些是设计决策，需单独定。
+
+**注意**：`buildDraftBrief` 的 `mechanisms` 不限条数，本期把对标机制从 9 条加到 14 条，每次写稿的简报会变长；适配路径仍限 5 条。
+
+回归：367/367 通过。
+
 ## 2026-09-18 · 生成验收不过 → 稿子入库标待修改（不再 502 丢弃）
 
 写作验收（`platform_mixup`、`method_talk` 等骨架判据）拦停时，旧行为是带原因重写一次、仍不过就返回 502 `GENERATION_GATE_FAILED`，整批稿子直接丢掉——用户白等一次模型调用。现在改成：稿子照常入库，`workflow_status` 标 `needs_revision`，验收结果记进 `generation_context.gate`（`failed` / `rewritten` / `summary`），用户可以直接在草稿页对它做「定位替换」按句改，不必重新生成。

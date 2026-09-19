@@ -5,6 +5,9 @@
 
 import { readFileSync } from 'node:fs'
 
+// 五类认知角色，与服务端 unit-types.mjs 一致。装配按角色取料，角色为空就是取不到的料。
+const unitTypes = ['QST', 'CON', 'OPI', 'CAS', 'SOL']
+
 function parseArgs(argv) {
   const args = { base: 'http://localhost:3001', user: 'demo-user' }
   const rest = []
@@ -77,7 +80,7 @@ async function main() {
   // 不沿用包里的 memory_type（旧包把它写成 style/topic，会把机制误当成创作者本人的表达习惯）。
   const sourceLabel = String(pack.source_label || pack.name || '对标账号').trim()
 
-  const summary = { structures: { created: 0, skipped: 0 }, atoms: { created: 0, skipped: 0 }, memories: { created: 0, skipped: 0 } }
+  const summary = { structures: { created: 0, skipped: 0 }, atoms: { created: 0, skipped: 0, rejected: 0 }, memories: { created: 0, skipped: 0 } }
   let errors = 0
 
   const defaultPlatform = pack.defaults?.platform || '通用'
@@ -89,9 +92,12 @@ async function main() {
     } catch (error) { console.error(`✖ 结构「${item.title}」: ${error.message}`); errors++ }
   }
   for (const item of pack.atoms || []) {
+    // 认知角色留空的「知识点」不收：这类内容是对标账号的结论与方法，不是能引用的素材；
+    // 而素材库既没有改角色的入口，装配也选不上角色为空的料，进去就是死料。该放 structures 或 memories。
+    if (item.kind === 'insight' && !unitTypes.includes(item.unit_type)) { summary.atoms.rejected++; continue }
     if (atomTexts.has(item.text)) { summary.atoms.skipped++; continue }
     try {
-      await api('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: item.kind, name: item.name, text: item.text, source_label: sourceLabel }) })
+      await api('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: item.kind, name: item.name, text: item.text, unit_type: item.unit_type, source_label: sourceLabel }) })
       summary.atoms.created++
     } catch (error) { console.error(`✖ 原子「${(item.text || '').slice(0, 20)}…」: ${error.message}`); errors++ }
   }
@@ -105,7 +111,8 @@ async function main() {
 
   console.log(`\n资料包「${pack.name}」导入完成：`)
   console.log(`  结构库   新增 ${summary.structures.created}，跳过 ${summary.structures.skipped}（共 ${pack.structures?.length || 0} 条）`)
-  console.log(`  素材原子 新增 ${summary.atoms.created}，跳过 ${summary.atoms.skipped}（共 ${pack.atoms?.length || 0} 条）`)
+  console.log(`  素材原子 新增 ${summary.atoms.created}，跳过 ${summary.atoms.skipped}，退回 ${summary.atoms.rejected}（共 ${pack.atoms?.length || 0} 条）`)
+  if (summary.atoms.rejected) console.log(`    退回的 ${summary.atoms.rejected} 条是没声明认知角色的「知识点」：装配按角色取料，角色为空进不了稿。请把它们放进 structures 或 memories。`)
   console.log(`  AI 记忆  新增 ${summary.memories.created}，跳过 ${summary.memories.skipped}（共 ${pack.memories?.length || 0} 条，类型均为对标机制，来源「${sourceLabel}」）`)
   if (errors) { console.error(`\n${errors} 条失败，修正后重跑即可（幂等，不会重复导入）`); process.exit(1) }
 }

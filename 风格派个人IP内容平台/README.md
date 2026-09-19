@@ -6,6 +6,22 @@
 
 本文档面向所有后续接手本项目的开发者与 AI Agent，读完即可独立开展开发、验证与部署。
 
+## 素材库清出 13 条方法论，导入器不再收方法类原子（2026-09-19）
+
+素材库里有 13 条「对标dbs·洞察」，是资料包里的账号运营方法论（开头引擎统计、选题公式、平台分工、产品取舍），不是能引用的素材。它们同时错在三处：
+
+1. **写稿时选不上**——写稿面板只加载金句与经历；而且装配按「认知角色」取料，这 13 条的角色是空的。系统故意不给「知识点」映射角色（注释写「留空等人工判定」），但素材库**没有改角色的入口**，所以永久为空、永久选不上。
+2. **显示「已确认」是错的**——`validation.mjs` 定义的「已确认」是「自己确认过的」，而它们是对标账号的结论。缺值兜底成 `verified` 是写明的历史兼容，但三档里没有一档是给对标资料准备的，它掉进了最像可信的那档。
+3. **不是素材**——素材库收「你能说出口的话」，这 13 条是「教你怎么写」，该进方法库或对标机制。
+
+处置：13 条全部移出素材库，5 条进 AI 记忆·对标机制（开头引擎统计 / 反共识清单 / 数据基线 / 观点库三方法 / 人设六支柱），8 条移除（4 条在别处已有副本，重合度 0.26–0.79；4 条是账号级运营与生意模式，git 里的资料包源文件即可）。素材库 33 → 20 条，`kind=insight` 归零。
+
+源头也堵了：`scripts/import-benchmark.mjs` 拒收 `kind: insight` 且未声明 `unit_type` 的原子，导入报告打印「退回 N 条」并说明该放哪。
+
+**一条判据**：方法库的四个分类（选题方法 / 标题方法 / 开头方法 / 内容结构）只收「写单条内容的技法」。账号级运营打法不是这个形状，别硬塞——否则方法库里会出现「照做也写不出稿」的条目。
+
+**未改**（需单独定）：缺值兜底仍是 `verified`，存量 20 条对标金句仍显示「已确认」；素材库仍无修改接口；`review_status` 仍无出口。
+
 ## 检测器三处修复：盲区测试、矛盾判定、数字后门（2026-09-19）
 
 用一条真实口播稿压测检测器，抽出三个结构性问题。全量 367 / 367 通过。
@@ -369,7 +385,9 @@ node scripts/import-benchmark.mjs scripts/benchmarks/dontbesilent.json
 # 可选：--base http://localhost:3002 换端口；--password <访问密码> 用于生产；--user <id> 指定 dev 用户
 ```
 
-资料包 JSON 结构：`structures[]`（title/steps/platform/content_type）、`atoms[]`（kind: quote|insight|hotspot|experience / name / text）、`memories[]`（memory_type: style|topic|feedback / content）。制作新对标资料包时只导入**可复制机制**（结构/范式/清单），对标账号的人设观点类素材一律加「对标」前缀作参考素材。
+资料包 JSON 结构：`structures[]`（title/steps/platform/content_type）、`atoms[]`（kind: quote|hotspot|experience，或带 `unit_type` 的 insight）、`memories[]`（content）。记忆不沿用包里的 `memory_type`，一律按 benchmark 导入并强制带 `source_label`。制作新对标资料包时只导入**可复制机制**（结构/范式/清单），对标账号的人设观点类素材一律加「对标」前缀作参考素材。
+
+**方法类内容不进素材库**：`kind: insight` 且没声明 `unit_type`（QST/CON/OPI/CAS/SOL）的原子会被导入器退回并打提示。原因是素材库按认知角色取料，角色为空就是取不到的死料，而素材库没有改角色的入口（`/api/materials/:id` 只有 DELETE）。这类内容请放进 `structures[]` 或 `memories[]`。导入结束会打印「退回 N 条」，不回退也不失败，其余条目照常导入。
 
 ## 项目文档索引
 
