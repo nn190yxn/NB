@@ -19,10 +19,14 @@
 //   写：用 B 的身份对 A 的资源发写请求（带 A 的真 id），**不许被接受**（必须 ≥400），
 //       且**拒绝的文案里不许出现 A 的标记**（2026-09-20 补：拒绝也分干净不干净，报错里带出别人的数据一样是泄），
 //       并且事后以 A 的身份重新读一遍，**A 的数据必须一字不差**。
+//   间接引用：A 的 id 不在 URL 里、而在请求体里（拿 A 的 id 去拼自己的东西）：要么被拒，
+//       要么被忽略（「接受但忽略」不算问题，形式判断就是这种），**不能被用上**——B 的回复里不许出现 A 的标记，
+//       事后 A 的数据也不许变。
 //
-// 已知边界（别拿它当安全证明）：只覆盖种子造得出的资源族，其余族在 SKIPPED_FAMILIES 里逐条登记原因，
-// 新增一族会红；不带 id 的写路由（只写自己名下的）不在写判定里；间接引用（拿 A 的 id 去拼自己的东西）也没判；
-// 真正的「结构性不可能发生」（数据访问层统一收口）仍未做。
+// 已知边界（别拿它当安全证明）：数不完的那几条都写着底——
+//   不带 id 的写路由（只写自己名下的）不在写判定里；写判定里还有 6 族没造种子（逐族登记了原因）；
+//   请求体里的 id 只覆盖源码里能枚举到的那几处（INDIRECT_REFERENCES）；
+//   真正的「结构性不可能发生」（数据访问层统一收口）仍未做。
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -138,19 +142,22 @@ function enumerateGetRoutes(source) {
 // 造不出来就直接红：整套判定的前提就是「A 手里真的有数据」。
 // 每多一族种子，读判定和写判定就自动多覆盖几条路由（枚举是按路由走的，不靠手抄）。
 async function seed(owner, base) {
+  // 档案先写：**模型生成的东西会抄档案里的字**（假模型把档案的 role 抄进选题标题），
+  // 档案晚写一步，那些行就不带标记，针对它们的间接引用判定就永远看不见漏出来的内容。
+  const profile = await post(owner, '/api/profile', { role: `${owner.mark}-role`, audiences: [`${owner.mark}-audience`] }, base, 'PUT')
+  assert.ok(profile.status === 200, `造档案失败（${owner.id}）：${profile.status} ${profile.text.slice(0, 200)}`)
   const draft = await post(owner, '/api/drafts/generate', { topic: { title: `${owner.mark}-draft`, strategy_layer: 'trust', goal_refs: [] } }, base)
   assert.ok([200, 201].includes(draft.status), `造草稿失败（${owner.id}）：${draft.status} ${draft.text.slice(0, 200)}`)
   const topic = await post(owner, '/api/topics/generate', {}, base)
   assert.ok([200, 201].includes(topic.status), `造选题失败（${owner.id}）：${topic.status} ${topic.text.slice(0, 200)}`)
+  // 选题是模型产的，但里面要真有标记：没标记的种子等于没被判定盯上。
+  assert.ok(JSON.stringify(topic.json).includes(owner.mark), `造出来的选题里没有标记，模型抄档案这一步变了（${owner.id}）：${topic.text.slice(0, 200)}`)
   const material = await post(owner, '/api/materials/atoms', { kind: 'quote', text: `${owner.mark}-material`, name: `${owner.mark}-material` }, base)
   assert.ok([200, 201].includes(material.status), `造素材失败（${owner.id}）：${material.status} ${material.text.slice(0, 200)}`)
   const memory = await post(owner, '/api/memories', { memory_type: 'style', content: `${owner.mark}-memory` }, base)
   assert.ok([200, 201].includes(memory.status), `造记忆失败（${owner.id}）：${memory.status} ${memory.text.slice(0, 200)}`)
   const structure = await post(owner, '/api/structures', { title: `${owner.mark}-structure`, steps: ['开场：一句话点题', '正文：给一个例子'] }, base)
   assert.ok([200, 201].includes(structure.status), `造方法失败（${owner.id}）：${structure.status} ${structure.text.slice(0, 200)}`)
-  // 档案是个人信息，泄漏代价最高，所以这族必须有种子；审核项顺便也造一条。
-  const profile = await post(owner, '/api/profile', { role: `${owner.mark}-role`, audiences: [`${owner.mark}-audience`] }, base, 'PUT')
-  assert.ok(profile.status === 200, `造档案失败（${owner.id}）：${profile.status} ${profile.text.slice(0, 200)}`)
   const review = await post(owner, '/api/profile/import', { content: `角色：${owner.mark}-role`, name: `${owner.mark}-档案.txt` }, base)
   assert.ok(review.status === 201, `造档案审核项失败（${owner.id}）：${review.status} ${review.text.slice(0, 200)}`)
   const snapshot = await post(owner, '/api/performance-snapshots', { draft_id: draft.json[0]?.id, platform: '抖音', metrics: { 播放量: 1000, 点赞数: 50 }, raw_model_result: { note: `${owner.mark}-snapshot` }, status: 'confirmed' }, base)
@@ -159,7 +166,9 @@ async function seed(owner, base) {
   assert.ok(directory.status === 201, `造同步目录失败（${owner.id}）：${directory.status} ${directory.text.slice(0, 200)}`)
   // 设置项：显示出来的是 Base URL 和模型名，所以标记放这两个字段里。
   // 标记不能放主机名：域名过 URL 解析会被小写化，标记变成另一个字符串，读判定就永远看不见它。
-  const apiSetting = await post(owner, '/api/api-settings/text_primary', { api_key: 'sk-iso-test-key', base_url: 'https://api.example.com/v1', model: `${owner.mark}-model`, enabled: true }, base, 'PUT')
+  // **地址必须指向 mock**：一旦这一族有了用户自己的配置，生成就不再走环境变量里的共享 mock，
+  // 而真去请求这个地址；随手写个 https://api.example.com 会让本文件里所有需要模型的路由全变 502。
+  const apiSetting = await post(owner, '/api/api-settings/text_primary', { api_key: llmMock.env.PROJECT_LLM_API_KEY, base_url: llmMock.env.PROJECT_LLM_BASE_URL, model: `${owner.mark}-model`, enabled: true }, base, 'PUT')
   assert.equal(apiSetting.status, 200, `造设置项失败（${owner.id}）：${apiSetting.status} ${apiSetting.text.slice(0, 200)}`)
   // 偏好：数据回流那条路只认「同一平台、至少两条已确认、带 views 的表现数据」。
   // 没用「终稿回流」那条（要求草稿有两版可比，跑起来重多了）。平台名里带标记，偏好这一行才进得了标记判定。
@@ -278,6 +287,46 @@ test('别人的东西改不动：带参数的写路由逐条用 B 的身份试�
   assert.equal(await fingerprint(OWNER, base), before, 'B 的写请求改动了 A 的数据')
   assertCoverageDecided(skipped)
   console.log(JSON.stringify({ event: 'owner_isolation_write', patternWriteRoutes: routes.length, exercised, skippedFamilies: [...skipped].sort() }))
+})
+
+// 间接引用：别人的 id 不在 URL 里，而在请求体里（拿 A 的 id 去拼自己的东西）。
+// 这两条路以前不在判定里，因为「怎么从源码里枚举出请求体里的 id 字段」没有靠得住的算法。
+// 现在不靠算法靠枚举：**把源码里真接受 id 的几处写下来**，一条一条试。
+//
+// 判定看两件事，而不是看状态码：
+//   「接受但忽略」不是问题（形式判断就是这种），**「接受并用了别人的东西」才是**。
+//   所以：① B 的回复里不许出现 A 的标记（用上了 A 的内容会现形）；② 事后 A 的数据必须一字不差
+//   （把内容写回 A 的选题这种改动，会在这里现形）。
+const INDIRECT_REFERENCES = [
+  { path: '/api/drafts/generate', why: '生成锚点（选题/方法/素材）全部指向 A，同时给 B 自己的锚点让请求能往下走', body: mine => ({ topic: { title: 'B 自己的锚点', strategy_layer: 'trust', goal_refs: [] }, topic_id: mine.ids.topics, structure_id: mine.ids.structures, quote_ids: [mine.ids.materials], experience_ids: [mine.ids.materials] }) },
+  { path: '/api/materials/atoms', why: '素材来源指向 A 的素材', body: mine => ({ kind: 'quote', text: 'B 自己的素材', source_id: mine.ids.materials }) },
+  { path: '/api/performance-snapshots', why: '表现数据挂到 A 的草稿上', body: mine => ({ draft_id: mine.ids.drafts, platform: '抖音', metrics: { views: 1 }, status: 'confirmed' }) },
+  { path: '/api/skills/form', why: '形式判断的结果会写回选题（拿 A 的 id 试）', body: mine => ({ topic: 'B 自己的选题', topic_id: mine.ids.topics }) },
+]
+
+test('间接引用：请求体里拿 A 的 id，既读不到也用不上（跨账号）', async t => {
+  const base = `http://127.0.0.1:${PORT}`
+  const server = await startServer(PORT, freshDataFile('indirect'))
+  t.after(() => server.kill())
+  const mine = await seed(OWNER, base)
+  await seed(OTHER, base)
+
+  const before = await fingerprint(OWNER, base)
+  const leaked = []
+  const statuses = []
+  for (const entry of INDIRECT_REFERENCES) {
+    const response = await post(OTHER, entry.path, entry.body(mine), base)
+    // 404 说明路由改了名字或没这条——枚举清单过期了，这时候必须让人看见，不能静默跳过。
+    assert.notEqual(response.status, 404, `${entry.path} 返回 404：这条路由可能改了名字，清单要跟着改（${entry.why}）`)
+    // 5xx 更糟：路由报错了，根本走不到「用没用别人的 id」那一步，这条会变成假绿。
+    assert.ok(response.status < 500, `${entry.path} 返回 ${response.status}（${entry.why}）：这条没真的走到引用解析那一步，判定等于空转`)
+    statuses.push(`${entry.path}=${response.status}${response.status >= 500 ? ` ${response.text.slice(0, 120)}` : ''}`)
+    if (response.text.includes(mine.mark)) leaked.push(`${entry.path}（${entry.why}）→ ${response.status} ${response.text.slice(0, 160)}`)
+  }
+
+  assert.deepEqual(leaked, [], `B 在自己的请求体里引用了 A 的 id，服务端把 A 的东西给了 B：\n${leaked.join('\n')}`)
+  assert.equal(await fingerprint(OWNER, base), before, 'B 用请求体里的 A 的 id 改动了 A 的数据')
+  console.log(JSON.stringify({ event: 'owner_isolation_indirect', checked: INDIRECT_REFERENCES.length, statuses }))
 })
 
 test('路由枚举规则本身要认得出现有路由（防止规则退化后假绿）', () => {
