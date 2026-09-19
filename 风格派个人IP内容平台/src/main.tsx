@@ -798,10 +798,13 @@ const draftBriefSummary = (draft: DraftItem) => {
 }
 // Requirement 16：发布前共鸣报告的形状。判定只认三档、每条必须关联原文，服务端已经过滤过一轮。
 type DraftResonanceReport = { dimensions: { id: string; label: string; theory: string; verdict: string; evidence: string; detail: string }[]; verdict_counts: Record<string, number>; core: { verdict: string; text: string; measured?: { verdict: string; claim_count: number; note: string } | null }; synthesis: Record<string, { label: string; text: string; from: string | null }>; fixes: { cut: string[]; compress: string[]; strengthen: string[] }; generated_at?: string; draft_version?: number; provider?: string }
+// 移植 dbs-script-flow：逐字稿三维检查（段落衔接/信息密度/口播流畅）。同样只给人看、不拦发布，
+// 且只描述文稿本身，不预测完播率这类平台指标。
+type DraftScriptFlowReport = { findings: { axis: string; axis_label: string; segment: number; verdict: string; evidence: string; detail: string; fix: string }[]; axis_counts: Record<string, number>; fixes: { cut: string[]; merge: string[]; transition: string[]; rewrite: string[] }; measured?: { segment_count: number; long_sentence_count: number; written_style_count: number; repeated_count: number } | null; generated_at?: string; draft_version?: number; provider?: string }
 // Requirement 14：标题/开头方案的形状。溯源字段都可能为空（服务端只收能溯源的），所以都按可选处理。
 type DraftIdeaPlan = { formula_id?: number; formula_template?: string; formula_example?: string; formula_example_source?: string; category?: string; category_label?: string; title?: string; why?: string; method?: string; method_label?: string; opening?: string; note?: string; used_material?: string; needs_user_material?: boolean }
 type DraftIdeaGroup = { plans?: DraftIdeaPlan[]; source?: string; blocked?: string; methods?: { id: string; label: string }[] | null; readiness?: { richness?: { verdict?: string; dimensions: { label: string; found: boolean }[] }; opening?: { dimensions: { label: string; judged: boolean; problem: boolean | null }[] } } | null }
-type DraftItem = { id: number; topic_id?: number | null; platform: string; content_format?: string; title: string; body: string; fact_check_status: string; status: string; workflow_status?: string; hooks?: DraftHook[]; selected_hook_id?: string | null; selected_hook?: DraftHook | null; opening_ref?: { option_id: string; name: string } | null; variant_group_id?: string | null; variant_type?: string; variant_of?: number | null; archived_at?: string | null; generation_context?: Record<string, unknown> | null; checks?: { persona?: DraftCheck | null; quality?: DraftCheck | null; publish_checklist?: DraftCheck | null }; approval?: DraftApproval; version?: number; history?: DraftItem[]; adaptations?: Record<string, DraftAdaptation>; planned_date?: string | null; ideas?: { title?: DraftIdeaGroup | null; hook?: DraftIdeaGroup | null } | null; resonance?: DraftResonanceReport | null }
+type DraftItem = { id: number; topic_id?: number | null; platform: string; content_format?: string; title: string; body: string; fact_check_status: string; status: string; workflow_status?: string; hooks?: DraftHook[]; selected_hook_id?: string | null; selected_hook?: DraftHook | null; opening_ref?: { option_id: string; name: string } | null; variant_group_id?: string | null; variant_type?: string; variant_of?: number | null; archived_at?: string | null; generation_context?: Record<string, unknown> | null; checks?: { persona?: DraftCheck | null; quality?: DraftCheck | null; publish_checklist?: DraftCheck | null }; approval?: DraftApproval; version?: number; history?: DraftItem[]; adaptations?: Record<string, DraftAdaptation>; planned_date?: string | null; ideas?: { title?: DraftIdeaGroup | null; hook?: DraftIdeaGroup | null } | null; resonance?: DraftResonanceReport | null; script_flow?: DraftScriptFlowReport | null }
 const draftIsLocked = (draft: DraftItem) => draft.approval?.status === 'approved' || draft.workflow_status === 'ready_to_shoot' || draft.status === 'published'
 const liveWorkbenchDrafts = (drafts: DraftItem[]) => {
   const live = drafts.filter(draft => !draft.archived_at)
@@ -2203,6 +2206,17 @@ function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: 
   const [confirmed, setConfirmed] = useState<string[]>([])
   const adaptation = draft.adaptations?.[platform] || null
   const report = draft.resonance || null
+  const flow = draft.script_flow || null
+  const [flowBusy, setFlowBusy] = useState(false)
+
+  // 逐字稿衔接检查：跟共鸣诊断一样只读正文、只出报告，不改稿也不拦发布。
+  const diagnoseFlow = () => {
+    setFlowBusy(true); setMessage('')
+    void apiJson<DraftItem>(`/api/drafts/${draft.id}/script-flow`, { method: 'POST', body: '{}' })
+      .then(onUpdated)
+      .catch((error: unknown) => setMessage(error instanceof Error && error.message ? error.message : '逐字稿检查失败，请稍后重试。'))
+      .finally(() => setFlowBusy(false))
+  }
 
   // Requirement 16：共鸣报告只是给人看的一份诊断，不改稿、不写检查，也不拦发布。
   const diagnose = () => {
@@ -2273,6 +2287,32 @@ function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: 
           {report.fixes.strengthen.length > 0 && <p><strong>放大：</strong>{report.fixes.strengthen.join('；')}</p>}
         </div>}
       </> : <p className="empty-state">还没诊断过。诊断只读正文，不改稿、不影响发布。</p>}
+    </div>
+    <div className="publish-resonance">
+      <div className="structure-toolbar-row">
+        <strong>逐字稿衔接检查</strong>
+        <button className="primary-action" disabled={flowBusy} onClick={diagnoseFlow}>{flowBusy ? '检查中...' : flow ? '重新检查' : '跑一次衔接检查'}</button>
+      </div>
+      <p className="publish-resonance-note">只看稿子本身：哪一段到哪一段缺过渡、哪段在绕圈子、哪句念不出来。不说平台表现，也不拦发布。</p>
+      {flow ? <>
+        {flow.draft_version !== undefined && draft.version !== undefined && flow.draft_version !== draft.version && <p className="skill-message" role="status">正文已改到第 {draft.version} 版，这份检查是基于第 {flow.draft_version} 版的，建议重新检查。</p>}
+        {flow.measured && <div className="resonance-core">
+          <span>{`规则先数出来：${flow.measured.segment_count} 段`}</span>
+          <small>{`超长句 ${flow.measured.long_sentence_count} 处 · 书面语 ${flow.measured.written_style_count} 处 · 重复表述 ${flow.measured.repeated_count} 处`}</small>
+        </div>}
+        <ul className="resonance-list">{flow.findings.map(item => <li key={`${item.axis}-${item.segment}-${item.evidence.slice(0, 12)}`}>
+          <div className="resonance-head"><strong>第 {item.segment} 段 · {item.axis_label}</strong><span className={`publish-check-status status-${['成立', '合适', '顺'].includes(item.verdict) ? 'pass' : ['勉强', '偏松', '偏书面'].includes(item.verdict) ? 'warn' : 'risk'}`}>{item.verdict}</span></div>
+          <p className="resonance-evidence">原文：「{item.evidence}」</p>
+          {item.detail && <p>{item.detail}</p>}
+          <p><strong>改法：</strong>{item.fix || '模型没给出最小修改动作，这一条先当提示看。'}</p>
+        </li>)}</ul>
+        {(flow.fixes.cut.length + flow.fixes.merge.length + flow.fixes.transition.length + flow.fixes.rewrite.length) > 0 && <div className="resonance-fixes">
+          {flow.fixes.transition.length > 0 && <p><strong>补过渡：</strong>{flow.fixes.transition.join('；')}</p>}
+          {flow.fixes.cut.length > 0 && <p><strong>删：</strong>{flow.fixes.cut.join('；')}</p>}
+          {flow.fixes.merge.length > 0 && <p><strong>合并：</strong>{flow.fixes.merge.join('；')}</p>}
+          {flow.fixes.rewrite.length > 0 && <p><strong>改口播：</strong>{flow.fixes.rewrite.join('；')}</p>}
+        </div>}
+      </> : <p className="empty-state">还没检查过。检查只读正文，不改稿、不影响发布。</p>}
     </div>
     {message && <p className="skill-message" role="status">{message}</p>}
   </details>

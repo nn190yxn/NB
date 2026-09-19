@@ -106,6 +106,20 @@ export async function startGenerationMock({ adaptBody } = {}) {
         fixes: { cut: ['「点赞会撒谎」后面绕的那句删掉'], compress: ['第二段的解释压成一句'], strengthen: ['「询盘不会」这句单独成行'] },
       }))
     }
+    // 移植 dbs-script-flow：逐字稿三维检查。故意给一条判定不在三档内的、一条维度不认识的、一条段落号越界的，
+    // 测校验会不会丢（模型给 5 条，落到用户面前只剩 2 条）。
+    if (system.includes('逻辑延续检查法')) {
+      return reply(JSON.stringify({
+        findings: [
+          { axis: 'continuity', segment: 1, verdict: '勉强', evidence: '点赞会撒谎，询盘不会', detail: '上一句没交代场景就直接给判断', fix: '在前面补一句你翻的是什么后台' },
+          { axis: 'density', segment: 1, verdict: '偏松', evidence: '别再为流量写，为成交写', detail: '同一个判断讲了两遍', fix: '删掉后一句，只留一个' },
+          { axis: 'spoken', segment: 1, verdict: '绕口', evidence: '为成交写', detail: '判定不在三档内，这条应该被丢掉' },
+          { axis: 'unknown', segment: 1, verdict: '顺', evidence: '随便一句', detail: '维度不认识，这条应该被丢掉' },
+          { axis: 'continuity', segment: 9, verdict: '断裂', evidence: '点赞会撒谎，询盘不会', detail: '段落号越界，这条应该被丢掉' },
+        ],
+        fixes: { cut: ['删掉重复的那句'], transition: ['第 1 段到第 2 段补一句过渡'], merge: [], rewrite: ['把长句拆成两句'] },
+      }))
+    }
     if (system.includes('记忆')) return reply(JSON.stringify([{ memory_type: 'style', content: '共享模型提炼的记忆' }]))
     if (system.includes('复盘')) return reply(JSON.stringify({ verdict: 'winner', summary: '表现优于往常', lessons: ['真实案例更受欢迎'], drivers: ['真实案例'] }))
 
