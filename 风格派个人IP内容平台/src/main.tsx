@@ -804,6 +804,8 @@ type DraftScriptFlowReport = { findings: { axis: string; axis_label: string; seg
 // 移植 dbs-content-risk-check：发布前风险检查，分「平台机器可能识别到什么」与「内容实质问题」两层。
 // 只报位置、机制与最小改法，不替用户决定能不能发，也不拦发布。
 type DraftPublishRiskReport = { findings: { kind: string; kind_label: string; evidence: string; location: string; problem: string; action: string; false_positive: string }[]; kind_counts: Record<string, number>; overlay: string[]; overlay_rejected: boolean; summary: { machine: string; substance: string }; measured?: { hit_count: number; url_count: number; contact_count: number; qrcode_count: number; drive_action_count: number; digits_count: number; claim_count: number; medical_count: number } | null; generated_at?: string; draft_version?: number; provider?: string }
+// 移植 dbs-wechat-html：公众号版本是纯渲染（内联样式 HTML），不改草稿、不调模型。
+type DraftWechatHtmlResult = { style_id: string; style_name: string; style_group: string; body_style: string; html: string; document: string; chars: number; notes: string[]; styles: { id: string; name: string; group: string; fit: string }[] }
 // Requirement 14：标题/开头方案的形状。溯源字段都可能为空（服务端只收能溯源的），所以都按可选处理。
 type DraftIdeaPlan = { formula_id?: number; formula_template?: string; formula_example?: string; formula_example_source?: string; category?: string; category_label?: string; title?: string; why?: string; method?: string; method_label?: string; opening?: string; note?: string; used_material?: string; needs_user_material?: boolean }
 type DraftIdeaGroup = { plans?: DraftIdeaPlan[]; source?: string; blocked?: string; methods?: { id: string; label: string }[] | null; readiness?: { richness?: { verdict?: string; dimensions: { label: string; found: boolean }[] }; opening?: { dimensions: { label: string; judged: boolean; problem: boolean | null }[] } } | null }
@@ -2233,6 +2235,33 @@ function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: 
       .finally(() => setRiskBusy(false))
   }
 
+  const [wechat, setWechat] = useState<DraftWechatHtmlResult | null>(null)
+  const [wechatStyle, setWechatStyle] = useState('minimal')
+  const [wechatBusy, setWechatBusy] = useState(false)
+
+  // 公众号版本只做排版：把正文渲染成内联样式 HTML，不调模型、不改草稿。
+  const renderWechat = (styleId: string) => {
+    setWechatBusy(true); setMessage('')
+    void apiJson<DraftWechatHtmlResult>(`/api/drafts/${draft.id}/wechat-html`, { method: 'POST', body: JSON.stringify({ style_id: styleId }) })
+      .then(result => { setWechat(result); setWechatStyle(result.style_id) })
+      .catch((error: unknown) => setMessage(error instanceof Error && error.message ? error.message : '公众号排版失败，请稍后重试。'))
+      .finally(() => setWechatBusy(false))
+  }
+
+  // 微信后台认富文本：优先写 text/html，浏览器不支持时才退回 HTML 源码。
+  const copyWechatHtml = () => {
+    if (!wechat) return
+    const plain = `${draft.title}\n\n${draft.body}`
+    const rich = typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write
+      ? navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([wechat.html], { type: 'text/html' }), 'text/plain': new Blob([plain], { type: 'text/plain' }) })])
+      : Promise.reject(new Error('no-rich-clipboard'))
+    rich
+      .then(() => setMessage('已复制排版后的富文本，去公众号后台直接粘贴。'))
+      .catch(() => navigator.clipboard?.writeText(wechat.html)
+        .then(() => setMessage('这个浏览器不支持复制富文本，已复制 HTML 源码，粘到编辑器后选“保留格式”。'))
+        .catch(() => setMessage('复制失败，请手动选中预览区内容复制。')))
+  }
+
   // Requirement 16：共鸣报告只是给人看的一份诊断，不改稿、不写检查，也不拦发布。
   const diagnose = () => {
     setDiagnosing(true); setMessage('')
@@ -2355,6 +2384,25 @@ function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: 
           {risk.summary.substance && <p><strong>实质问题：</strong>{risk.summary.substance}</p>}
         </div>}
       </> : <p className="empty-state">还没检查过。检查只读这份稿子，不替你决定能不能发。</p>}
+    </div>
+    <div className="publish-resonance">
+      <div className="structure-toolbar-row">
+        <strong>公众号版本</strong>
+        <span className="publish-wechat-controls">
+          <select value={wechatStyle} onChange={event => setWechatStyle(event.target.value)} aria-label="公众号排版风格">
+            {(wechat?.styles || [{ id: 'minimal', name: '极简黑白', group: '推荐默认', fit: '' }]).map(item => <option key={item.id} value={item.id}>{`${item.name}（${item.group}）`}</option>)}
+          </select>
+          <button className="primary-action" disabled={wechatBusy} onClick={() => renderWechat(wechatStyle)}>{wechatBusy ? '排版中...' : wechat ? '换个风格重新排版' : '生成公众号版本'}</button>
+        </span>
+      </div>
+      <p className="publish-resonance-note">只做排版：标题和正文原样保留，不改观点、不调模型。微信后台会剥掉样式表，所以这里把样式全部写进每个标签里，复制过去直接粘。</p>
+      {wechat ? <>
+        <div className="publish-actions"><button className="primary-action" onClick={copyWechatHtml}>复制富文本（粘到公众号后台）</button><small>{`${wechat.style_name} · ${wechat.chars} 个字符`}</small></div>
+        <div className="publish-wechat-preview" style={{ padding: '8px 12px', background: '#fff' }}>
+          <div style={{ fontFamily: 'inherit' }} dangerouslySetInnerHTML={{ __html: `<section style="${wechat.body_style}">${wechat.html}</section>` }} />
+        </div>
+        {wechat.notes.length > 0 && <div className="resonance-synthesis">{wechat.notes.map(note => <p key={note}><small>{note}</small></p>)}</div>}
+      </> : <p className="empty-state">选一个风格，生成一份能直接粘进公众号后台的版本。</p>}
     </div>
     {message && <p className="skill-message" role="status">{message}</p>}
   </details>

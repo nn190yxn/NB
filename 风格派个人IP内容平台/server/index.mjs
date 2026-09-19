@@ -26,6 +26,7 @@ import { hookMethodSource, hookMethods } from './hook-diagnosis.mjs'
 import { coreMechanismCheck, parseResonanceResponse, resonancePrompt } from './resonance.mjs'
 import { parseScriptFlowResponse, scriptFlowPrompt, scriptFlowSignals } from './script-flow.mjs'
 import { parsePublishRiskResponse, publishRiskPrompt, publishRiskSignals } from './publish-risk.mjs'
+import { wechatHtmlDocument, wechatStyles } from './wechat-html.mjs'
 import { activeFeatureReplacements, buildPreferenceRecords, draftVersions, finalDraftCandidates, isFeatureId, performanceCandidates, performanceSignalNote } from './return-flow.mjs'
 import { guideColdStartPaths, guideState } from './guide.mjs'
 import { hookIdeasPrompt, hookReadiness, ideaKinds, parseHookIdeas, parseTitleIdeas, titleIdeasPrompt } from './ideas.mjs'
@@ -1868,6 +1869,27 @@ const server = createServer(async (request, response) => {
       } catch (error) {
         return send(response, 502, { error: error?.message || '发布前风险检查失败，请稍后重试', retryable: true })
       }
+    }
+    // 移植 dbs-wechat-html：把草稿正文渲染成可粘进公众号后台的内联样式 HTML。
+    // 纯渲染：不用模型、不花额度、不改草稿任何字段，也不需要配置。
+    const draftWechatHtmlMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/wechat-html$/)
+    if (draftWechatHtmlMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftWechatHtmlMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' })
+      if (!String(draft.body || '').trim()) return send(response, 422, { error: '这份草稿还没有正文，先写正文再排版', code: 'validation_failed' })
+      const payload = await readJson(request).catch(() => ({}))
+      const result = wechatHtmlDocument({ title: draft.title, body: draft.body, styleId: payload?.style_id })
+      return send(response, 200, {
+        style_id: result.style_id,
+        style_name: result.style_name,
+        style_group: result.style_group,
+        body_style: result.body_style,
+        html: result.html,
+        document: result.document,
+        chars: result.chars,
+        notes: result.notes,
+        styles: wechatStyles.map(item => ({ id: item.id, name: item.name, group: item.group, fit: item.fit })),
+      })
     }
     const draftSlotMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/slots\/(title|opening|structure|ending)$/)
     if (draftSlotMatch && request.method === 'POST') { const body = await readJson(request); const draft = owned('drafts', request).find(item => item.id === Number(draftSlotMatch[1])); if (!draft) return send(response, 404, { error: '草稿不存在', code: 'resource_not_found' }); const slot = draftSlotMatch[2]; if (!slotIds.includes(slot)) return send(response, 422, { error: '不支持的槽位', code: 'validation_failed' }); if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撕回人工确认，再修改草稿', code: 'invalid_transition' }); const option = findSlotOption(buildSlotOptions({ structures: owned('structures', request), platform: draft.platform }), slot, body.option_id); if (!option) return send(response, 422, { error: '槽位选项不存在', code: 'validation_failed' }); const slotConfigs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }; if (!slotConfigs.primary && !slotConfigs.fallback) return send(response, 422, { error: '槽位改写需要先在 API 中心配置大模型', reason: 'llm_not_configured' }); if (usesSharedPrimaryLlm(request)) { const quota = await consumeQuota(request, 'llm', llmDailyLimit); if (!quota.allowed) return send(response, 429, { error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false }) }
