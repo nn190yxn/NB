@@ -35,15 +35,18 @@ export const guideColdStartPaths = [
 const count = (list, predicate = () => true) => (Array.isArray(list) ? list.filter(predicate).length : 0)
 
 // 定位这类是按用户分的文档，空文档也算存在。只有真写过内容才算做过这一步。
-const metaKeys = new Set(['id', 'owner_id', 'created_at', 'updated_at'])
+// 记账字段不算内容：新账号看完访谈点「稍后填写」会留下
+// { status: 'draft', interview_answers: { '0': '' }, interview_step: 0, onboarding_seen_at: '...' }
+// 只看「键存不存在」会让定位直接算做过，冷启动降级永远不触发（真实界面路径实测踩到）。
+// 所以空串、空数组、空对象都不算内容，嵌套结构递归判。
+const metaKeys = new Set(['id', 'owner_id', 'created_at', 'updated_at', 'status', 'interview_step', 'onboarding_seen_at'])
 export function hasContent(doc) {
+  if (typeof doc === 'string') return doc.trim().length > 0
+  if (typeof doc === 'boolean') return doc
+  if (typeof doc === 'number') return true
   if (!doc || typeof doc !== 'object') return false
-  return Object.entries(doc).some(([key, value]) => {
-    if (metaKeys.has(key)) return false
-    if (Array.isArray(value)) return value.length > 0
-    if (value && typeof value === 'object') return Object.keys(value).length > 0
-    return Boolean(value)
-  })
+  if (Array.isArray(doc)) return doc.some(item => hasContent(item))
+  return Object.entries(doc).some(([key, value]) => !metaKeys.has(key) && hasContent(value))
 }
 
 // 每个环节「做没做」只看用户手上真实存在的东西，不看他自己说做到哪一步了。
