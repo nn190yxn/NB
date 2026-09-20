@@ -11,9 +11,9 @@ import { collectionNames } from './mysql.mjs'
 // 全部列出来，多一处就红——逼写的人做一次有意识的决定：要么走 owned()，要么在这里写清为什么。
 //
 // **它管不住的（别把它当安全证明）**：
-//   1. 中间变量绕一圈再取数（`const rows = state.materials` 之后用 rows 找）扫不到；
-//   2. 这一行写了 owner_id、但写得不对（比如 `item.owner_id !== undefined`）它看不出来；
-//   3. 它是数出来的，不是推出来的——真正「不可能漏」要靠数据访问层收口，那仍未做（审计里记着）。
+//   1. 数据从哪来：文件末尾那几只守卫只看「取数那一行、写归属那一行、比归属那一行」**怎么写**，
+//      推不出「`owner`/`userId` 这些变量本身是不是从请求体里绑出来的」（对最常见的绑法另有一条守卫盯着）；
+//   2. 它是数出来的，不是推出来的——真正「不可能漏」要靠数据访问层收口，那仍未做（审计里记着）。
 const source = readFileSync(new URL('./index.mjs', import.meta.url), 'utf8')
 
 // 集合名单取自持久化登记表（`server/mysql.mjs`），不在这里另维护一份：
@@ -87,4 +87,86 @@ test('取某一行数据、却没说明是谁的，必须都在清单里', () =>
   assert.deepEqual(scan('state.draf.find(item => item.id === id)\n').unknown, ['draf'], '拼错的集合名要能报出来')
 
   console.log(JSON.stringify({ event: 'owner_scope_static', riskyReads: risky.length, explained: risky.length - unscoped.length, allowed: ALLOWED_UNSCOPED.length }))
+})
+
+// —— 2026-09-20 补：这道卡口自己写明的两处「管不住」——
+// 原文：① 中间变量绕一圈再取数扫不到；② 「这一行写了 owner_id、但写得不对」看不出来。
+// 这两处正好是「漏了过滤」最省事的藏身处（把集合转个手、或者直接把客户端递上来的 owner_id 写给入库），
+// 所以抳成三只守卫 + 一只盯着身份变量从哪来的。守卫本身用**合成源码**自证：能抳住会出事的写法，也不误伤合规写法。
+const IDENTITY = /userId|\bowner\b|\busername\b/
+
+// 允许「没在这一行写出身份」的例外，每条都要说清为什么。
+const ALLOWED_ALIAS = [
+  { match: 'const store = state[`${collection}_by_user`]', why: '按用户分库的存储：键就是 userId(request)，取到的永远是「自己那份」' },
+]
+const ALLOWED_OWNER_WRITE = [
+  { match: "owner_id: collection === 'users' ? (item.id", why: '老数据迁移补归属：users 用自己的 id 当归属，其余给 demo-user 兜底（一次性迁移，不接用户输入）' },
+]
+const ALLOWED_LOOSE_IDENTITY = [
+  { match: "const username = String(body.username || '').trim().toLowerCase()", why: '登录/注册：用户名本来就该由客户端提，它就是身份的来源；同名注册会被拦，密码对不上也不放行' },
+]
+
+function scanOwnership(text) {
+  const handover = []
+  const clientOwner = []
+  const meaningless = []
+  const looseIdentity = []
+  text.split('\n').forEach((line, index) => {
+    const where = { line: index + 1, code: line.trim() }
+    // 守卫一：把整个集合交给一个变量（`const rows = state.materials`）——之后用 rows 取数，上面那只扫 `state.x.find` 的卡口就看不见了。
+    if (/=\s*state(?:\.\w+|\[[^\]]*\])\s*(?:\/\/.*)?$/.test(line) && !ALLOWED_ALIAS.some(entry => line.includes(entry.match))) handover.push(where)
+    // 守卫二：归属必须由服务端写。写成 `owner_id: body.owner_id` 就是把「我是谁」交给客户端。
+    for (const hit of line.matchAll(/owner_id:\s*([^,}]+)/g)) {
+      if (IDENTITY.test(hit[1]) || ALLOWED_OWNER_WRITE.some(entry => line.includes(entry.match))) continue
+      clientOwner.push({ ...where, value: hit[1].trim().slice(0, 60) })
+    }
+    // 守卫三：归属的比较必须有意义。`owner_id !== undefined`、`owner_id === 'demo-user'` 看着像过滤，其实谁都过。
+    for (const hit of line.matchAll(/owner_id\s*[!=]==?\s*([^&|)]+)/g)) {
+      if (IDENTITY.test(hit[1])) continue
+      meaningless.push({ ...where, value: hit[1].trim().slice(0, 60) })
+    }
+    // 守卫四：被当成身份的那些变量，不许从客户端递上来的东西里绑（那是守卫二、三最大的后门）。
+    if (/(?:const|let)\s+(?:owner|userId|username|ownerId)\w*\s*=\s*[^;]*(?:\bbody\b|\bpayload\b|\bheaders\b|query\b)/.test(line) && !ALLOWED_LOOSE_IDENTITY.some(entry => line.includes(entry.match))) looseIdentity.push(where)
+  })
+  return { handover, clientOwner, meaningless, looseIdentity }
+}
+
+test('归属必须由服务端写、比得有意义、集合不许转手', () => {
+  const clean = scanOwnership(source)
+  const show = hits => hits.map(hit => `index.mjs:${hit.line} ${hit.code.slice(0, 150)}`).join('\n')
+  assert.deepEqual(clean.handover, [], `这些地方把整个集合交给了变量，之后用它取数就绕过上面那只卡口了。要么直接用 owned()/state.x.find(...)，要么加到 ALLOWED_ALIAS 并写清为什么：\n${show(clean.handover)}`)
+  assert.deepEqual(clean.clientOwner, [], `这些地方写的归属不是「谁在问」：接客户端递上来的 owner_id 就是越权写入。\n${show(clean.clientOwner)}`)
+  assert.deepEqual(clean.meaningless, [], `这些归属比较没有意义，谁都过得了（看着像过滤，其实不是）：\n${show(clean.meaningless)}`)
+  assert.deepEqual(clean.looseIdentity, [], `身份变量不许从请求里绑（body/payload/headers/query）。确实该由客户端提（比如登录用户名），就加到 ALLOWED_LOOSE_IDENTITY 并写清为什么：\n${show(clean.looseIdentity)}`)
+  const staleIdentity = ALLOWED_LOOSE_IDENTITY.filter(entry => !source.includes(entry.match)).map(entry => entry.match)
+  assert.deepEqual(staleIdentity, [], `清单里这几条已经扫不到了（代码改了或写法变了），该从 ALLOWED_LOOSE_IDENTITY 里删掉：\n${staleIdentity.join('\n')}`)
+
+  // 反空过（常驻）：拿**会出事的写法**当场试——每只守卫都得抓住。
+  const hazards = scanOwnership([
+    'const rows = state.materials',
+    'const rows = state[collectionName]',
+    'const item = { id, owner_id: body.owner_id }',
+    'const item = { owner_id: remote.owner_id, id }',
+    'const mine = state.materials.find(row => row.owner_id !== undefined)',
+    "const mine = state.materials.filter(row => row.owner_id === 'demo-user')",
+    'const owner = body.user_id',
+  ].join('\n'))
+  assert.ok(hazards.handover.length >= 2, `「集合转手」守卫是空转：${JSON.stringify(hazards.handover)}`)
+  assert.ok(hazards.clientOwner.length >= 2, `「归属不接客户端」守卫是空转：${JSON.stringify(hazards.clientOwner)}`)
+  assert.ok(hazards.meaningless.length >= 2, `「归属比较要有意义」守卫是空转：${JSON.stringify(hazards.meaningless)}`)
+  assert.ok(hazards.looseIdentity.length >= 1, `「身份变量不许从请求里绑」守卫是空转：${JSON.stringify(hazards.looseIdentity)}`)
+
+  // 反向：合规写法不许被误伤（误报会逼人加白名单，白名单一多守卫就废了）。
+  const falseAlarms = scanOwnership([
+    'const mine = state.materials.filter(item => item.owner_id === userId(request))',
+    'const store = state[`${collection}_by_user`]',
+    'const item = { id, owner_id: userId(request) }',
+    'const owner = userId(request)',
+  ].join('\n'))
+  assert.deepEqual(falseAlarms.handover, [], `合规写法被误判成集合转手：${JSON.stringify(falseAlarms.handover)}`)
+  assert.deepEqual(falseAlarms.clientOwner, [], `合规写法被误判成「归属接客户端」：${JSON.stringify(falseAlarms.clientOwner)}`)
+  assert.deepEqual(falseAlarms.meaningless, [], `合规写法被误判成「归属没比对」：${JSON.stringify(falseAlarms.meaningless)}`)
+  assert.deepEqual(falseAlarms.looseIdentity, [], `合规写法被误判成身份变量来路不明：${JSON.stringify(falseAlarms.looseIdentity)}`)
+
+  console.log(JSON.stringify({ event: 'owner_scope_ownership_guards', handover: clean.handover.length, clientOwner: clean.clientOwner.length, meaningless: clean.meaningless.length, looseIdentity: clean.looseIdentity.length }))
 })
