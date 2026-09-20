@@ -17,13 +17,20 @@ import { readdirSync, readFileSync } from 'node:fs'
 
 // 空捕获的判定：.catch(() => undefined) 和 .catch(() => {})。
 // 注意不算 `catch { /* 有注释说明为什么能吞 */ }` 这种——那是带说明的显式决定，代码里有注释可查。
+// 也不算**整行都是注释**的行（2026-09-20 补）：注释里提一句这个写法不该把预算抬上去
+// （真发生过：某处注释写「原来是 .catch(() => undefined)」，预算就多了一格）。
+// 行尾注释里的提及仍会计入——那种少见，宁可多要一格也不漏扫一个真的。
 const silentCatch = /\.catch\(\s*\(\s*\)\s*=>\s*(?:undefined|\{\s*\})\s*\)/g
+const isCommentOnlyLine = line => /^\s*(?:\/\/|\*)/.test(line)
+const countSilentCatches = text => text.split('\n').filter(line => !isCommentOnlyLine(line)).reduce((sum, line) => sum + (line.match(silentCatch) || []).length, 0)
 
 // 扫描范围：前端源码和桌面壳。新文件默认预算 0——新文件里冒出一个空捕获，就该红。
 const roots = ['src', 'desktop']
 const skipped = /(\.test\.|node_modules|dist)/
 const budget = {
-  'src/main.tsx': 29,
+  // 2026-09-20：main.tsx 已到 0——每一处吞掉都写明了为什么（顶部提示已报 / 故意安静 / 响应体解析兑底）。
+  // 从今往后这里新增**任何**一处空捕获都红，不用再靠「预算还剩几格」这种模糊感觉。
+  'src/main.tsx': 0,
   'desktop/main.mjs': 1,
 }
 
@@ -40,8 +47,8 @@ test('前端静默吞错不许无声增长（棘轮）', () => {
 
   const actual = {}
   for (const path of files) {
-    const hits = readFileSync(path, 'utf8').match(silentCatch)
-    if (hits) actual[path] = hits.length
+    const count = countSilentCatches(readFileSync(path, 'utf8'))
+    if (count) actual[path] = count
   }
 
   const grew = Object.entries(actual).filter(([path, count]) => count > (budget[path] || 0))

@@ -124,7 +124,7 @@ function App() {
   useEffect(() => { setApiFailureReporter(notice => setApiFailure(notice)); return () => setApiFailureReporter(null) }, [])
   // 它不是待办，十二秒后自己收起；再次失败会重新计时。
   useEffect(() => { if (!apiFailure) return; const timer = window.setTimeout(() => setApiFailure(null), 12000); return () => window.clearTimeout(timer) }, [apiFailure])
-  useEffect(() => { if (authState === 'ok') void apiJson<{ user_id?: string }>('/api/auth/session', { silent: true }).then(value => { setAccountId(value.user_id || ''); setSyncAccount(value.user_id || null); setPendingSync(pendingSyncEvents().length); setDamagedQueue(damagedQueueReport()) }).catch(() => undefined) }, [authState])
+  useEffect(() => { if (authState === 'ok') void apiJson<{ user_id?: string }>('/api/auth/session', { silent: true }).then(value => { setAccountId(value.user_id || ''); setSyncAccount(value.user_id || null); setPendingSync(pendingSyncEvents().length); setDamagedQueue(damagedQueueReport()) }).catch(() => { /* 故意安静：会话探活失败不打扰（见上面那句） */ }) }, [authState])
   const [showFeedback, setShowFeedback] = useState(false)
   const [feedbackUnread, setFeedbackUnread] = useState<number | 'failed' | null>(null)
 
@@ -166,7 +166,7 @@ function App() {
       .then(positioning => {
         if (!positioning.onboarding_seen_at && !['complete', 'confirmed'].includes(positioning.status || '')) setShowOnboarding(true)
       })
-      .catch(() => undefined)
+      .catch(() => { /* 故意安静：首次引导探活失败只是不弹引导 */ })
   }
 
   const logout = () => {
@@ -196,11 +196,11 @@ function App() {
 
   const syncNow = () => {
     setSyncing(true)
-    void flushSyncQueue().then(() => setPendingSync(pendingSyncEvents().length)).catch(() => undefined).finally(() => setSyncing(false))
+    void flushSyncQueue().then(() => setPendingSync(pendingSyncEvents().length)).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ }).finally(() => setSyncing(false))
   }
 
   const resolveConflict = (conflict: SyncConflict, resolution: 'local' | 'remote') => {
-    void apiJson<{ conflict: SyncConflict }>(`/api/sync/conflicts/${conflict.id}`, { method: 'POST', body: JSON.stringify({ resolution }) }).then(result => setConflicts(current => current.filter(item => item.id !== result.conflict.id))).catch(() => undefined)
+    void apiJson<{ conflict: SyncConflict }>(`/api/sync/conflicts/${conflict.id}`, { method: 'POST', body: JSON.stringify({ resolution }) }).then(result => setConflicts(current => current.filter(item => item.id !== result.conflict.id))).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }
 
   useEffect(() => {
@@ -216,7 +216,7 @@ function App() {
     // 侧栏计数：失败先让它算 0，不要为这个弹提示（审计 25.5 里归为弱信号）。
     apiJson<ShootingItem[]>('/api/shooting/today', { silent: true }).then(items => setShootingCount(items.filter(item => item.status !== 'completed').length)).catch(() => setShootingCount('failed'))
     // 冲突检查不安静：它失败时横幅不出现，用户会以为「没有冲突」（审计 25.5 P2）。
-    apiJson<SyncConflict[]>('/api/sync/conflicts').then(setConflicts).catch(() => undefined)
+    apiJson<SyncConflict[]>('/api/sync/conflicts').then(setConflicts).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }, [authState, activeNav, showShooting])
 
   useEffect(() => {
@@ -329,6 +329,12 @@ type ApiError = Error & { status: number; payload?: ApiErrorPayload }
 // 现在反过来：请求失败先通知一次（App 顶部一条提示），确实要安静的调用点
 // ——后台取数、探活、离线队列——显式传 `{ silent: true }`。
 // 错误仍然照旧抛出去：调用点想就地显示（比如草稿列表面板）不受影响。
+//
+// **链尾那个 catch 的写法（2026-09-20 统一）**：本文件里的 `.catch(() => { /* 顶部提示已报… */ })`
+// 意思是「失败已经由顶部提示说过一次，这里只吞掉未处理的 rejection」——不是「失败了不说」。
+// 真正需要安静的（探活、首次引导）写在那个注释里；响应体解析兑底第三种也写在自己那一行。
+// 为什么要写注释而不是空着：`server/frontend-silent-catch.test.mjs` 会把**没写理由的空捕获**数出来，
+// main.tsx 的预算现在是 **0**——从今往后新加一个，测试当场红。
 type ApiFailureNotice = { path: string; message: string; status: number }
 let apiFailureReporter: ((notice: ApiFailureNotice) => void) | null = null
 const setApiFailureReporter = (reporter: ((notice: ApiFailureNotice) => void) | null) => { apiFailureReporter = reporter }
@@ -339,7 +345,7 @@ async function apiJson<T>(path: string, options?: ApiRequestOptions): Promise<T>
   const { headers: extraHeaders, silent, ...rest } = options || {}
   const response = await fetch(path, { credentials: 'include', headers: { 'content-type': 'application/json', ...(extraHeaders || {}) }, ...rest })
   if (response.status === 204) return undefined as T
-  const payload = await response.json().catch(() => undefined) as T | ApiErrorPayload | undefined
+  const payload = await response.json().catch(() => { /* 响应体不是 JSON 就当空，下面按状态码判断 */ }) as T | ApiErrorPayload | undefined
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/api/auth/')) { sessionExpired = true; window.dispatchEvent(new Event('session-expired')) }
     const raw = (payload as ApiErrorPayload | undefined)?.error || `API ${response.status}`
@@ -476,7 +482,7 @@ function FeedbackPanel({ page, onClose }: { page: string; onClose: () => void })
   const load = () => {
     void apiJson<{ is_admin: boolean; items: FeedbackItem[] }>('/api/feedback')
       .then(result => { setItems(result.items || []); setIsAdmin(result.is_admin) })
-      .catch(() => undefined)
+      .catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }
   useEffect(() => { load() }, [])
 
@@ -490,7 +496,7 @@ function FeedbackPanel({ page, onClose }: { page: string; onClose: () => void })
   }
 
   const setStatus = (id: string, status: 'acknowledged' | 'resolved' | 'open') => {
-    void apiJson(`/api/feedback/${id}`, { method: 'PUT', body: JSON.stringify({ status }) }).then(load).catch(() => undefined)
+    void apiJson(`/api/feedback/${id}`, { method: 'PUT', body: JSON.stringify({ status }) }).then(load).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }
 
   return <div className="settings-overlay" onClick={onClose}><div className="settings-modal feedback-modal" onClick={event => event.stopPropagation()}>
@@ -640,7 +646,7 @@ function MemoryPanel() {
   const [extractText, setExtractText] = useState('')
 
   const load = () => {
-    void apiJson<MemoryItem[]>('/api/memories').then(setItems).catch(() => undefined)
+    void apiJson<MemoryItem[]>('/api/memories').then(setItems).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }
 
   useEffect(() => { load() }, [])
@@ -657,7 +663,7 @@ function MemoryPanel() {
 
   const remove = (id: number) => {
     if (!window.confirm('删除这条记忆后，AI 将不再使用它。确认删除？')) return
-    void apiJson(`/api/memories/${id}`, { method: 'DELETE' }).then(() => setItems(current => current.filter(item => item.id !== id))).catch(() => undefined)
+    void apiJson(`/api/memories/${id}`, { method: 'DELETE' }).then(() => setItems(current => current.filter(item => item.id !== id))).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }
 
   const extract = () => {
@@ -1259,7 +1265,7 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
   }, [query, platform, sort])
 
   useEffect(() => {
-    void apiJson<{ suggestions: string[] }>('/api/research/suggest').then(result => setSuggestions(result.suggestions || [])).catch(() => undefined)
+    void apiJson<{ suggestions: string[] }>('/api/research/suggest').then(result => setSuggestions(result.suggestions || [])).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }, [])
 
   useEffect(() => {
@@ -1471,10 +1477,10 @@ function ComposePanel({ preset, onGenerated }: { preset: { topicId: number | nul
   const [notice, setNotice] = useState('')
 
   useEffect(() => {
-    void apiJson<TopicItem[]>('/api/topics').then(items => setTopics(items.filter(item => item.workflow_status === 'approved'))).catch(() => undefined)
-    void apiJson<{ items: StructureItem[] }>('/api/structures?page=1').then(result => setStructures(result.items || [])).catch(() => undefined)
-    void apiJson<{ items: MaterialItem[] }>('/api/materials?kind=quote&page=1').then(result => setQuotes(result.items || [])).catch(() => undefined)
-    void apiJson<{ items: MaterialItem[] }>('/api/materials?kind=experience&page=1').then(result => setExperiences(result.items || [])).catch(() => undefined)
+    void apiJson<TopicItem[]>('/api/topics').then(items => setTopics(items.filter(item => item.workflow_status === 'approved'))).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
+    void apiJson<{ items: StructureItem[] }>('/api/structures?page=1').then(result => setStructures(result.items || [])).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
+    void apiJson<{ items: MaterialItem[] }>('/api/materials?kind=quote&page=1').then(result => setQuotes(result.items || [])).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
+    void apiJson<{ items: MaterialItem[] }>('/api/materials?kind=experience&page=1').then(result => setExperiences(result.items || [])).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }, [])
 
   useEffect(() => { if (preset?.topicId != null) setTopicId(String(preset.topicId)) }, [preset])
@@ -1538,7 +1544,7 @@ type DeconstructionProposal = { term: string; assumed: string; usages: string[];
 // 三个加工面板都要「从素材库选一条」。素材早就进了库，不该让人再复制粘贴、来回切页面。
 function useMaterialLibrary() {
   const [materials, setMaterials] = useState<MaterialItem[]>([])
-  useEffect(() => { let alive = true; void apiJson<MaterialItem[]>('/api/materials').then(items => { if (alive) setMaterials(items) }).catch(() => undefined); return () => { alive = false } }, [])
+  useEffect(() => { let alive = true; void apiJson<MaterialItem[]>('/api/materials').then(items => { if (alive) setMaterials(items) }).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ }); return () => { alive = false } }, [])
   return materials
 }
 
@@ -1682,7 +1688,7 @@ function FormPanel() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  useEffect(() => { void apiJson<TopicItem[]>('/api/topics').then(items => setTopics(items)).catch(() => undefined) }, [])
+  useEffect(() => { void apiJson<TopicItem[]>('/api/topics').then(items => setTopics(items)).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ }) }, [])
 
   const judgeForm = () => {
     setBusy(true); setError('')
@@ -1795,8 +1801,8 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId,
       .finally(() => setDraftsLoading(false))
   }
   useEffect(() => { loadDrafts() }, [])
-  const copyDraft = (draft: DraftItem) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/copy`, { method: 'POST' }).then(copy => { setDrafts(current => [copy, ...current]); setActiveDraftId(copy.id); setDraftFilter('active') }).catch(() => undefined).finally(() => setBusy(false)) }
-  const toggleArchiveDraft = (draft: DraftItem) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/archive`, { method: 'POST', body: JSON.stringify({ archived: !draft.archived_at }) }).then(updated => setDrafts(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => undefined).finally(() => setBusy(false)) }
+  const copyDraft = (draft: DraftItem) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/copy`, { method: 'POST' }).then(copy => { setDrafts(current => [copy, ...current]); setActiveDraftId(copy.id); setDraftFilter('active') }).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ }).finally(() => setBusy(false)) }
+  const toggleArchiveDraft = (draft: DraftItem) => { setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/archive`, { method: 'POST', body: JSON.stringify({ archived: !draft.archived_at }) }).then(updated => setDrafts(current => current.map(item => item.id === updated.id ? updated : item))).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ }).finally(() => setBusy(false)) }
   // 删除是两步走里的第二步：只有已归档的草稿才出现这个按钮。
   // 弹窗要把平台、标题、字数写清楚——删掉就找不回来了，得让人当场看清删的是哪一条。
   const deleteDraft = (draft: DraftItem) => {
@@ -1827,8 +1833,8 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId,
       .catch((error: unknown) => setSlotError(error instanceof Error ? `改写失败：${error.message}` : '改写失败，请稍后重试。'))
       .finally(() => setSlotBusy(false))
   }
-  const loadHistory = (draft: DraftItem) => { void apiJson<DraftItem[]>(`/api/drafts/${draft.id}/history`).then(items => setHistory(current => ({ ...current, [draft.id]: items }))).catch(() => undefined) }
-  const restoreDraft = (draft: DraftItem, version: number) => { if (draftActionBlocked(draft)) return; setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/restore`, { method: 'POST', body: JSON.stringify({ version }) }).then(updated => { setDrafts(current => current.map(item => item.id === updated.id ? updated : item)); setHistory(current => ({ ...current, [draft.id]: updated.history || [] })) }).catch(() => undefined).finally(() => setBusy(false)) }
+  const loadHistory = (draft: DraftItem) => { void apiJson<DraftItem[]>(`/api/drafts/${draft.id}/history`).then(items => setHistory(current => ({ ...current, [draft.id]: items }))).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ }) }
+  const restoreDraft = (draft: DraftItem, version: number) => { if (draftActionBlocked(draft)) return; setBusy(true); void apiJson<DraftItem>(`/api/drafts/${draft.id}/restore`, { method: 'POST', body: JSON.stringify({ version }) }).then(updated => { setDrafts(current => current.map(item => item.id === updated.id ? updated : item)); setHistory(current => ({ ...current, [draft.id]: updated.history || [] })) }).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ }).finally(() => setBusy(false)) }
   const checkCompliance = (draft: DraftItem) => {
     if (draftActionBlocked(draft)) return
     setComplianceBusy(draft.id)
@@ -1838,7 +1844,7 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId,
       .finally(() => setComplianceBusy(null))
   }
 
-  // 原来结尾是 .catch(() => undefined)：点了「开始检查」失败后，状态不动、一个字都不说。
+  // 原来结尾是一个把失败吞成 undefined 的 catch：点了「开始检查」失败后，状态不动、一个字都不说。
   // 用户分不清「查了没问题」和「压根没查成」——这跟「没查显示成已通过」是同一类毛病。
   const runDraftCheck = (draft: DraftItem, check: 'persona' | 'quality' | 'publish' | 'logic', force = false) => {
     if (draftActionBlocked(draft)) return
@@ -1909,7 +1915,7 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId,
     setDraftFilter('active')
     window.requestAnimationFrame(() => draftGridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
   }
-  const deaiDraft = (draft: DraftItem) => { if (draftActionBlocked(draft)) return; setDeaiBusy(draft.id); void apiJson<{ content: string }>(`/api/drafts/${draft.id}/deai`, { method: 'POST', body: '{}' }).then(result => setDeaiResults(current => ({ ...current, [draft.id]: result.content }))).catch(() => undefined).finally(() => setDeaiBusy(null)) }
+  const deaiDraft = (draft: DraftItem) => { if (draftActionBlocked(draft)) return; setDeaiBusy(draft.id); void apiJson<{ content: string }>(`/api/drafts/${draft.id}/deai`, { method: 'POST', body: '{}' }).then(result => setDeaiResults(current => ({ ...current, [draft.id]: result.content }))).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ }).finally(() => setDeaiBusy(null)) }
   // Requirement 12：回答内容作为候选素材提交，用户点「存成素材」才写库；unit_type 由服务端按内容判。
   const submitFollowup = (draft: DraftItem, entry: { code: string; label?: string }) => {
     const key = `${draft.id}:${entry.code}`
@@ -1998,8 +2004,8 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId,
       .catch((error: unknown) => setDraftError(error instanceof Error ? `保存失败：${error.message}。输入已保留，请重试。` : '保存失败，输入已保留，请重试。'))
       .finally(() => { saveInFlight.current = false; setBusy(false) })
   }
-  const approveDraft = (draft: DraftItem) => { setBusy(true); void apiJson<DraftApprovalResponse>(`/api/drafts/${draft.id}/approve`, { method: 'POST', body: JSON.stringify({ version: draft.version }) }).then(result => setDrafts(current => current.map(item => item.id === result.draft.id ? result.draft : item))).catch(() => undefined).finally(() => setBusy(false)) }
-  const revokeDraftApproval = (draft: DraftItem) => { const reason = window.prompt('请输入撤回原因'); if (!reason?.trim()) return; setBusy(true); void apiJson<DraftApprovalResponse>(`/api/drafts/${draft.id}/revoke-approval`, { method: 'POST', body: JSON.stringify({ version: draft.version, reason: reason.trim() }) }).then(result => setDrafts(current => current.map(item => item.id === result.draft.id ? result.draft : item))).catch(() => undefined).finally(() => setBusy(false)) }
+  const approveDraft = (draft: DraftItem) => { setBusy(true); void apiJson<DraftApprovalResponse>(`/api/drafts/${draft.id}/approve`, { method: 'POST', body: JSON.stringify({ version: draft.version }) }).then(result => setDrafts(current => current.map(item => item.id === result.draft.id ? result.draft : item))).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ }).finally(() => setBusy(false)) }
+  const revokeDraftApproval = (draft: DraftItem) => { const reason = window.prompt('请输入撤回原因'); if (!reason?.trim()) return; setBusy(true); void apiJson<DraftApprovalResponse>(`/api/drafts/${draft.id}/revoke-approval`, { method: 'POST', body: JSON.stringify({ version: draft.version, reason: reason.trim() }) }).then(result => setDrafts(current => current.map(item => item.id === result.draft.id ? result.draft : item))).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ }).finally(() => setBusy(false)) }
   if ((section as string) === '素材库') return <MaterialWorkspace />
   // 三个加工面板保持挂载，切走只隐藏：输入和提案都是手打的，切一次页面就丢太浪费。
   if (section === '拆概念' || section === '提主张' || section === '形式判断') return <>
@@ -2088,7 +2094,7 @@ function MaterialWorkspace() {
   }
 
   const refreshCounts = () => {
-    void apiJson<{ kind_counts: Record<string, number>; trust_counts: Record<string, number>; unit_type_counts: Record<string, number>; pool_summary: { hot: number; soonest_days: number | null; pierce: number; proof: number } }>('/api/materials?kind_counts=1').then(result => { setKindCounts(result.kind_counts || {}); setTrustCounts(result.trust_counts || {}); setUnitTypeCounts(result.unit_type_counts || {}); setPoolSummary(result.pool_summary || null) }).catch(() => undefined)
+    void apiJson<{ kind_counts: Record<string, number>; trust_counts: Record<string, number>; unit_type_counts: Record<string, number>; pool_summary: { hot: number; soonest_days: number | null; pierce: number; proof: number } }>('/api/materials?kind_counts=1').then(result => { setKindCounts(result.kind_counts || {}); setTrustCounts(result.trust_counts || {}); setUnitTypeCounts(result.unit_type_counts || {}); setPoolSummary(result.pool_summary || null) }).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }
 
   useEffect(() => { refreshCounts() }, [])
@@ -2301,7 +2307,7 @@ function ProfileReviewPanel() {
     setBusy(true)
     void apiJson<ProfileReview>(`/api/profile/reviews/${id}`, { method: 'PUT', body: JSON.stringify({ status }) })
       .then(updated => setReviews(current => current.map(item => item.id === updated.id ? updated : item)))
-      .catch(() => undefined)
+      .catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
       .finally(() => setBusy(false))
   }
   const startEdit = (source: 'profile' | 'positioning', key: string, value: unknown) => {
@@ -2683,7 +2689,7 @@ function ContentCalendar() {
   const load = (targetMonth: string) => {
     setLoadError('')
     void apiJson<{ entries: CalendarEntry[] }>(`/api/calendar?month=${targetMonth}`).then(result => { setEntries(result.entries || []); setLoadError('') }).catch(() => { setEntries([]); setLoadError('日历加载失败，请重试。') })
-    void apiJson<DraftItem[]>('/api/drafts').then(setDrafts).catch(() => undefined)
+    void apiJson<DraftItem[]>('/api/drafts').then(setDrafts).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }
   useEffect(() => { load(month) }, [month])
 
@@ -2851,7 +2857,7 @@ function ShootingWorkspace({ onClose }: { onClose: () => void }) {
     saveTeleprompterSettings(window.localStorage, String(active.id), { fontSize, scrollSpeed, playing })
   }, [active?.id, fontSize, scrollSpeed, playing])
   const update = (id: number, patch: Record<string, unknown>) => {
-    void apiJson<ShootingItem>(`/api/shooting/${id}`, { method: 'PUT', body: JSON.stringify(patch) }).then(next => { setItems(current => current.map(item => item.id === id ? next : item)); setActive(next) }).catch(() => undefined)
+    void apiJson<ShootingItem>(`/api/shooting/${id}`, { method: 'PUT', body: JSON.stringify(patch) }).then(next => { setItems(current => current.map(item => item.id === id ? next : item)); setActive(next) }).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }
   return <section className="shoot-workspace"><div className="shoot-workspace-head"><div><span className="section-kicker">TODAY / SHOOTING DESK</span><h2>今日拍摄清单</h2><p>把准备好的内容，转成可以直接开拍的动作。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="shoot-workspace-grid"><div className="shoot-items">{items.length ? items.map(item => <article className={active?.id === item.id ? 'shoot-item selected' : 'shoot-item'} key={item.id}><div><span className={`platform-tag ${item.platform === '小红书' ? 'xhs' : item.platform === '公众号' ? 'wechat' : 'douyin'}`}>{item.platform}</span><h3>{item.title}</h3></div><select value={item.status} onChange={event => update(item.id, { status: event.target.value })}><option value="ready_to_shoot">待拍摄</option><option value="in_progress">拍摄中</option><option value="completed">已完成</option></select><button className="row-arrow" onClick={() => { setActive(item); setFontSize(item.font_size || 24); setScrollSpeed(item.scroll_speed || 3) }}><ArrowUpRight size={17} /></button></article>) : <p className="empty-state">暂无待拍摄内容。先在内容创作中准备一条脚本。</p>}</div>{active && <div className="teleprompter"><div className="teleprompter-tools"><button onClick={() => setPlaying(!playing)}>{playing ? <Pause size={15} /> : <Play size={15} />} {playing ? '暂停' : '开始滚动'}</button><label>字号 <input type="range" min="16" max="42" value={fontSize} onChange={event => setFontSize(Number(event.target.value))} /></label><label>速度 <input type="range" min="1" max="8" value={scrollSpeed} onChange={event => setScrollSpeed(Number(event.target.value))} /></label><label className="outline-action">{visionBusy ? '上传中…' : '上传表现截图'}<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={event => { void analyzeScreenshots(event.target.files); event.currentTarget.value = '' }} /></label></div>{visionMessage && <p className="error-note" role="status">{visionMessage}</p>}{visionTasks.filter(task => task.match_status !== 'confirmed').map(task => <VisionConfirmationCard key={task.id} task={task} shooting={active} onChanged={next => setVisionTasks(current => next ? current.map(item => item.id === next.id ? next : item) : current.filter(item => item.id !== task.id))} onConfirmed={() => setSnapshotRefresh(value => value + 1)} />)}<PerformanceTimeline shooting={active} refreshKey={snapshotRefresh} /><div className={playing ? 'teleprompter-script is-playing' : 'teleprompter-script'} ref={scriptRef} style={{ fontSize }}><span>{active.platform} · 提词模式</span><h3>{active.title}</h3><p>{active.script || '脚本内容将在内容创作完成后显示。你可以先确认镜头节奏，再开始拍摄。'}</p></div><button className="primary-action" onClick={() => update(active.id, { status: active.status === 'completed' ? 'ready_to_shoot' : 'completed', font_size: fontSize, scroll_speed: scrollSpeed })}>{active.status === 'completed' ? '重新安排拍摄' : '标记为已完成'} <Check size={16} /></button></div>}</div></section>
 }
