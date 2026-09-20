@@ -24,7 +24,7 @@
 //       事后 A 的数据也不许变。
 //
 // 已知边界（别拿它当安全证明）：数不完的那几条都写着底——
-//   不带 id 的写路由（只写自己名下的）不在写判定里；写判定里只剩 1 族没造种子（拍摄，理由见下）；
+//   不带 id 的写路由（只写自己名下的）不在写判定里；写判定里的族**全部造了种子**（无跳过）；
 //   请求体里的 id 只覆盖源码里能枚举到的那几处（INDIRECT_REFERENCES）；
 //   读判定里已经没有跳过的族了（private-files 与 vision-tasks 本轮造了种子）。
 //   真正的「结构性不可能发生」（数据访问层统一收口）仍未做。
@@ -47,9 +47,8 @@ const OTHER = { id: 'isolation-other', mark: 'ISO-OTHER-SENTINEL' }
 // 没在本测试里造数据、因此跳过的资源族：写清为什么。
 // 多出一族就会红——要么给它造种子，要么在这里说明为什么不用查。
 const SKIPPED_FAMILIES = {
-  shooting: '要过人工确认闸门（人设/质量/发布清单三项检查 + 事实核验）才能生成；不值得把隔离判定跟那条七步链路绑死（试过：直接改状态被 409 拦下）',
-  // research / devices：2026-09-20 已造种子（热搜采集是客户端递条目、设备心跳直接写），不再跳过。
-  // sync：2026-09-20 已造种子（同一账号拿过期版本号改草稿 → 409 + 一条 open 冲突），不再跳过。
+  // 2026-09-20：写判定里已经**没有跳过的族**了（研究/设备/同步冲突/拍摄全部造了种子）。
+  // 保留这份表是为了以后：新加一族资源又没造种子时，必须在这里写清为什么不造（assertCoverageDecided 会红）。
 }
 
 // 这几条列表路由必须双向都看得见：B 看得见 B 的、看不见 A 的。
@@ -230,6 +229,31 @@ async function seed(owner, base) {
   const openConflicts = await getAs(owner, '/api/sync/conflicts', base)
   const conflictId = JSON.parse(openConflicts.text)?.[0]?.id
   assert.ok(conflictId, `没造出同步冲突（${owner.id}）：${openConflicts.text.slice(0, 240)}`)
+  // 拍摄项（shooting 族）：**必须走完人工确认闸门**才能生成——直接改状态会被 409 拦下（审计当时试过）。
+  // 走法抄 server/shooting.test.mjs 里已经跑通的那条链（那边也在盯它）：新建一篇草稿 → 建开头槽位 → 三项检查 → 确认定稿 → 拍摄项。
+  // 这份耦合是有意的：闸门规则一改，**那两个文件会一起红**——那也比继续漏一族资源好；希望下次看到红的人先看这行注释。
+  const shootDraft = await post(owner, '/api/drafts/generate', { topic: { title: `${owner.mark}-shooting`, strategy_layer: 'trust', goal_refs: ['trust'], source_refs: [{ type: 'topic', id: `${owner.mark}-shooting` }] } }, base)
+  assert.ok([200, 201].includes(shootDraft.status), `造拍摄用草稿失败（${owner.id}）：${shootDraft.status} ${shootDraft.text.slice(0, 200)}`)
+  const shootDraftId = shootDraft.json[0]?.id
+  const hookStructure = await post(owner, '/api/structures', { title: `隔离种子·开头范式一：${owner.mark}`, steps: ['公式：反常识断言 + 能力反转'], content_type: '开头钩子' }, base)
+  assert.ok([200, 201].includes(hookStructure.status), `造开头槽位用的方法失败（${owner.id}）：${hookStructure.status} ${hookStructure.text.slice(0, 200)}`)
+  const slots = await getAs(owner, `/api/draft-slots?platform=${encodeURIComponent(shootDraft.json[0].platform)}`, base)
+  const openingId = JSON.parse(slots.text)?.options?.opening?.[0]?.id
+  assert.ok(openingId, `取不到开头槽位（${owner.id}）：${slots.status} ${slots.text.slice(0, 240)}`)
+  const choseSlot = await post(owner, `/api/drafts/${shootDraftId}/slots/opening`, { option_id: openingId }, base)
+  assert.ok([200, 201].includes(choseSlot.status), `选开头槽位失败（${owner.id}）：${choseSlot.status} ${choseSlot.text.slice(0, 200)}`)
+  const beforeVerified = JSON.parse((await getAs(owner, `/api/drafts/${shootDraftId}`, base)).text)
+  const verified = await post(owner, `/api/drafts/${shootDraftId}`, { fact_check_status: 'verified', version: beforeVerified.version }, base, 'PUT')
+  assert.equal(verified.status, 200, `标记事实核验失败（${owner.id}）：${verified.status} ${verified.text.slice(0, 200)}`)
+  for (const check of ['persona', 'quality', 'publish']) {
+    const checked = await post(owner, `/api/drafts/${shootDraftId}/checks/${check}`, {}, base)
+    assert.ok([200, 201].includes(checked.status), `${check} 检查没过（${owner.id}）：${checked.status} ${checked.text.slice(0, 200)}`)
+  }
+  const beforeApprove = JSON.parse((await getAs(owner, `/api/drafts/${shootDraftId}`, base)).text)
+  const approved = await post(owner, `/api/drafts/${shootDraftId}/approve`, { version: beforeApprove.version }, base)
+  assert.equal(approved.status, 200, `确认定稿失败（${owner.id}）：${approved.status} ${approved.text.slice(0, 200)}`)
+  const shootingId = approved.json?.shooting?.id
+  assert.ok(shootingId, `定稿了却没造出拍摄项（${owner.id}）：${approved.text.slice(0, 240)}`)
   return {
     ids: {
       drafts: draft.json[0]?.id,
@@ -251,6 +275,7 @@ async function seed(owner, base) {
       // 设备号由客户端给、两个账号故意相同：判定靠「B 的列表里不能出现 A 的标记」，不靠 id 区分。
       devices: `iso-device-${owner.id}`,
       sync: conflictId,
+      shooting: shootingId,
     },
     mark: owner.mark,
   }
