@@ -68,7 +68,7 @@ test('归一化入口认得出这四种形状，认不出的当场抛', () => {
 // 这里点名的是本项目 skill 模块的导出名与构造器；`content:` 右边出现它们就是漏了边界。
 test('提示词不许绕过归一化入口直接进 messages', () => {
   const source = readFileSync(new URL('./index.mjs', import.meta.url), 'utf8')
-  const names = ['claimsSystemPrompt', 'contentFormSystemPrompt', 'deconstructSystemPrompt', 'logicCheckSystemPrompt', 'draftBriefPrompt(', 'draftDeaiPrompt(', 'draftGateRewritePrompt(', 'draftPlatformRevisePrompt(', 'draftReplacePrompt(', 'titleIdeasPrompt(', 'hookIdeasPrompt(', 'publishRiskPrompt(', 'resonancePrompt(', 'scriptFlowPrompt(']
+  const names = ['claimsSystemPrompt', 'contentFormSystemPrompt', 'deconstructSystemPrompt', 'logicCheckSystemPrompt', 'draftBriefPrompt(', 'draftDeaiPrompt(', 'draftGateRewritePrompt(', 'draftPlatformRevisePrompt(', 'draftSpokenPrompt(', 'draftReplacePrompt(', 'titleIdeasPrompt(', 'hookIdeasPrompt(', 'publishRiskPrompt(', 'resonancePrompt(', 'scriptFlowPrompt(']
   const bypass = []
   for (const line of source.split('\n')) {
     if (!/content:/.test(line)) continue

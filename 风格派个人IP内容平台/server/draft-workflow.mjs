@@ -54,6 +54,9 @@ export function defaultDraftWorkflowFields(draft) {
     variant_of: draft.variant_of || null,
     archived_at: draft.archived_at || null,
     generation_context: draft.generation_context || null,
+    script_stage: draft.script_stage || 'spoken',
+    plain_body: draft.plain_body ?? null,
+    spoken_body: draft.spoken_body ?? null,
   }
 }
 

@@ -253,6 +253,11 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .draft-edit-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .draft-edit-actions .primary-action, .draft-edit-actions .outline-action { width: auto; margin: 0; white-space: nowrap; }
 .draft-revise { margin-top: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
+.draft-script-stage { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--canvas); }
+.draft-script-stage strong { color: var(--accent-ink); font-size: 12.5px; }
+.draft-script-stage .primary-action { margin: 0; width: auto; }
+.draft-plain-compare { flex-basis: 100%; }
+.draft-plain-compare pre { margin: 8px 0 0; white-space: pre-wrap; color: var(--muted); font: 12.5px/1.6 inherit; }
 .draft-revise-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .draft-revise-head label { color: var(--accent-ink); font-size: 12.5px; font-weight: 700; }
 .draft-revise-head small { color: var(--muted); font-size: 10.5px; }

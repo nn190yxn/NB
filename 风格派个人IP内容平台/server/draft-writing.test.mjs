@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildDraftBrief, consultingToneWords, defaultDraftStructure, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthTargets, draftPlatformBaselineText, draftPlatformBaselines, draftPlatformForms, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, parseDraftBodies, parseReviseBody, parseReplacePairs, validateReplacePairs, applyReplacePairs, draftReplacePrompt } from './draft-writing.mjs'
+import { buildDraftBrief, consultingToneWords, defaultDraftStructure, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthTargets, draftPlatformBaselineText, draftPlatformBaselines, draftPlatformForms, draftPlatformRevisePrompt, draftPlainFormOf, draftReviseUserMessage, draftSpokenPrompt, draftPlatforms, draftVideoFormats, parseDraftBodies, parseReviseBody, parseReplacePairs, validateReplacePairs, applyReplacePairs, draftReplacePrompt } from './draft-writing.mjs'
 import { startGenerationMock } from './generation-test-helper.mjs'
 import { testPort } from './test-port.mjs'
 
@@ -62,6 +62,9 @@ test('写作简报与模型输出解析保持纯函数行为', () => {
   assert.match(prompt, /本期只写抖音和视频号两条/)
   assert.match(prompt, /两者必须是两种读感/)
   assert.match(prompt, /两平台长度目标相同，差异不在字数/)
+  assert.match(prompt, /平铺直叙/)
+  assert.doesNotMatch(prompt, /完整口播句/)
+  assert.doesNotMatch(prompt, /短视频口播/)
   assert.match(prompt, /把一件事讲清楚比卡时长重要/)
   assert.match(draftPlatformForms.小红书, /不超过 1000 字/)
   assert.match(draftPlatformForms.抖音, /短视频口播/)
@@ -91,6 +94,12 @@ test('写作简报与模型输出解析保持纯函数行为', () => {
   assert.equal(/去 ?AI ?味|去 ?AI ?感/.test(deai), false, '提示词里不许出现「去 AI 味 / 去 AI 感」这类目标表述')
   assert.match(deai, /说回自己/, '要说清真正的目标是把话说回自己')
   assert.ok(consultingToneWords.every(word => deai.includes(word)), '改写必须按同一份词表')
+  assert.match(draftPlainFormOf('短视频'), /平铺直叙/)
+  assert.match(draftSpokenPrompt('抖音', '短视频'), /改成可以直接拍摄/)
+  assert.match(draftSpokenPrompt('抖音', '短视频'), /不许另写一篇/)
+  assert.match(draftSpokenPrompt('抖音', '短视频'), /完整口播句/)
+  assert.match(draftPlatformRevisePrompt('抖音', '短视频', { scriptStage: 'plain' }), /平铺直叙/)
+  assert.doesNotMatch(draftPlatformRevisePrompt('抖音', '短视频', { scriptStage: 'plain' }), /短视频口播/)
 
   const bodies = parseDraftBodies('前言 {"master":"母版","抖音":"只给了抖音"} 结尾')
   assert.equal(bodies['抖音'], '只给了抖音')
@@ -183,6 +192,22 @@ test('模型返回无效内容时 502 且不落库，成功时正文来自模型
   assert.equal(drafts[0].generation_context.brief.title, '真实正文测试')
   assert.equal(drafts[0].generation_context.gate.rewritten, false)
   assert.ok(drafts.every(item => item.body && !item.body.includes('平台：')))
+  assert.equal(drafts[0].script_stage, 'plain')
+  assert.equal(drafts[0].plain_body, drafts[0].body)
+  assert.equal(drafts[0].spoken_body, null)
+
+  const spoken = await fetch(`${baseUrl}/api/drafts/${drafts[0].id}/spoken`, { method: 'POST', headers, body: JSON.stringify({ version: drafts[0].version }) })
+  assert.equal(spoken.status, 200)
+  const spokenDraft = await spoken.json()
+  assert.equal(spokenDraft.script_stage, 'spoken')
+  assert.equal(spokenDraft.plain_body, drafts[0].body)
+  assert.match(spokenDraft.body, /口播稿/)
+  assert.equal(spokenDraft.spoken_body, spokenDraft.body)
+  assert.equal(spokenDraft.version, drafts[0].version + 1)
+
+  const again = await fetch(`${baseUrl}/api/drafts/${drafts[0].id}/spoken`, { method: 'POST', headers, body: JSON.stringify({ version: spokenDraft.version }) })
+  assert.equal(again.status, 200)
+  assert.equal((await again.json()).version, spokenDraft.version, '已经是口播稿再点一次不能再堆一版')
 })
 
 test('生成验收不过则打回改写，仍不过则入库标待修改（A 方案）', async t => {

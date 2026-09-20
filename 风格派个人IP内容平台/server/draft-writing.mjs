@@ -132,6 +132,14 @@ export function draftPlatformFormOf(platform, format) {
   if (draftVideoPlatforms.includes(platform) && draftVideoFormats[format]) return draftVideoFormats[format].form
   return draftPlatformForms[platform] || draftPlatformForms.小红书
 }
+export function draftPlainFormOf(format) {
+  const forms = {
+    短视频: '平铺直叙文字稿：用完整段落把判断、依据、做法写清楚。先把逻辑写对，不要口播节奏、不要短句堆砌、不要对着镜头念的感觉。把一件事讲清楚比卡时长重要。',
+    中视频: '平铺直叙中长文：按层次把两三个判断写清楚，每段把依据摊开。先把逻辑写对，不要口播提纲。',
+    长视频: '平铺直叙长文：按段落把整件事讲完，每段写清判断和依据。先把逻辑写对，不要拍摄提纲，也不要逐字口播。',
+  }
+  return forms[format] || forms.短视频
+}
 export function defaultContentFormat(platform) {
   if (draftVideoPlatforms.includes(platform)) return '短视频'
   if (platform === '小红书') return '图文笔记'
@@ -224,8 +232,8 @@ export function draftBriefPrompt(profile = {}, format = defaultContentFormat(dra
     profile.problems?.length ? `受众问题：${profile.problems.join('、')}` : '',
   ].filter(Boolean).join('；')
   return [
-    '你是个人 IP 的文案写手。根据写作简报，为每个平台写一条可以直接拍摄或发布的完整正文（不是提纲，不要写"请补充"之类的占位）。',
-    '读者是普通人，不是同事。像跟一个熟人说话：短句、有停顿、有态度。',
+    '你是个人 IP 的文案写手。根据写作简报，为每个平台写一篇平铺直叙、逻辑清楚的文字稿（不是提纲，不要写"请补充"之类的占位）。这一步不要写成口播稿。',
+    '读者是普通人，不是同事。用完整段落把一件事讲清楚，像写给熟人看的长文，不要口播节奏。',
     `禁止咨询腔和工程词：${consultingToneWords.join('、')}。也不要把简报里的英文字段名、公式名写进正文。`,
     '不要写成名词解释（「什么是X」），不要「一、二、三」说明书，不要排比收成「你不是A，你是B」。',
     '不要「不是A而是B」「不仅仅是A，更是B」「与其说A，不如说B」「真正的X，是Y」这类升华句；不要用「某某人」「有个人」这种没有主体的例子。',
@@ -233,13 +241,13 @@ export function draftBriefPrompt(profile = {}, format = defaultContentFormat(dra
     '案例只能引用简报 material_roles.CAS 里的素材，数字只能来自素材或简报；素材里没有的案例和数字一律不写。',
     '简报里 material_gap 有值时按它的要求写：宁可少一个案例，也不许编。',
     '按 structure 的顺序写。步骤只决定段落顺序，不要把步骤原文、编号、方法名抄进正文。',
-    '开头第一句直给冲突或结论，必须是完整口播句：含话题，能脱离标题单独听懂；不要自问自答。',
+    '开头第一句直给冲突或结论，必须是完整句子：含话题，能脱离标题单独听懂；不要自问自答。',
     '主体先驳后立：先点破常见做法，再立判断；连续抽象别超过一小段。简报里有经历、数字就用，没有就讲通用现象。',
     '结尾给可执行的一步或一个明确判断。',
     strategyLayerNote(layer),
-    '本期只写抖音和视频号两条，两者必须是两种读感，不能同一篇改字数。按 platform_forms 写，并按下面的平台基座调读感。',
+    '本期只写抖音和视频号两条，两者必须是两种读感，不能同一篇改字数。按下面的平台基座调读感。简报里的 platform_forms 是口播体裁，这一步不要用。',
     `平台基座：抖音（${draftPlatformBaselineText('抖音')}）；视频号（${draftPlatformBaselineText('视频号')}）。`,
-    `体裁：两平台都按${format}写——${draftVideoFormats[format].form}`,
+    `体裁：两平台都按${format}写——${draftPlainFormOf(format)}`,
     `长度：两平台都是${format}（${draftVideoFormats[format].duration}，${draftLengthRange(draftPlatforms[0], format)} 字），两平台长度目标相同，差异不在字数。`,
     '只使用简报里的事实和素材，不编造成绩、客户、数字或案例；「具体支撑」只能用简报里的素材或你确知的真实经历，简报里没有案例时改用通用现象或判断说明，宁可少一个案例也不编造。不要写「我有个客户」「服务了无数」。',
     // 2026-09-20 审计第 30 行：检测器能把这类挑出来，但提示词一直没明说，真模型复验也确实在编
@@ -271,8 +279,8 @@ export function draftGateRewritePrompt(summary, format = defaultContentFormat(dr
   return [
     '上一稿没过验收，必须按原因重写抖音和视频号两条。不要解释。',
     `验收未过：${String(summary || '').trim() || '咨询腔、编客户、设问开头或两平台同一篇'}。`,
-    '两条必须是两种读感，不能同一篇改字数。按平台基座调读感，差异不在字数。',
-    `体裁：两平台都按${format}写——${draftVideoFormats[format].form}`,
+    '两条必须是两种读感，不能同一篇改字数。按平台基座调读感，差异不在字数。这一步仍是平铺直叙文字稿，不要改成口播。',
+    `体裁：两平台都按${format}写——${draftPlainFormOf(format)}`,
     `平台基座：抖音（${draftPlatformBaselineText('抖音')}）；视频号（${draftPlatformBaselineText('视频号')}）。`,
     '开头第一句直给冲突或结论，不要自问自答。',
     `删掉咨询腔和工程词：${consultingToneWords.join('、')}。不要编客户和数字。不要自我介绍。`,
@@ -282,7 +290,8 @@ export function draftGateRewritePrompt(summary, format = defaultContentFormat(dr
 
 export function draftPlatformRevisePrompt(platform, format, extra = {}) {
   const resolved = draftFormatOf({ platform, content_format: format })
-  const form = draftPlatformFormOf(platform, resolved)
+  const spoken = extra.scriptStage !== 'plain'
+  const form = spoken ? draftPlatformFormOf(platform, resolved) : draftPlainFormOf(resolved)
   const range = draftLengthRange(platform, resolved)
   return [
     `只重写这一条${platform}草稿。不要动其他平台。不要解释。`,
@@ -294,6 +303,23 @@ export function draftPlatformRevisePrompt(platform, format, extra = {}) {
     extra.fromChecks
       ? '必须按修改意见逐条改。不要只压短，不要另写一篇更简单的。保留原判断和事实。只输出正文，不要 JSON，不要标题。'
       : '必须按修改意见改。只输出正文，不要 JSON，不要标题。',
+    spoken ? '这一步写的是口播稿，保持口播节奏。' : '这一步仍是平铺直叙文字稿，不要改成口播。',
+  ].filter(Boolean).join('\n')
+}
+
+export function draftSpokenPrompt(platform, format) {
+  const resolved = format || defaultContentFormat(platform)
+  const form = draftPlatformFormOf(platform, resolved)
+  const range = draftLengthRange(platform, resolved)
+  return [
+    `把这篇平铺直叙的文字稿改成可以直接拍摄的${platform}口播稿。`,
+    '判断、依据、做法必须还是原稿里的，不许另写一篇，不许加新案例和新数字。',
+    `体裁：${resolved}。${form}`,
+    draftPlatformBaselineText(platform) ? `平台读感（${platform}）：${draftPlatformBaselineText(platform)}。` : '',
+    range ? `长度：${range} 字。` : '',
+    '像对着镜头说话：短句、有停顿、有态度。开头第一句是完整口播句，能脱离标题单独听懂。',
+    `删掉咨询腔和工程词：${consultingToneWords.join('、')}。`,
+    '只输出改写后的口播正文，不要解释，不要 Markdown，不要 JSON。',
   ].filter(Boolean).join('\n')
 }
 

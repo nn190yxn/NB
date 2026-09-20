@@ -75,6 +75,7 @@ export async function startGenerationMock({ adaptBody } = {}) {
       return reply('整篇重排后的正文')
     }
     if (system.includes('说回自己')) return reply('改成自己说法之后的正文')
+    if (system.includes('改成可以直接拍摄')) return reply(fillTo('口播稿：点赞会撒谎，询盘不会。别再为流量写，为成交写。上周我翻了后台。', 220))
     // Requirement 14：标题与开头的多方案输出。各带一条不合规的，测溯源校验真会丢掉。
     if (system.includes('挑标题')) {
       // 换一换要真的换出不同的公式：桩模型读「不许再用的编号」，挑一批没给过的。

@@ -24,7 +24,7 @@ test('草稿覆盖动作受脏状态保护，保存失败不清除脏状态', ()
   // 取「整个函数体」而不是「声明那一行」：2026-09-20 把 runDraftCheck 改成多行后，
   // 保护语句落到了第二行，只切第一行的写法会把正确的实现判成红的（测试的切法问题，不是实现问题）。
   // 函数体的边界取「下一个同缩进的 const 声明」——组件里只有顶层声明是两格缩进。
-  for (const name of ['runDraftCheck', 'restoreDraft', 'deaiDraft', 'applySlot']) {
+  for (const name of ['runDraftCheck', 'restoreDraft', 'deaiDraft', 'spokenDraft', 'applySlot']) {
     const start = source.indexOf(`const ${name} =`)
     assert.ok(start > 0)
     const nextDeclaration = source.indexOf('\n  const ', start + 1)
@@ -263,6 +263,9 @@ test('草稿列表的字数警告用同一套平台目标（前后端不漂移�
   assert.match(source, /draft-revise-head/)
   assert.match(source, /图文笔记/)
   assert.match(source, /短视频口播/)
+  assert.match(source, /改成口播/)
+  assert.match(source, /当前是文字稿/)
+  assert.match(source, /对照文字稿/)
   assert.match(source, /draft-format/)
   assert.match(source, /aria-label="视频体裁"/)
   assert.match(source, /按检查意见改写/)

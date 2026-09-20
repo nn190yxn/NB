@@ -22,7 +22,7 @@ import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
 import { layerLedger, layerLedgerNote } from './layer-ledger.mjs'
 import { hookKindOf, layerOf, topicHookKinds, topicRequestNote, topicStrategyLayers } from './topic-hooks.mjs'
 import { materialPoolOf, materialPoolSummary, materialUseTags, poolFieldsForNew, withPoolFields } from './material-pools.mjs'
-import { briefUsableMaterial, buildDraftBrief, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthRangeFrom, draftLengthTargetOf, draftPlatformRevisePrompt, draftReviseUserMessage, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs, resolveVideoFormat } from './draft-writing.mjs'
+import { briefUsableMaterial, buildDraftBrief, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthRangeFrom, draftLengthTargetOf, draftPlatformRevisePrompt, draftReviseUserMessage, draftSpokenPrompt, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs, resolveVideoFormat } from './draft-writing.mjs'
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
 import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, markableIssues, openingSentence, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
@@ -1601,7 +1601,7 @@ const server = createServer(async (request, response) => {
       const usableAtoms = [...new Map([...quoteMaterials, ...experienceMaterials, ...roleMaterials].filter(briefUsableMaterial).map(item => [item.id, item])).values()]
       const atomRefs = usableAtoms.map(item => sourceRef('material', item.id))
       const sourceRefs = uniqueSourceRefs([...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs])
-      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: contentFormat, title: topic.title, body: bodies[platform], version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: usableAtoms.map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateSummary } }, created_at: new Date().toISOString() }))
+      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: contentFormat, title: topic.title, body: bodies[platform], plain_body: bodies[platform], spoken_body: null, script_stage: 'plain', version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: usableAtoms.map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateSummary } }, created_at: new Date().toISOString() }))
       if (persistedTopic?.id) {
         const archivedAt = new Date().toISOString()
         for (const draft of supersededDraftsForRegenerate(state.drafts, { ownerId: userId(request), topicId: persistedTopic.id })) {
@@ -1674,6 +1674,49 @@ const server = createServer(async (request, response) => {
         return send(response, 200, { content, provider: result.provider })
       } catch (error) {
         return send(response, 502, { error: error?.message || '改写失败，请稍后重试', retryable: true })
+      }
+    }
+    const draftSpokenMatch = url.pathname.match(/^\/api\/drafts\/(\d+)\/spoken$/)
+    if (draftSpokenMatch && request.method === 'POST') {
+      const draft = owned('drafts', request).find(item => item.id === Number(draftSpokenMatch[1]))
+      if (!draft) return send(response, 404, { error: '草稿不存在' })
+      if (draft.approval?.status === 'approved') return send(response, 409, { error: '请先撕回人工确认，再改口播', code: 'invalid_transition' })
+      const body = await readJson(request)
+      if (body.version !== undefined && body.version !== draft.version) return send(response, 409, { error: '草稿版本冲突', code: 'version_conflict', current: draft })
+      if (draft.script_stage === 'spoken' && draft.spoken_body && !body.force) return send(response, 200, draft)
+      const source = String(draft.plain_body || draft.body || '').trim()
+      if (!source) return send(response, 422, { error: '没有文字稿可改口播' })
+      const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
+      if (!configs.primary && !configs.fallback) return send(response, 422, { error: '改成口播需要先在 API 中心配置大模型', reason: 'llm_not_configured' })
+      if (usesSharedPrimaryLlm(request)) {
+        const quota = await consumeQuota(request, 'llm', llmDailyLimit)
+        if (!quota.allowed) return send(response, 429, { error: `今日共享 AI 额度已用完（每人每天 ${llmDailyLimit} 次）。可在 API 中心配置自己的大模型 Key 解除限制`, retryable: false })
+      }
+      try {
+        const format = draftFormatOf(draft)
+        const result = await callLlmWithFallback(configs, [
+          { role: 'system', content: resolvePrompt(draftSpokenPrompt(draft.platform, format)).system },
+          { role: 'user', content: source.slice(0, 4000) },
+        ])
+        const spoken = parseReviseBody(result.content)
+        if (!spoken) throw new Error('口播稿为空')
+        const now = new Date().toISOString()
+        draft.history ||= []
+        draft.history.push({ ...structuredClone(draft), history: undefined, version: draft.version, snapshot_at: now })
+        if (!draft.plain_body) draft.plain_body = source
+        draft.spoken_body = spoken
+        draft.body = spoken
+        draft.script_stage = 'spoken'
+        draft.version += 1
+        draft.updated_at = now
+        draft.workflow_status = 'content_ready'
+        draft.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
+        draft.ideas = null
+        draft.generation_context = { ...(draft.generation_context || {}), spoken: { at: now, provider: result.provider } }
+        await saveState('drafts')
+        return send(response, 200, draft)
+      } catch (error) {
+        return send(response, 502, { error: error?.message || '改成口播失败，请稍后重试', retryable: true })
       }
     }
     // Requirement 12：追问的答案回写素材。
@@ -1768,7 +1811,7 @@ const server = createServer(async (request, response) => {
       }
       try {
         const result = await callLlmWithFallback(configs, [
-          { role: 'system', content: resolvePrompt(draftPlatformRevisePrompt(draft.platform, format, { fromChecks })).system },
+          { role: 'system', content: resolvePrompt(draftPlatformRevisePrompt(draft.platform, format, { fromChecks, scriptStage: draft.script_stage })).system },
           { role: 'user', content: draftReviseUserMessage({ title: draft.title, body: draft.body, note, fromChecks }) },
         ])
         let nextBody = parseReviseBody(result.content)
@@ -1781,7 +1824,7 @@ const server = createServer(async (request, response) => {
           rewritten = true
           const reasons = [scan.failed ? scan.summary : '', ...outcome.failures].filter(Boolean).join('；')
           const retry = await callLlmWithFallback(configs, [
-            { role: 'system', content: resolvePrompt(draftPlatformRevisePrompt(draft.platform, format, { fromChecks })).system + '\n上一稿没过验收：' + reasons },
+            { role: 'system', content: resolvePrompt(draftPlatformRevisePrompt(draft.platform, format, { fromChecks, scriptStage: draft.script_stage })).system + '\n上一稿没过验收：' + reasons },
             { role: 'user', content: draftReviseUserMessage({ title: draft.title, body: draft.body, note, fromChecks, previous: nextBody, issues: reasons }) },
           ])
           nextBody = parseReviseBody(retry.content)
@@ -2233,6 +2276,8 @@ const server = createServer(async (request, response) => {
         updates.workflow_status = 'content_ready'
         updates.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
         updates.approval = { ...defaultApproval(draft.approval), status: 'pending', user_id: null, draft_version: null }
+        if (body.body !== undefined && draft.script_stage !== 'spoken') updates.plain_body = body.body
+        if (body.body !== undefined && draft.script_stage === 'spoken') updates.spoken_body = body.body
       } else {
         delete updates.checks
       }

@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { buildDraftBrief, draftBriefPrompt, draftGateRewritePrompt, draftLengthTargetFor, draftVideoFormats, resolveVideoFormat } from './draft-writing.mjs'
+import { buildDraftBrief, draftBriefPrompt, draftGateRewritePrompt, draftLengthTargetFor, resolveVideoFormat } from './draft-writing.mjs'
 import { startSharedLlmMock } from './generation-test-helper.mjs'
 import { testPort } from './test-port.mjs'
 
@@ -59,7 +59,7 @@ test('形式判断判完存在选题上，生成草稿就按它写', async t => 
   // 提示词也得换成对应体裁，不能嘴上说长视频、提示词里还是短视频那一套。
   const prompt = llmMock.lastSystem()
   assert.ok(prompt.includes('长视频'), `提示词里要带形式：${prompt.slice(0, 120)}`)
-  assert.ok(prompt.includes(draftVideoFormats.长视频.form.slice(0, 6)), '提示词里要带长视频的体裁说明')
+  assert.ok(prompt.includes('平铺直叙'), '生成这一步写的是文字稿，不是口播提纲')
 })
 
 test('生成时可以临时指定形式；范围外的形式落回短视频，不报错', async t => {
@@ -97,5 +97,6 @@ test('简报与提示词都按传入的形式写，字数取自该形式而不�
   assert.equal(mid.includes(`${draftLengthTargetFor('抖音', '短视频').max} 字`), false, '不能还留着短视频的字数')
 
   // 生成闸门没过时的重写提示词走的是另一条路径，同样得按形式写。
-  assert.ok(draftGateRewritePrompt('两平台同一篇', '长视频').includes(draftVideoFormats.长视频.form.slice(0, 6)))
+  assert.match(draftGateRewritePrompt('两平台同一篇', '长视频'), /平铺直叙/)
+  assert.match(draftGateRewritePrompt('两平台同一篇', '长视频'), /长视频/)
 })
