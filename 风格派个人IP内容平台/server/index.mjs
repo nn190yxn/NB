@@ -1953,7 +1953,7 @@ const server = createServer(async (request, response) => {
         const result = await callLlmWithFallback(configs, promptMessages(prompt))
         const report = parseResonanceResponse(result.content, { core })
         // 一条能关联到原文的结论都没有就不落库：源技能禁止空话结论，宁可不给。
-        if (!report || !report.dimensions.length) return send(response, 502, { code: 'RESONANCE_UNLINKED', error: '这一轮诊断没有一条能关联到文稿原句，没有落库。可以再试一次。', retryable: true })
+        if (!report || !report.dimensions.length) return send(response, 502, { code: 'RESONANCE_UNLINKED', error: '这一轮诊断没有一条能引回正文原句，没有落库（这项检查要求结论必须指得到原句）。可以重跑一次（模型每次输出不一样），或把正文里太笼统的段落写具体些——写上做法、数字、过程，再跑。', retryable: true })
         // 只挂在草稿上给人看：不写 checks、不改 workflow_status、不动 approval，所以它拦不住发布。
         draft.resonance = { ...report, generated_at: new Date().toISOString(), draft_version: draft.version, provider: result.provider }
         await saveState('drafts')
@@ -1981,7 +1981,7 @@ const server = createServer(async (request, response) => {
         const result = await callLlmWithFallback(configs, promptMessages(prompt))
         const report = parseScriptFlowResponse(result.content, { signals })
         // 一条能落到某一段、指到原文的结论都没有就不落库：宁可少给，不给编的。
-        if (!report || !report.findings.length) return send(response, 502, { code: 'SCRIPT_FLOW_UNLINKED', error: '这一轮检查没有一条能落到具体段落和原句，没有落库。可以再试一次。', retryable: true })
+        if (!report || !report.findings.length) return send(response, 502, { code: 'SCRIPT_FLOW_UNLINKED', error: '这一轮检查没有一条能落到具体段落和原句，没有落库（宁可少给，不给编的）。重跑一次，或把太笼统的段落写具体些——越具体越容易指出问题出在哪一段。', retryable: true })
         draft.script_flow = { ...report, generated_at: new Date().toISOString(), draft_version: draft.version, provider: result.provider }
         await saveState('drafts')
         return send(response, 200, draft)
@@ -2008,7 +2008,7 @@ const server = createServer(async (request, response) => {
         const result = await callLlmWithFallback(configs, promptMessages(prompt))
         const report = parsePublishRiskResponse(result.content, { title: draft.title, body: draft.body, signals })
         // 一条能在稿子里找到原句的结论都没有就不落库：宁可少给，不给编的。
-        if (!report || !report.findings.length) return send(response, 502, { code: 'PUBLISH_RISK_UNLINKED', error: '这一轮没有一条能指到稿子原句的结论，没有落库。可以再试一次。', retryable: true })
+        if (!report || !report.findings.length) return send(response, 502, { code: 'PUBLISH_RISK_UNLINKED', error: '这一轮没有一条结论能指到稿子原句，没有落库（指不到原句的不给）。重跑一次，或把稿子里最笼统的那几段写具体些再跑。', retryable: true })
         draft.publish_risk = { ...report, generated_at: new Date().toISOString(), draft_version: draft.version, provider: result.provider }
         await saveState('drafts')
         return send(response, 200, draft)
