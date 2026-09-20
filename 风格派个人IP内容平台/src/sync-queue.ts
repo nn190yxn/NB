@@ -72,6 +72,29 @@ export function pendingSyncEvents() {
   return readQueue().events
 }
 
+// 队列是不是坏的、坏的那份还在不在。
+// 为什么需要它：读坏时能用的事件可能是 0 条，界面就显示「待同步 0 条」——
+// 而真正待同步的东西躺在备份位里，人看不见（审计 25.5 的尾巴）。
+// 返回 null = 没事；否则给出备份时间（可能为空）与原始字节（给用户复制出来找人恢复）。
+export function damagedQueueReport(): { at: string; raw: string } | null {
+  if (!storageKey || typeof localStorage === 'undefined') return null
+  const read = readQueue()
+  const backedUp = localStorage.getItem(`${storageKey}:damaged`)
+  if (!read.damaged && !backedUp) return null
+  let at = ''
+  let raw = read.raw || ''
+  if (backedUp) {
+    try {
+      const parsed = JSON.parse(backedUp)
+      at = String(parsed?.at || '')
+      if (!raw) raw = String(parsed?.raw || '')
+    } catch {
+      // 备份自己也读不出来了：只当「有备份」，时间就算了——不因此把提示吞掉。
+    }
+  }
+  return { at, raw }
+}
+
 export async function flushSyncQueue(deviceId = 'browser-device') {
   const accountKey = storageKey
   const read = readQueue()

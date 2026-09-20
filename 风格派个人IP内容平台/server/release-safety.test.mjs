@@ -66,6 +66,48 @@ test('离线队列读坏了也不许把待同步的记录弄丢', async t => {
   assert.equal(map.get(key), original, '备份失败时主存储不该被动过')
 })
 
+// 这条盯的是「人能不能看见」：队列读坏时能用的事件可能是 0 条，
+// 界面光看条数会显示「待同步 0 条」——记录其实躺在备份位里，人看不见（审计 25.5 的尾巴）。
+test('队列读坏要能被人看见：报告要给出时间与原始字节', async t => {
+  const old = globalThis.localStorage
+  const map = new Map()
+  globalThis.localStorage = { getItem: key => map.get(key), setItem: (key, value) => map.set(key, value) }
+  t.after(() => { if (old) globalThis.localStorage = old; else delete globalThis.localStorage })
+  const compiled = await transformWithOxc(readFileSync(new URL('../src/sync-queue.ts', import.meta.url), 'utf8'), 'queue.ts')
+  const queue = await import(`data:text/javascript;base64,${Buffer.from(compiled.code).toString('base64')}`)
+  const key = 'content-ip-sync-queue:alice'
+  queue.setSyncAccount('alice')
+
+  // 本来就好好的：不该报，也不能振假警报。
+  queue.enqueueSyncEvents([{ path: 'fine' }])
+  assert.equal(queue.damagedQueueReport(), null, '队列好好的就不该报读坏')
+
+  // 读坏但还没留下备份位：报告仍要把原始字节拿出来（不然人没法找回）。
+  map.set(key, '{"path":"old"')
+  const beforeBackup = queue.damagedQueueReport()
+  assert.ok(beforeBackup, '队列读坏了，报告却是 null——界面就永远看不见')
+  assert.ok(beforeBackup.raw.includes('old'), `报告里没带出原始字节：${JSON.stringify(beforeBackup)}`)
+
+  // 入一次队（会顺手留备份）：报告应当带上备份时间。
+  queue.enqueueSyncEvents([{ path: 'new' }])
+  const afterBackup = queue.damagedQueueReport()
+  assert.ok(afterBackup?.at, `备份之后报告里应当有备份时间：${JSON.stringify(afterBackup)}`)
+  assert.ok(afterBackup.raw.includes('old'), '报告应当仍能拿到坏掉的那份原始字节')
+  assert.ok(!Number.isNaN(new Date(afterBackup.at).getTime()), `备份时间要能当时间用：${afterBackup.at}`)
+
+  // 未登录（没有存储键）时不许抛，也不能报。
+  queue.setSyncAccount(null)
+  assert.equal(queue.damagedQueueReport(), null, '没有账号就不该动本地存储')
+})
+
+test('界面必须把「读坏」写出来，不许只显示待同步 0 条', () => {
+  const source = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8')
+  assert.ok(/import \{[^}]*damagedQueueReport[^}]*\} from '\.\/sync-queue'/.test(source), '界面没有拿到「读坏」的报告入口')
+  assert.ok(/damagedQueue\s*&&\s*<div[^>]*role="alert"/.test(source), '界面没有「读坏」的提示块（或它不是 alert）')
+  assert.ok(source.includes('本地有一份待同步记录读坏了'), '提示里没说人话')
+  assert.ok(/copyText\(damagedQueue\.raw/.test(source), '提示里没有把备份内容复出来的入口')
+})
+
 test('移除伪复盘指标和固定同步时间，保留过期会话输入保护', () => {
   const source = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /\+42%|\+18%|最后同步于 09:42|<b>12<\/b>/)

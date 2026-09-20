@@ -35,7 +35,7 @@ import {
 } from 'lucide-react'
 import './styles.css'
 import { copyText, loadTeleprompterSettings, saveTeleprompterSettings, teleprompterStep } from './shooting-utils'
-import { flushSyncQueue, pendingSyncEvents, setSyncAccount } from './sync-queue'
+import { damagedQueueReport, flushSyncQueue, pendingSyncEvents, setSyncAccount } from './sync-queue'
 
 type DesktopSyncRuntime = { device_id: string; device_name: string; directories: Array<{ id: string }>; queue_count: number; last_error: string | null }
 type DesktopBridge = {
@@ -124,7 +124,7 @@ function App() {
   useEffect(() => { setApiFailureReporter(notice => setApiFailure(notice)); return () => setApiFailureReporter(null) }, [])
   // 它不是待办，十二秒后自己收起；再次失败会重新计时。
   useEffect(() => { if (!apiFailure) return; const timer = window.setTimeout(() => setApiFailure(null), 12000); return () => window.clearTimeout(timer) }, [apiFailure])
-  useEffect(() => { if (authState === 'ok') void apiJson<{ user_id?: string }>('/api/auth/session', { silent: true }).then(value => { setAccountId(value.user_id || ''); setSyncAccount(value.user_id || null); setPendingSync(pendingSyncEvents().length) }).catch(() => undefined) }, [authState])
+  useEffect(() => { if (authState === 'ok') void apiJson<{ user_id?: string }>('/api/auth/session', { silent: true }).then(value => { setAccountId(value.user_id || ''); setSyncAccount(value.user_id || null); setPendingSync(pendingSyncEvents().length); setDamagedQueue(damagedQueueReport()) }).catch(() => undefined) }, [authState])
   const [showFeedback, setShowFeedback] = useState(false)
   const [feedbackUnread, setFeedbackUnread] = useState(0)
 
@@ -149,6 +149,9 @@ function App() {
   const [shootingCount, setShootingCount] = useState(0)
   const [online, setOnline] = useState(() => navigator.onLine)
   const [pendingSync, setPendingSync] = useState(() => pendingSyncEvents().length)
+  // 队列读坏时「能用的事件」可能是 0 条：光看这个数会显示成「待同步 0 条」，
+  // 而真正待同步的东西躺在备份位里——所以单独拿一份状态出来，在界面上直说（审计 25.5 的尾巴）。
+  const [damagedQueue, setDamagedQueue] = useState(() => damagedQueueReport())
   const [syncing, setSyncing] = useState(false)
   const [conflicts, setConflicts] = useState<SyncConflict[]>([])
 
@@ -263,7 +266,7 @@ function App() {
 
       <section className="content-shell">
          <header className="topbar"><button className="mobile-menu" aria-label="打开导航" onClick={() => setShowMobileMenu(!showMobileMenu)}><Menu size={20} /></button><div className="breadcrumbs"><span>我的内容工作台</span><span>/</span><strong>{activeNav}</strong></div><GlobalSearch onNavigate={setActiveNav} /><div className="top-actions"><button className="icon-button" aria-label="帮助" onClick={() => setShowOnboarding(true)}><CircleHelp size={18} /></button><div className="theme-picker"><button className="theme-trigger" onClick={() => setShowThemes(!showThemes)}><SunMedium size={16} /><span>{themes[theme].name}</span><ChevronDown size={14} /></button>{showThemes && <ThemeMenu theme={theme} setTheme={setTheme} close={() => setShowThemes(false)} font={font} setFont={setFont} />}</div><button className="avatar small" aria-label="用户菜单" onClick={() => setShowReview(true)}>我</button></div></header>
-           <div className="page-content">{apiFailure && <div className="api-failure-banner" role="alert"><strong>刚才有一件事没成功</strong><span>{apiFailure.message}</span><button onClick={() => setApiFailure(null)}>知道了</button></div>}{(!online || pendingSync > 0) && <div className="offline-banner" role="status">{online ? `有 ${pendingSync} 个素材等待同步。` : '当前处于离线状态，已加载内容仍可查看。'} <button onClick={syncNow} disabled={!online || syncing}>{syncing ? '同步中...' : '立即同步'}</button></div>}{conflicts.length > 0 && <div className="conflict-banner" role="alert"><strong>{conflicts.length} 个内容版本发生冲突</strong>{conflicts.map(conflict => <span key={conflict.id}>{conflict.resource_type === 'draft' ? '草稿' : '拍摄清单'} #{conflict.resource_id}<button onClick={() => resolveConflict(conflict, 'local')}>保留本地</button><button onClick={() => resolveConflict(conflict, 'remote')}>保留远端</button></span>)}</div>}
+           <div className="page-content">{apiFailure && <div className="api-failure-banner" role="alert"><strong>刚才有一件事没成功</strong><span>{apiFailure.message}</span><button onClick={() => setApiFailure(null)}>知道了</button></div>}{(!online || pendingSync > 0) && <div className="offline-banner" role="status">{online ? `有 ${pendingSync} 个素材等待同步。` : '当前处于离线状态，已加载内容仍可查看。'} <button onClick={syncNow} disabled={!online || syncing}>{syncing ? '同步中...' : '立即同步'}</button></div>}{conflicts.length > 0 && <div className="conflict-banner" role="alert"><strong>{conflicts.length} 个内容版本发生冲突</strong>{conflicts.map(conflict => <span key={conflict.id}>{conflict.resource_type === 'draft' ? '草稿' : '拍摄清单'} #{conflict.resource_id}<button onClick={() => resolveConflict(conflict, 'local')}>保留本地</button><button onClick={() => resolveConflict(conflict, 'remote')}>保留远端</button></span>)}</div>}{damagedQueue && <div className="api-failure-banner" role="alert"><strong>本地有一份待同步记录读坏了</strong><span>{damagedQueue.at ? `备份时间 ${new Date(damagedQueue.at).toLocaleString()}。` : ''}它不会自己消失，但也一直没能同步上去。把备份内容复制出来交给开发者，可以人工找回。</span>{damagedQueue.raw ? <button onClick={() => { void copyText(damagedQueue.raw || '') }}>复制备份内容</button> : null}</div>}
             {showReview && <StrategyReview ratios={strategyRatios} onClose={() => setShowReview(false)} />}
             {showSettings && <SettingsPanel theme={theme} setTheme={setTheme} font={font} setFont={setFont} onClose={() => setShowSettings(false)} />}
             {showFeedback && <FeedbackPanel page={activeNav} onClose={() => setShowFeedback(false)} />}
