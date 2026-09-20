@@ -186,9 +186,8 @@ async function seed(owner, base) {
   }
   const flow = await post(owner, '/api/preferences/data-flow', {}, base)
   assert.ok(flow.status === 200 && (flow.json?.created || []).length > 0, `造偏好失败（${owner.id}）：${flow.status} ${flow.text.slice(0, 200)}`)
-  // 拍摄项（shooting）故意不造：它要过人工确认闸门（人设/质量/发布清单三项检查 + 事实核验）才能生成，
-  // 直接改草稿状态会被 409 拦下（试过：「请通过人工确认接口进入拍摄」）。
-  // 本测试要的是隔离判定，不想跟那条七步链路绑在一起——那边的规则一改，这里会红得让人看不懂。
+  // 拍摄项（shooting）**原写「故意不造」，2026-09-20 改成真造了**——种子在下面（走法拄 shooting.test.mjs 已跑通的那条链），
+  // 理由也跟着改了：不造只是把「这族的过滤漏没漏」藏起来（直接改状态会被 409「请通过人工确认接口进入拍摄」拦下）。代价（闸门规则一改两边一起红）写在下面那段注释里。
   // 反馈：用户自己提的单。它是**按角色（管理员）放行**的一族，不是按所有者过滤——正是那种容易被人忽略的写法。
   const feedback = await post(owner, '/api/feedback', { type: 'bug', title: `${owner.mark}-feedback`, description: `${owner.mark}-feedback` }, base)
   // 研究项：**不需要连外部搜索就能造**。热搜采集那条路是「客户端把条目递上来、服务端落库」，本来就不调外部接口。
