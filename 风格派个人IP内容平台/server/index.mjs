@@ -195,6 +195,26 @@ async function saveState(...collections) {
   writeFileSync(dataFile, `${JSON.stringify(state, null, 2)}\n`)
 }
 
+const modelFailureEchoCodes = ['QUOTA_EXCEEDED', 'MISSING_CONFIG']
+// 日志会被贴进 issue 和聊天，key 不能跟着走。
+function redactSecrets(text) {
+  return String(text ?? '')
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, 'sk-***')
+    .replace(/(api[-_]?key["']?\s*[:=]\s*)[^\s,}"']{8,}/gi, '$1***')
+}
+// 真模型复验里 30 次有 10 次调用失败，只能报兜底的 GENERATION_FAILED——底层原因既不落日志也不给用户，
+// 是超时、限流还是被拒查不出来（审计 P2 新开的那一行）。这里统一补一条可查的事件：
+// 日志留底层 message（先脱敏），界面上仍然只说人话。
+function logModelFailure(error, path = '', method = '') {
+  console.error(JSON.stringify({ event: 'model_call_failed', path, method, code: error?.code || 'GENERATION_FAILED', message: redactSecrets(error?.message).slice(0, 300), details: redactSecrets(Array.isArray(error?.details) ? error.details.join(' | ') : '').slice(0, 300) }))
+}
+function modelFailureResponse(response, error, message, echoCodes = modelFailureEchoCodes) {
+  const code = error?.code || 'GENERATION_FAILED'
+  const status = code === 'QUOTA_EXCEEDED' ? 429 : code === 'MISSING_CONFIG' ? 422 : 502
+  // 额度用完/未配置这两种原因已经很明确，没必要记；剩下的一律记一笔。
+  if (status === 502) logModelFailure(error, response?.req?.url, response?.req?.method)
+  return send(response, status, { code, error: [...echoCodes, 'MODEL_OUTPUT_INVALID'].includes(code) ? error.message : message, retryable: true })
+}
 function send(response, status, payload, extraHeaders = {}) {
   response.setHeader('cache-control', 'no-store')
   response.setHeader('cross-origin-resource-policy', 'same-origin')
@@ -294,6 +314,8 @@ async function runLogicCheck(request, draft) {
     // 这一支也不花这次调用——这是设计里省钱的那道闸门。
     return { status: 'skipped', score: null, dimensions: {}, evidence: [], findings: [], suggestions: ['本次没有检查：正文里找不到「提了问题、又给了办法」的段落，所以没有可对照的地方。'], reminders: [], draft_version: draftVersion, checked_at: new Date().toISOString() }
   }
+  // 2026-09-20 试过调温度：0.7 → 0.2 各跑 30 次，误报 1 次 vs 2 次、命中率 55% vs 57%。
+  // 结论：那条误报是模型**真认错了**，不是随机波动，调温度治不了，已调回 0.7。
   const content = await generateStructured(request, logicCheckSystemPrompt, logicCheckVariables(draftBody, spans))
   // 解析不出来会抛错（MODEL_OUTPUT_INVALID），路由转 502——不能让它变成「已通过」。
   const { findings, reported, unverifiable, unanchored } = parseLogicOutput(content, draftBody)
@@ -573,7 +595,7 @@ const server = createServer(async (request, response) => {
         state.positioning_candidates_by_user[userId(request)] = candidates
         try { await saveState('positioning_candidates') } catch (error) { state.positioning_candidates_by_user[userId(request)] = previous; throw error }
         return send(response, 201, candidates)
-      } catch (error) { return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '定位生成或保存失败，请检查模型配置后重试；原结果未替换。', retryable: true }) }
+      } catch (error) { return modelFailureResponse(response, error, '定位生成或保存失败，请检查模型配置后重试；原结果未替换。') }
     }
     const candidateMatch = url.pathname.match(/^\/api\/positioning\/candidates\/([^/]+)$/)
     if (candidateMatch && request.method === 'PUT') {
@@ -1339,7 +1361,7 @@ const server = createServer(async (request, response) => {
         const content = await generateStructured(request, claimsSystemPrompt, { text })
         return send(response, 200, parseClaims(content))
       } catch (error) {
-        return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '主张提炼失败，请检查模型配置并重试。', retryable: true })
+        return modelFailureResponse(response, error, '主张提炼失败，请检查模型配置并重试。')
       }
     }
     // 逻辑检查：只查一种毛病——提了问题，但后文给的办法治的是另一件事。
@@ -1357,7 +1379,7 @@ const server = createServer(async (request, response) => {
         const { findings, reported, unverifiable, unanchored } = parseLogicOutput(content, draftBody)
         return send(response, 200, { findings, checked: true, reported, unverifiable, unanchored })
       } catch (error) {
-        return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG', 'MODEL_OUTPUT_INVALID'].includes(error.code) ? error.message : '逻辑检查失败，请检查模型配置并重试。', retryable: true })
+        return modelFailureResponse(response, error, '逻辑检查失败，请检查模型配置并重试。', [...modelFailureEchoCodes, 'MODEL_OUTPUT_INVALID'])
       }
     }
     if (url.pathname === '/api/skills/deconstruct' && request.method === 'POST') {
@@ -1368,7 +1390,7 @@ const server = createServer(async (request, response) => {
         const content = await generateStructured(request, deconstructSystemPrompt, { term })
         return send(response, 200, { term, ...parseDeconstruction(content) })
       } catch (error) {
-        return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '概念拆解失败，请检查模型配置并重试。', retryable: true })
+        return modelFailureResponse(response, error, '概念拆解失败，请检查模型配置并重试。')
       }
     }
     if (url.pathname === '/api/topics/generate' && request.method === 'POST') {
@@ -1409,7 +1431,7 @@ const server = createServer(async (request, response) => {
           // 用户点名的层级以他为准，不跟着模型跑；没点名才用模型自己判的。
           return defaultTopicFields({ ...item, id: nextId(state.topics) + index, owner_id: userId(request), source_refs: refs, fact_risk: 'needs_review', goal_refs: ['positioning'], strategy_layer: requestedLayer || item.strategy_layer, hook_kind: requestedHook || hookKindOf(item.hook_kind), created_at: createdAt, generation_context: { profile_version: profile.version, source_count: refs.length, cold_start: coldStart, layer_ledger: ledger, requested_layer: requestedLayer || null, requested_hook: requestedHook || null } })
         })
-      } catch (error) { return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG'].includes(error.code) ? error.message : '选题生成失败，请检查模型配置并重试；历史选题保留。', retryable: true }) }
+      } catch (error) { return modelFailureResponse(response, error, '选题生成失败，请检查模型配置并重试；历史选题保留。') }
       state.topics.push(...topics)
       try { await saveState('topics') } catch (error) {
         const ids = new Set(topics.map(item => item.id))
@@ -1490,7 +1512,7 @@ const server = createServer(async (request, response) => {
         try {
           check = await runLogicCheck(request, draft)
         } catch (error) {
-          return send(response, error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'MISSING_CONFIG' ? 422 : 502, { code: error.code || 'GENERATION_FAILED', error: ['QUOTA_EXCEEDED', 'MISSING_CONFIG', 'MODEL_OUTPUT_INVALID'].includes(error.code) ? error.message : '逻辑检查失败，请检查模型配置并重试。', retryable: true })
+          return modelFailureResponse(response, error, '逻辑检查失败，请检查模型配置并重试。', [...modelFailureEchoCodes, 'MODEL_OUTPUT_INVALID'])
         }
       } else {
         check = checkName === 'persona' ? checkPersona(draft, profile) : checkName === 'quality' ? { ...checkQuality(draft, profile, { replacedFeatureIds: new Set(activeFeatureReplacements(state.preferences.filter(item => item.owner_id === userId(request))).keys()) }), report: diagnosticReport(draft) } : checkPublishChecklist(draft)
