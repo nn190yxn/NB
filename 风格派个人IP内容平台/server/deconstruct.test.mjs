@@ -65,6 +65,11 @@ test('确认门禁：拆概念本身不落素材，确认后才落且类型与�
   assert.equal(material.unit_type, 'CON')
   assert.equal(material.material_trust, 'verified', '用户确认过的落 verified，不是 sourced')
   assert.equal(await materials(), before + 1, '确认后恰好新增一条')
+
+  const again = await fetch(`${baseUrl}/api/materials/atoms`, { method: 'POST', headers: headers(owner), body: JSON.stringify({ kind: 'insight', text: edited, name: proposal.term, unit_type: proposal.unit_type, source_label: '拆概念' }) })
+  assert.equal(again.status, 200)
+  assert.equal((await again.json()).duplicate, true)
+  assert.equal(await materials(), before + 1, '再点确认不能再堆一份')
 })
 
 test('解析：无效 kind 退回 question，usages 清掉空值，缺概念还原直接报错', () => {

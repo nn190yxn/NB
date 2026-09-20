@@ -63,6 +63,17 @@ test('素材原子化：收录、去重、类型筛选与组合生成', async t 
   assert.equal(expAtom.origin_source_id, null)
   assert.deepEqual(expAtom.source_refs, [])
 
+  const insightOnce = await jsonPost('/api/materials/atoms', { kind: 'insight', name: '经营与管理的区别', text: '经营是判断做什么，管理是解决怎么做。', source_label: '拆概念' })
+  assert.equal(insightOnce.status, 201)
+  const insightId = (await insightOnce.json()).id
+  const insightAgain = await jsonPost('/api/materials/atoms', { kind: 'insight', name: '经营与管理的区别', text: '经营是判断做什么，管理是解决怎么做。', source_label: '拆概念' })
+  assert.equal(insightAgain.status, 200)
+  const insightDup = await insightAgain.json()
+  assert.equal(insightDup.duplicate, true)
+  assert.equal(insightDup.id, insightId)
+  const insightList = await (await fetch(`${baseUrl}/api/materials?kind=insight&page=1`)).json()
+  assert.equal(insightList.total, 1, '没选来源时，相同内容再确认不能再存一份')
+
   const badKind = await jsonPost('/api/materials/atoms', { kind: 'article', text: '文本' })
   assert.equal(badKind.status, 422)
   const missingSource = await jsonPost('/api/materials/atoms', { source_id: 99999, kind: 'quote', text: '文本' })

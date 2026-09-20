@@ -1584,8 +1584,10 @@ function DeconstructPanel() {
     const text = [drafting.assumed, drafting.restored, drafting.plain].map(value => String(value || '').trim()).filter(Boolean).join('\n')
     if (!text) { setError('至少要留下一段内容再入库。'); return }
     setBusy(true); setError('')
-    void apiJson<{ id: number }>('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: 'insight', text, name: proposal.term, unit_type: proposal.unit_type, source_label: '拆概念', ...(source ? { source_id: source.id } : {}) }) })
-      .then(result => setSaved(`已入库：素材 #${result.id}（${proposal.unit_type === 'CON' ? '概念' : '问题'} · 已确认${source ? ` · 来源：${source.name || `素材 #${source.id}`}` : ''}）`))
+    void apiJson<{ id: number; duplicate?: boolean }>('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: 'insight', text, name: proposal.term, unit_type: proposal.unit_type, source_label: '拆概念', ...(source ? { source_id: source.id } : {}) }) })
+      .then(result => setSaved(result.duplicate
+        ? `这条已经在库里了（素材 #${result.id}），没有再存一份`
+        : `已入库：素材 #${result.id}（${proposal.unit_type === 'CON' ? '概念' : '问题'} · 已确认${source ? ` · 来源：${source.name || `素材 #${source.id}`}` : ''}）`))
       .catch(reason => setError(reason instanceof Error ? reason.message : '入库失败，请重试。'))
       .finally(() => setBusy(false))
   }
@@ -1646,8 +1648,10 @@ function ClaimsPanel() {
     if (!body) { setError('至少要留下一栏内容再入库。'); return }
     const materialText = `${body}${proposal.mechanism ? `\n核心机制：${proposal.mechanism}` : ''}`
     setBusy(true); setError('')
-    void apiJson<{ id: number }>('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: 'insight', text: materialText, name: String(drafting.judgement || '').slice(0, 40) || '主张', unit_type: 'OPI', source_label: '提主张', ...(source ? { source_id: source.id } : {}) }) })
-      .then(result => setSaved(`已入库：素材 #${result.id}（主张 · 已确认${source ? ` · 来源：${source.name || `素材 #${source.id}`}` : ''}）`))
+    void apiJson<{ id: number; duplicate?: boolean }>('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: 'insight', text: materialText, name: String(drafting.judgement || '').slice(0, 40) || '主张', unit_type: 'OPI', source_label: '提主张', ...(source ? { source_id: source.id } : {}) }) })
+      .then(result => setSaved(result.duplicate
+        ? `这条已经在库里了（素材 #${result.id}），没有再存一份`
+        : `已入库：素材 #${result.id}（主张 · 已确认${source ? ` · 来源：${source.name || `素材 #${source.id}`}` : ''}）`))
       .catch(reason => setError(reason instanceof Error ? reason.message : '入库失败，请重试。'))
       .finally(() => setBusy(false))
   }
