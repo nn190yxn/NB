@@ -35,6 +35,35 @@ async function callOne(config, messages, timeoutMs = DEFAULT_TIMEOUT_MS) {
   return callPayload(config, { model: config.model, messages, temperature: 0.7 }, timeoutMs)
 }
 
+// 提示词的四种写法（各 skill 模块历史上各写各的），在这一个入口里统一消化：
+//   纯字符串 / 字符串数组（一行一条）/ 函数（返回前面两种或 {system,user}）/ {system,user} 对象。
+// 调用方从此不用记「那个模块是哪一种」：一律 `resolvePrompt(值)` 再拼 messages。
+//
+// 数组**按换行拼**。以前有个调用点把数组直接跟字符串相加（`数组 + ' 后缀'`），
+// JS 会拿逗号把数组串起来——提示词的换行结构就这么没了。模型还能读，但结构已经变了，
+// 而且这种错法不会报错。在这里堵死：要么认得出，要么当场抛。
+function resolvePromptText(value) {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(item => resolvePromptText(item)).filter(Boolean).join('\n')
+  throw new Error(`提示词形状不认识：${value === null ? 'null' : typeof value}`)
+}
+
+export function resolvePrompt(value) {
+  const resolved = typeof value === 'function' ? value() : value
+  if (resolved && typeof resolved === 'object' && !Array.isArray(resolved)) {
+    const system = resolvePromptText(resolved.system)
+    if (!system.trim()) throw new Error('提示词对象里的 system 是空的')
+    return resolved.user === undefined ? { system } : { system, user: resolvePromptText(resolved.user) }
+  }
+  return { system: resolvePromptText(resolved) }
+}
+
+export function promptMessages(value, userFallback) {
+  const prompt = resolvePrompt(value)
+  const user = prompt.user === undefined ? userFallback : prompt.user
+  return [{ role: 'system', content: prompt.system }, ...(user === undefined ? [] : [{ role: 'user', content: user }])]
+}
+
 export async function callLlmWithFallback(configs, messages) {
   const candidates = [
     { name: 'primary', config: normalizeConfig(configs?.primary) },
