@@ -126,13 +126,13 @@ function App() {
   useEffect(() => { if (!apiFailure) return; const timer = window.setTimeout(() => setApiFailure(null), 12000); return () => window.clearTimeout(timer) }, [apiFailure])
   useEffect(() => { if (authState === 'ok') void apiJson<{ user_id?: string }>('/api/auth/session', { silent: true }).then(value => { setAccountId(value.user_id || ''); setSyncAccount(value.user_id || null); setPendingSync(pendingSyncEvents().length); setDamagedQueue(damagedQueueReport()) }).catch(() => undefined) }, [authState])
   const [showFeedback, setShowFeedback] = useState(false)
-  const [feedbackUnread, setFeedbackUnread] = useState(0)
+  const [feedbackUnread, setFeedbackUnread] = useState<number | 'failed' | null>(null)
 
   useEffect(() => {
     if (authState !== 'ok') return
     void apiJson<{ is_admin: boolean; items: { status: string }[] }>('/api/feedback', { silent: true })
       .then(result => setFeedbackUnread(result.is_admin ? result.items.filter(item => item.status !== 'resolved').length : 0))
-      .catch(() => undefined)
+      .catch(() => setFeedbackUnread('failed'))
   }, [showFeedback, authState])
 
   useEffect(() => {
@@ -146,7 +146,7 @@ function App() {
   const [strategySaving, setStrategySaving] = useState(false)
   const [strategyError, setStrategyError] = useState('')
   const [showShooting, setShowShooting] = useState(false)
-  const [shootingCount, setShootingCount] = useState(0)
+  const [shootingCount, setShootingCount] = useState<number | 'failed' | null>(null)
   const [online, setOnline] = useState(() => navigator.onLine)
   const [pendingSync, setPendingSync] = useState(() => pendingSyncEvents().length)
   // 队列读坏时「能用的事件」可能是 0 条：光看这个数会显示成「待同步 0 条」，
@@ -214,7 +214,7 @@ function App() {
   useEffect(() => {
     if (authState !== 'ok') return
     // 侧栏计数：失败先让它算 0，不要为这个弹提示（审计 25.5 里归为弱信号）。
-    apiJson<ShootingItem[]>('/api/shooting/today', { silent: true }).then(items => setShootingCount(items.filter(item => item.status !== 'completed').length)).catch(() => undefined)
+    apiJson<ShootingItem[]>('/api/shooting/today', { silent: true }).then(items => setShootingCount(items.filter(item => item.status !== 'completed').length)).catch(() => setShootingCount('failed'))
     // 冲突检查不安静：它失败时横幅不出现，用户会以为「没有冲突」（审计 25.5 P2）。
     apiJson<SyncConflict[]>('/api/sync/conflicts').then(setConflicts).catch(() => undefined)
   }, [authState, activeNav, showShooting])
@@ -257,9 +257,9 @@ function App() {
           <span className="nav-label">工作区</span>
           {navItems.map(({ label, icon: Icon }) => <button className={activeNav === label ? 'nav-item active' : 'nav-item'} onClick={() => label === '定位发现' ? setShowOnboarding(true) : label === '热点研究' ? openResearch() : setActiveNav(label)} key={label}><Icon size={17} /><span>{label}</span></button>)}
           <span className="nav-label secondary">资产</span>
-           <button className={showShooting ? 'nav-item active' : 'nav-item'} onClick={() => setShowShooting(true)}><Video size={17} /><span>今日拍摄</span><b className="count-soft">{shootingCount}</b></button>
+           <button className={showShooting ? 'nav-item active' : 'nav-item'} onClick={() => setShowShooting(true)}><Video size={17} /><span>今日拍摄</span><b className="count-soft" title={typeof shootingCount === 'number' ? '今天待拍的条数' : '没读到今天的拍摄清单，稍后重试'}>{typeof shootingCount === 'number' ? shootingCount : '—'}</b></button>
             <button className={activeNav === 'IP 档案' ? 'nav-item active' : 'nav-item'} onClick={() => setActiveNav('IP 档案')}><BookOpen size={17} /><span>IP 档案</span></button>
-            <button className="nav-item" onClick={() => setShowFeedback(true)}><MessageSquare size={17} /><span>反馈</span>{(feedbackUnread > 0) && <b>{feedbackUnread}</b>}</button>
+            <button className="nav-item" onClick={() => setShowFeedback(true)}><MessageSquare size={17} /><span>反馈</span>{feedbackUnread === 'failed' ? <b title="没读到反馈列表，稍后重试">?</b> : typeof feedbackUnread === 'number' && feedbackUnread > 0 ? <b>{feedbackUnread}</b> : null}</button>
         </nav>
          <div className="sidebar-bottom"><button className="nav-item" onClick={() => setShowSyncManager(true)}><FolderOpen size={17} /><span>桌面同步</span>{pendingSync > 0 && <b>{pendingSync}</b>}</button><button className="nav-item" onClick={() => setShowSettings(true)}><Settings2 size={17} /><span>工作台设置</span></button><button className="user-chip" onClick={logout} title="退出当前会话"><div className="avatar">我</div><div><strong>我的账号</strong><span>个人内容空间</span></div><MoreHorizontal size={16} /></button></div>
       </aside>
@@ -294,7 +294,7 @@ function App() {
 
 
 
-           <div className="lower-grid"><section><div className="section-heading compact"><div><span className="section-kicker">02 / READY TO MAKE</span><h2>准备出发的选题</h2></div><button className="text-action" onClick={() => setActiveNav('选题助手')}>打开选题助手 <ArrowUpRight size={15} /></button></div><HomeTopics onOpen={() => setActiveNav('选题助手')} /></section><aside className="shoot-card"><div className="card-top"><span className="section-kicker">TODAY / SHOOTING</span><Video size={17} /></div><h3>今天拍摄</h3><div className="shoot-date"><strong>{String(shootingCount).padStart(2, '0')}</strong><span>条内容<br /><small>待拍摄</small></span></div><div className="progress"><span style={{ width: '0%' }} /></div><p>当前清单 · {shootingCount} 条待拍</p><button className="outline-action" onClick={() => setShowShooting(true)}>进入拍摄清单 <ArrowUpRight size={15} /></button></aside></div>
+           <div className="lower-grid"><section><div className="section-heading compact"><div><span className="section-kicker">02 / READY TO MAKE</span><h2>准备出发的选题</h2></div><button className="text-action" onClick={() => setActiveNav('选题助手')}>打开选题助手 <ArrowUpRight size={15} /></button></div><HomeTopics onOpen={() => setActiveNav('选题助手')} /></section><aside className="shoot-card"><div className="card-top"><span className="section-kicker">TODAY / SHOOTING</span><Video size={17} /></div><h3>今天拍摄</h3><div className="shoot-date"><strong>{typeof shootingCount === 'number' ? String(shootingCount).padStart(2, '0') : '—'}</strong><span>条内容<br /><small>待拍摄</small></span></div><div className="progress"><span style={{ width: '0%' }} /></div><p>{typeof shootingCount === 'number' ? `当前清单 · ${shootingCount} 条待拍` : '今天的拍摄清单没读到，稍后重试'}</p><button className="outline-action" onClick={() => setShowShooting(true)}>进入拍摄清单 <ArrowUpRight size={15} /></button></aside></div>
           <footer className="footer-note"><span>研究与素材以各条记录的来源和采集时间为准</span><span>{online ? '网络已连接' : '当前离线'}</span></footer>
           </> : <WorkspaceView leaveGuard={draftLeaveGuard} section={activeNav as WorkspaceSection} onNavigate={setActiveNav} onOpenShooting={() => setShowShooting(true)} focusedResearchId={focusedResearchId} />}
         </div>

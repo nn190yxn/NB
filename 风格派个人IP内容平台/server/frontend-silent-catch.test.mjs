@@ -23,7 +23,7 @@ const silentCatch = /\.catch\(\s*\(\s*\)\s*=>\s*(?:undefined|\{\s*\})\s*\)/g
 const roots = ['src', 'desktop']
 const skipped = /(\.test\.|node_modules|dist)/
 const budget = {
-  'src/main.tsx': 31,
+  'src/main.tsx': 29,
   'desktop/main.mjs': 1,
 }
 

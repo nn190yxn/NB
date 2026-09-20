@@ -46,6 +46,20 @@ test('草稿加载失败不能说成「还没有草稿」', () => {
   assert.match(ui, /onClick=\{loadDrafts\}>重新加载草稿<\/button>/, '失败要能重试')
 })
 
+// 审计 25.5（弱信号那四处的收口）：两个「计数」不能把「没读到」画成 0。
+// 侧栏的「今日拍摄」和「反馈」未读数天天被人看，而失败时显示 0 与真的是 0 长得一模一样——
+// 现在三态分开：还没读到（什么都不声称）/ 读到了（数字）/ 读失败（“—”或“?”并附悬停说明）。
+test('计数读失败不许画成 0', () => {
+  assert.match(ui, /const \[shootingCount, setShootingCount\] = useState<number \| 'failed' \| null>\(null\)/, '拍摄计数要记住「读失败」，不能只存数字')
+  assert.match(ui, /const \[feedbackUnread, setFeedbackUnread\] = useState<number \| 'failed' \| null>\(null\)/, '反馈未读数要记住「读失败」')
+  assert.match(ui, /catch\(\(\) => setShootingCount\('failed'\)\)/, '拍摄计数读失败时不能静默当成 0')
+  assert.match(ui, /catch\(\(\) => setFeedbackUnread\('failed'\)\)/, '反馈未读数读失败时不能静默当成 0')
+  assert.match(ui, /\{typeof shootingCount === 'number' \? shootingCount : '—'\}/, '侧栏拍摄计数要有「不知道」的渲染分支')
+  assert.match(ui, /feedbackUnread === 'failed' \? <b title="没读到反馈列表，稍后重试">\?<\/b>/, '反馈角标要有「不知道」的渲染分支')
+  assert.match(ui, /今天的拍摄清单没读到，稍后重试/, '首页卡片要用人的话说清没读到，而不是显示 0 条')
+  assert.doesNotMatch(ui, /当前清单 · \{shootingCount\} 条待拍/, '不能把可能失败的计数直接搢进句子')
+})
+
 // 审计 25.5：日历加载失败原来是 `catch(() => setEntries([]))`——空日历和「没排内容」长得一样。
 test('日历加载失败不能说成「这个月没内容」', () => {
   assert.match(ui, /setLoadError\('日历加载失败，请重试。'\)/)
