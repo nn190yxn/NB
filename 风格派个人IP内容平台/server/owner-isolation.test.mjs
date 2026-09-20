@@ -48,15 +48,14 @@ const OTHER = { id: 'isolation-other', mark: 'ISO-OTHER-SENTINEL' }
 // 多出一族就会红——要么给它造种子，要么在这里说明为什么不用查。
 const SKIPPED_FAMILIES = {
   shooting: '要过人工确认闸门（人设/质量/发布清单三项检查 + 事实核验）才能生成；不值得把隔离判定跟那条七步链路绑死（试过：直接改状态被 409 拦下）',
+  // research / devices：2026-09-20 已造种子（热搜采集是客户端递条目、设备心跳直接写），不再跳过。
   sync: '同步冲突要两台设备真的撞到一起，本测试不造',
-  research: '研究项要连外部搜索，本测试不造',
-  devices: '设备心跳按设备号读，本测试不造',
 }
 
 // 这几条列表路由必须双向都看得见：B 看得见 B 的、看不见 A 的。
 // 它们也是「防整套测试空过」的探针——路由坏了、种子没生效，这里会先红。
 // 能进来的前提：响应里带自己那一行的 id。设置项（api-settings）按 slot 读、没有 id 字段，所以只能进指纹比对。
-const LIST_ROUTES_WITH_BOTH = ['/api/drafts', '/api/materials', '/api/memories', '/api/structures', '/api/topics', '/api/performance-snapshots', '/api/sync-directories', '/api/profile/reviews', '/api/preferences']
+const LIST_ROUTES_WITH_BOTH = ['/api/drafts', '/api/materials', '/api/memories', '/api/structures', '/api/topics', '/api/performance-snapshots', '/api/sync-directories', '/api/profile/reviews', '/api/preferences', '/api/research', '/api/devices']
 // 「B 改没改动 A 的东西」要比对的路由：除了上面那张表，另加没有 id 字段、但历史上就是因「忘了过滤」翻过车的设置项。
 const FINGERPRINT_EXTRA = ['/api/api-settings']
 const ANTI_EMPTY_MIN_ROUTES = 10
@@ -180,6 +179,14 @@ async function seed(owner, base) {
   // 本测试要的是隔离判定，不想跟那条七步链路绑在一起——那边的规则一改，这里会红得让人看不懂。
   // 反馈：用户自己提的单。它是**按角色（管理员）放行**的一族，不是按所有者过滤——正是那种容易被人忽略的写法。
   const feedback = await post(owner, '/api/feedback', { type: 'bug', title: `${owner.mark}-feedback`, description: `${owner.mark}-feedback` }, base)
+  // 研究项：**不需要连外部搜索就能造**。热搜采集那条路是「客户端把条目递上来、服务端落库」，本来就不调外部接口。
+  // （原来这条跳过理由写的是「要连外部搜索」——写错了，2026-09-20 更正后补上种子。）
+  const research = await post(owner, '/api/research/hot-search/collect', { platform: '小红书', entries: [{ title: `${owner.mark}-research`, url: `https://example.com/${owner.mark}` }] }, base)
+  assert.equal(research.status, 200, `造研究项失败（${owner.id}）：${research.status} ${research.text.slice(0, 200)}`)
+  // 设备：心跳就是写入。id 由客户端给，所以这里用**各账号不同的号**跑通用探针；
+  // 「两个账号同一个设备号」那种撞车另有一条专门的测试（同号同键才试得出来）。
+  const device = await post(owner, '/api/devices/heartbeat', { id: `iso-device-${owner.id}`, name: `${owner.mark}-device` }, base)
+  assert.equal(device.status, 200, `造设备失败（${owner.id}）：${device.status} ${device.text.slice(0, 200)}`)
   assert.equal(feedback.status, 201, `造反馈失败（${owner.id}）：${feedback.status} ${feedback.text.slice(0, 200)}`)
   // 定位是**按用户存的文档**，不是列表：又是另一种存储形状（键就是登录身份）。
   // 分两步：先写访谈回答（文档），再让模型出候选（候选才有 id，带参数的写路由要靠它才能试）。
@@ -215,6 +222,9 @@ async function seed(owner, base) {
       positioning: candidates.json?.[0]?.id,
       'private-files': privateFile?.id,
       'vision-tasks': vision.json?.id,
+      research: research.json?.items?.[0]?.id,
+      // 设备号由客户端给、两个账号故意相同：判定靠「B 的列表里不能出现 A 的标记」，不靠 id 区分。
+      devices: `iso-device-${owner.id}`,
     },
     mark: owner.mark,
   }
@@ -311,6 +321,37 @@ test('别人的东西改不动：带参数的写路由逐条用 B 的身份试�
   assert.equal(await fingerprint(OWNER, base), before, 'B 的写请求改动了 A 的数据')
   assertCoverageDecided(skipped)
   console.log(JSON.stringify({ event: 'owner_isolation_write', patternWriteRoutes: routes.length, exercised, skippedFamilies: [...skipped].sort() }))
+})
+
+// 这一条盯的是带参数的写路由**盯不到**的那种撞车：键由客户端自己给（不是服务端发的 id）。
+// 设备心跳就是这种：`id` 是客户端递上来的字符串，两个账号完全可能用同一个。
+// 漏了所有者过滤的话，B 的心跳会把 A 那一行的名字改掉——而且不会报错，看起来「心跳成功了」。
+test('客户端自己给的键撞到别人：同一个设备号也不会写进别人那一行', async t => {
+  const port = PORT + 3
+  const base = `http://127.0.0.1:${port}`
+  const server = await startServer(port, freshDataFile('device-collision'))
+  t.after(() => server.kill())
+  const mine = await seed(OWNER, base)
+  const theirs = await seed(OTHER, base)
+
+  // B 拿着 A 的设备号去心跳。
+  const before = (await getAs(OWNER, '/api/devices', base)).text
+  const beat = await post(OTHER, '/api/devices/heartbeat', { id: mine.ids.devices, name: `${OTHER.mark}-hijack` }, base)
+  assert.equal(beat.status, 200, `B 的心跳请求本身不该失败：${beat.status} ${beat.text.slice(0, 160)}`)
+
+  const asOwner = await getAs(OWNER, '/api/devices', base)
+  // 逐字节比对：不只是「名字没变」，而是 A 那一行**一点都没被动过**。
+  // 这一条是必需的：漏过滤时 B 的心跳会走到「已存在就更新 last_seen_at」那条分支，名字不变、只有时间变——
+  // 只盯名字的话，这种「静默摸了一下」就会被放过。
+  assert.equal(asOwner.text, before, `A 的设备行被 B 的心跳改过了（同一设备号没按所有者隔离）：\n之前：${before.slice(0, 160)}\n之后：${asOwner.text.slice(0, 160)}`)
+  assert.ok(asOwner.text.includes(`${OWNER.mark}-device`), `A 自己的设备行不见了：${asOwner.text.slice(0, 200)}`)
+  assert.ok(!asOwner.text.includes(`${OTHER.mark}-hijack`), `B 的设备名蹭进了 A 的列表（同一设备号没按所有者隔离）：${asOwner.text.slice(0, 200)}`)
+
+  // 反向也得成立——否则「没蹭进去」可能只是心跳根本没写成功。
+  const asOther = await getAs(OTHER, '/api/devices', base)
+  assert.ok(asOther.text.includes(`${OTHER.mark}-hijack`), `B 自己那一行没写进去，这条测试就变成空转了：${asOther.text.slice(0, 200)}`)
+  assert.ok(!asOther.text.includes(`${OWNER.mark}-device`), `A 的设备名出现在 B 的列表里：${asOther.text.slice(0, 200)}`)
+  assert.ok(theirs.ids.devices !== mine.ids.devices, '两个账号的设备号应当不同（通用探针靠 id 区分）')
 })
 
 // 间接引用：别人的 id 不在 URL 里，而在请求体里（拿 A 的 id 去拼自己的东西）。
