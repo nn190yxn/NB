@@ -24,7 +24,7 @@
 //       事后 A 的数据也不许变。
 //
 // 已知边界（别拿它当安全证明）：数不完的那几条都写着底——
-//   不带 id 的写路由（只写自己名下的）不在写判定里；写判定里还有 3 族没造种子（逐族登记了原因）；
+//   不带 id 的写路由（只写自己名下的）不在写判定里；写判定里只剩 1 族没造种子（拍摄，理由见下）；
 //   请求体里的 id 只覆盖源码里能枚举到的那几处（INDIRECT_REFERENCES）；
 //   读判定里已经没有跳过的族了（private-files 与 vision-tasks 本轮造了种子）。
 //   真正的「结构性不可能发生」（数据访问层统一收口）仍未做。
@@ -49,16 +49,27 @@ const OTHER = { id: 'isolation-other', mark: 'ISO-OTHER-SENTINEL' }
 const SKIPPED_FAMILIES = {
   shooting: '要过人工确认闸门（人设/质量/发布清单三项检查 + 事实核验）才能生成；不值得把隔离判定跟那条七步链路绑死（试过：直接改状态被 409 拦下）',
   // research / devices：2026-09-20 已造种子（热搜采集是客户端递条目、设备心跳直接写），不再跳过。
-  sync: '同步冲突要两台设备真的撞到一起，本测试不造',
+  // sync：2026-09-20 已造种子（同一账号拿过期版本号改草稿 → 409 + 一条 open 冲突），不再跳过。
 }
 
 // 这几条列表路由必须双向都看得见：B 看得见 B 的、看不见 A 的。
 // 它们也是「防整套测试空过」的探针——路由坏了、种子没生效，这里会先红。
 // 能进来的前提：响应里带自己那一行的 id。设置项（api-settings）按 slot 读、没有 id 字段，所以只能进指纹比对。
-const LIST_ROUTES_WITH_BOTH = ['/api/drafts', '/api/materials', '/api/memories', '/api/structures', '/api/topics', '/api/performance-snapshots', '/api/sync-directories', '/api/profile/reviews', '/api/preferences', '/api/research', '/api/devices']
+const LIST_ROUTES_WITH_BOTH = ['/api/drafts', '/api/materials', '/api/memories', '/api/structures', '/api/topics', '/api/performance-snapshots', '/api/sync-directories', '/api/profile/reviews', '/api/preferences', '/api/research', '/api/devices', '/api/sync/conflicts']
 // 「B 改没改动 A 的东西」要比对的路由：除了上面那张表，另加没有 id 字段、但历史上就是因「忘了过滤」翻过车的设置项。
 const FINGERPRINT_EXTRA = ['/api/api-settings']
 const ANTI_EMPTY_MIN_ROUTES = 10
+
+// 「一律发 {} 会被参数校验先拦下」的那些写路由，给一份**合法**请求体。
+// 为什么必需：反证时发现——拿掉冲突解决路由的所有者过滤，测试仍然全绿：
+// 因为 {} 先在 `resolution` 校验那一步被 422 拦下，**归属根本没参与判定**。
+// 也就是说这种路由的「被拒」证明不了所有者边界。
+const VALID_WRITE_BODY = {
+  '/api/sync/conflicts/([^/]+)': { resolution: 'local' },
+}
+// 冲突解决路由有**两道**所有者检查（先查冲突、再查被改的资源），单拿掉哪一道都漏不下来——
+// 另一道会接住（反过来也证明这路由写对了）。反证必须**两道一起拿掉**：那时 B 真的把 A 的冲突解决了（200），
+// 写判定当场红并点名这条路由。
 
 function freshDataFile(tag) {
   const file = join(mkdtempSync(join(tmpdir(), `owner-isolation-${tag}-`)), 'data.json')
@@ -66,8 +77,10 @@ function freshDataFile(tag) {
   return file
 }
 
+// 限流上限抬高：本测试故意逐条打（33×2 条读 + 43 条写），默认 120/分钟会把自己限流，
+// 而 429 会被误读成「没拿到自己的数据」（两个账号在同一个桶里）。限流本身另有测试，这里不是它的考场。
 function startServer(port, dataFile) {
-  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...llmMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...llmMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile, API_RATE_LIMIT_MAX: '2000' }, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 5000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve(child) } })
@@ -205,6 +218,18 @@ async function seed(owner, base) {
   // 但**任务行是造出来了**，读/写判定要看的就是这一行到底是谁的。
   const vision = await post(owner, '/api/vision-tasks', { screenshot_file_ids: [privateFile.id] }, base)
   assert.equal(vision.status, 202, `造截图任务失败（${owner.id}）：${vision.status} ${vision.text.slice(0, 200)}`)
+  // 同步冲突（sync 族）：**不需要两台设备**——同一账号、拿一个过期版本号去更新草稿就撞得出真冲突。
+  // 服务器上那一版先正常改一次（版本 +1），再拿**旧版本号**去改：409 + 落一条 open 冲突。
+  // 造的是真冲突（不是伪造记录），所以「B 去解决 A 的冲突」必须被拒才说得过去。
+  const draftId = draft.json[0]?.id
+  const baseVersion = Number(draft.json[0]?.version ?? 1)
+  const bumped = await post(owner, `/api/drafts/${draftId}`, { version: baseVersion, title: `${owner.mark}-draft-v2` }, base, 'PUT')
+  assert.equal(bumped.status, 200, `把草稿版本推上去失败（${owner.id}）：${bumped.status} ${bumped.text.slice(0, 200)}`)
+  const stale = await post(owner, `/api/drafts/${draftId}`, { version: baseVersion, title: `${owner.mark}-draft-stale` }, base, 'PUT')
+  assert.equal(stale.status, 409, `拿过期版本改草稿应当撞出冲突（${owner.id}）：${stale.status} ${stale.text.slice(0, 200)}`)
+  const openConflicts = await getAs(owner, '/api/sync/conflicts', base)
+  const conflictId = JSON.parse(openConflicts.text)?.[0]?.id
+  assert.ok(conflictId, `没造出同步冲突（${owner.id}）：${openConflicts.text.slice(0, 240)}`)
   return {
     ids: {
       drafts: draft.json[0]?.id,
@@ -225,6 +250,7 @@ async function seed(owner, base) {
       research: research.json?.items?.[0]?.id,
       // 设备号由客户端给、两个账号故意相同：判定靠「B 的列表里不能出现 A 的标记」，不靠 id 区分。
       devices: `iso-device-${owner.id}`,
+      sync: conflictId,
     },
     mark: owner.mark,
   }
@@ -302,6 +328,8 @@ test('别人的东西改不动：带参数的写路由逐条用 B 的身份试�
   const skipped = new Set()
   const accepted = []
   const leakedInReason = []
+  const notFound = []
+  const rejectedBeforeOwnership = []
   let exercised = 0
 
   for (const route of routes) {
@@ -309,11 +337,23 @@ test('别人的东西改不动：带参数的写路由逐条用 B 的身份试�
     if (!id) { skipped.add(route.family); continue }
     exercised += 1
     const target = patternToUrl(route.pattern, id)
-    const response = await fetch(`${base}${target}`, { method: route.method, headers: headersFor(OTHER), ...(route.method === 'DELETE' ? {} : { body: '{}' }) })
+    // 请求体：默认发 {}，但**有些路由在所有者判定之前还有一层参数校验**——一律发 {} 会被 422 拦下，
+    // 那种「被拒」跟归属无关，等于假绿。这类路由要在 VALID_WRITE_BODY 里给一份**合法**体，
+    // 让归属成为唯一决定成败的因素。（本清单是反证逼出来的，见它上面的注释。）
+    const body = route.method === 'DELETE' ? {} : { body: JSON.stringify(VALID_WRITE_BODY[normalizePattern(route.pattern)] ?? {}) }
+    const response = await fetch(`${base}${target}`, { method: route.method, headers: headersFor(OTHER), ...body })
     const text = await response.text()
+    // 拒的理由分得出来才有意义：404 是「不归你」（该看到的路由该给的答案），
+    // 422 是「参数不对」——如果整条路由的拒绝都停在 422，就得回头看上面那份清单。
+    if (response.status === 404) notFound.push(`${route.method} ${target}`)
+    else if (response.status === 422 || response.status === 400) rejectedBeforeOwnership.push(`${route.method} ${target} → ${response.status}`)
     if (response.status < 400) accepted.push(`${route.method} ${target} → ${response.status} ${text.slice(0, 140)}`)
     if (text.includes(mine.mark)) leakedInReason.push(`${route.method} ${target} → ${response.status} ${text.slice(0, 140)}`)
   }
+
+  // 这两个名单是给人看的：404 多、422/400 少，说明大多数路由真的被「归属」挡下的。
+  // 若哪天 422/400 一大片，说明上面那份合法请求体清单该补了（现在只有冲突解决一条）。
+  console.log(JSON.stringify({ event: 'owner_isolation_write_rejections', notFound: notFound.length, rejectedBeforeOwnership }))
 
   assert.ok(exercised >= 5, `只试了 ${exercised} 条写路由——种子或枚举没生效，这条等于空转`)
   assert.deepEqual(accepted, [], `B 对 A 的资源发写请求，服务端没拒绝：\n${accepted.join('\n')}`)
