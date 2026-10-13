@@ -1,0 +1,837 @@
+{
+  "扫描范围": {
+    "数据文件": "E:\\程序开发\\NB\\风格派个人IP内容平台\\.monkeycode-tmp-files\\walk-20261013\\data.json",
+    "未归档草稿": 41,
+    "已归档": 18
+  },
+  "总命中": 118,
+  "每条平均命中": 2.9,
+  "零命中草稿": 1,
+  "检测器覆盖到的22特征数": 3,
+  "检测器一次都没命中的22特征": [
+    "堵住所有反驳(medium)",
+    "知识全部输出(medium)",
+    "匀速排比(medium)",
+    "同一个让步模板反复用(medium)",
+    "给概念起名字的仪式(medium)",
+    "情绪曲线太光滑(medium)",
+    "替读者说一句蠢话然后纠正(weak)",
+    "没有任何犹豫(medium)",
+    "精确到不真实的情绪细节(strong)",
+    "脆弱感服务于论点(medium)",
+    "把结论包装成「协议」(medium)",
+    "每个段落都有收束金句(weak)",
+    "句子节奏过于均匀(medium)",
+    "用身体感受替代论证(strong)",
+    "开头「钩子 + 痛点 + 承诺」三件套(strong)",
+    "同义词刻意替换(medium)",
+    "虚假的「讲个故事」(strong)",
+    "结尾「你值得」式祝福(strong)",
+    "对「深刻」的过拟合(strong)"
+  ],
+  "按命中数排序": [
+    {
+      "代号": "opening_question",
+      "对应22特征": "（不属于22特征，属结构/事实类）",
+      "命中次数": 23,
+      "出现在几条草稿": 23,
+      "例子": [
+        {
+          "quote": "你以为灵感枯竭是因为没东西写？",
+          "severity": "warning"
+        },
+        {
+          "quote": "很多人问我，为什么同样做个人IP，别人灵感源源不断，你却每天都在焦虑选题？",
+          "severity": "warning"
+        },
+        {
+          "quote": "你以为你缺灵感？",
+          "severity": "warning"
+        },
+        {
+          "quote": "很多人问我：老师，我怎么天天没灵感？",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "代号": "ai_tone_phrase",
+      "对应22特征": "「不是 X 是 Y」高密度",
+      "命中次数": 22,
+      "出现在几条草稿": 22,
+      "例子": [
+        {
+          "quote": "不是因为你想得少，而是",
+          "severity": "warning"
+        },
+        {
+          "quote": "真正的做法，是",
+          "severity": "warning"
+        },
+        {
+          "quote": "真正的高手，用的是",
+          "severity": "warning"
+        },
+        {
+          "quote": "不是没才华，而是",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "代号": "platform_mixup",
+      "对应22特征": "（不属于22特征，属结构/事实类）",
+      "命中次数": 19,
+      "出现在几条草稿": 2,
+      "例子": [
+        {
+          "quote": "小红书",
+          "severity": "warning"
+        },
+        {
+          "quote": "抖音",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "代号": "experience_claim",
+      "对应22特征": "（不属于22特征，属结构/事实类）",
+      "命中次数": 19,
+      "出现在几条草稿": 19,
+      "例子": [
+        {
+          "quote": "第一人称经历｜很多人问我，为什么同样做个人IP，别人灵感源源不断，你却每天都在焦虑选题",
+          "severity": "warning"
+        },
+        {
+          "quote": "重复次数｜我见过太多老板，同一个观点，朋友圈写一遍，抖音改一遍，小红书再改一遍，累得半死，",
+          "severity": "warning"
+        },
+        {
+          "quote": "重复次数｜写四个平台改四遍，累得想放弃",
+          "severity": "warning"
+        },
+        {
+          "quote": "重复次数｜同一个观点，改四次才能发四个平台，最后哪个都没爆",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "代号": "case_claim",
+      "对应22特征": "（不属于22特征，属结构/事实类）",
+      "命中次数": 13,
+      "出现在几条草稿": 13,
+      "例子": [
+        {
+          "quote": "案例人物｜一位做家政的老板，提炼出一个观点：\"干净不是扫出来的，是收纳出来的\"",
+          "severity": "warning"
+        },
+        {
+          "quote": "案例人物+结果数字｜我有个客户，每天逼自己选题，发了半年，粉丝500",
+          "severity": "warning"
+        },
+        {
+          "quote": "案例人物｜我有个客户，以前靠灵感发帖，半年500粉",
+          "severity": "warning"
+        },
+        {
+          "quote": "案例人物+结果数字｜案例可以是：某老板转型三个月，因为定位模糊，流量归零",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "代号": "consulting_tone",
+      "对应22特征": "中文翻译腔",
+      "命中次数": 12,
+      "出现在几条草稿": 8,
+      "例子": [
+        {
+          "quote": "首先",
+          "severity": "warning"
+        },
+        {
+          "quote": "钩子",
+          "severity": "warning"
+        },
+        {
+          "quote": "颗粒度",
+          "severity": "warning"
+        },
+        {
+          "quote": "语义块",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "代号": "method_talk",
+      "对应22特征": "（不属于22特征，属结构/事实类）",
+      "命中次数": 7,
+      "出现在几条草稿": 3,
+      "例子": [
+        {
+          "quote": "裂变",
+          "severity": "warning"
+        },
+        {
+          "quote": "一鱼多吃",
+          "severity": "warning"
+        },
+        {
+          "quote": "多平台分发",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "代号": "self_intro",
+      "对应22特征": "（不属于22特征，属结构/事实类）",
+      "命中次数": 1,
+      "出现在几条草稿": 1,
+      "例子": [
+        {
+          "quote": "大家好",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "代号": "connector_abuse",
+      "对应22特征": "连接词过度使用且位置固定",
+      "命中次数": 1,
+      "出现在几条草稿": 1,
+      "例子": [
+        {
+          "quote": "首先、其次",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "代号": "no_concrete_support",
+      "对应22特征": "（不属于22特征，属结构/事实类）",
+      "命中次数": 1,
+      "出现在几条草稿": 1,
+      "例子": [
+        {
+          "quote": "辞职就能解决工作痛苦？",
+          "severity": "warning"
+        }
+      ]
+    }
+  ],
+  "逐条": [
+    {
+      "id": 63,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 294,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 4,
+      "per100": 1.4,
+      "codes": [
+        "ai_tone_phrase",
+        "experience_claim",
+        "consulting_tone",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 46,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 384,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 5,
+      "per100": 1.3,
+      "codes": [
+        "platform_mixup",
+        "method_talk",
+        "case_claim",
+        "experience_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 58,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 480,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 6,
+      "per100": 1.3,
+      "codes": [
+        "ai_tone_phrase",
+        "platform_mixup",
+        "method_talk",
+        "case_claim",
+        "experience_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 86,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 305,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 4,
+      "per100": 1.3,
+      "codes": [
+        "ai_tone_phrase",
+        "no_concrete_support",
+        "platform_mixup",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 50,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 346,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 4,
+      "per100": 1.2,
+      "codes": [
+        "platform_mixup",
+        "method_talk",
+        "experience_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 62,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 254,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 3,
+      "per100": 1.2,
+      "codes": [
+        "experience_claim",
+        "consulting_tone",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 82,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 263,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 3,
+      "per100": 1.1,
+      "codes": [
+        "ai_tone_phrase",
+        "platform_mixup",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 91,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 299,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 3,
+      "per100": 1,
+      "codes": [
+        "platform_mixup",
+        "experience_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 38,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 338,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 3,
+      "per100": 0.9,
+      "codes": [
+        "platform_mixup",
+        "method_talk",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 39,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 531,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 5,
+      "per100": 0.9,
+      "codes": [
+        "ai_tone_phrase",
+        "method_talk",
+        "case_claim",
+        "experience_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 42,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 254,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 2,
+      "per100": 0.8,
+      "codes": [
+        "case_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 47,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 483,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 4,
+      "per100": 0.8,
+      "codes": [
+        "self_intro",
+        "ai_tone_phrase",
+        "platform_mixup",
+        "case_claim"
+      ]
+    },
+    {
+      "id": 70,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 250,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 2,
+      "per100": 0.8,
+      "codes": [
+        "platform_mixup",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 74,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 397,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 3,
+      "per100": 0.8,
+      "codes": [
+        "experience_claim",
+        "consulting_tone",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 101,
+      "platform": "抖音",
+      "title": "情绪无能，是我的第一生产力：从内耗到内容生产的系统转换",
+      "bodyLen": 248,
+      "spoken": "文字稿",
+      "workflow": "needs_revision",
+      "hitCount": 2,
+      "per100": 0.8,
+      "codes": [
+        "ai_tone_phrase",
+        "consulting_tone"
+      ]
+    },
+    {
+      "id": 43,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 275,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 2,
+      "per100": 0.7,
+      "codes": [
+        "case_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 51,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 454,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 3,
+      "per100": 0.7,
+      "codes": [
+        "ai_tone_phrase",
+        "platform_mixup",
+        "experience_claim"
+      ]
+    },
+    {
+      "id": 55,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 430,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 3,
+      "per100": 0.7,
+      "codes": [
+        "connector_abuse",
+        "method_talk",
+        "consulting_tone"
+      ]
+    },
+    {
+      "id": 75,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 427,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 3,
+      "per100": 0.7,
+      "codes": [
+        "ai_tone_phrase",
+        "experience_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 83,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 281,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 2,
+      "per100": 0.7,
+      "codes": [
+        "ai_tone_phrase",
+        "platform_mixup"
+      ]
+    },
+    {
+      "id": 90,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 306,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 2,
+      "per100": 0.7,
+      "codes": [
+        "experience_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 106,
+      "platform": "抖音",
+      "title": "你以为缺流量？其实是缺变现",
+      "bodyLen": 563,
+      "spoken": "文字稿",
+      "workflow": "content_ready",
+      "hitCount": 4,
+      "per100": 0.7,
+      "codes": [
+        "ai_tone_phrase",
+        "case_claim",
+        "consulting_tone",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 54,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 325,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 2,
+      "per100": 0.6,
+      "codes": [
+        "method_talk",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 59,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 653,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 4,
+      "per100": 0.6,
+      "codes": [
+        "ai_tone_phrase",
+        "platform_mixup",
+        "experience_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 66,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 363,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 2,
+      "per100": 0.6,
+      "codes": [
+        "experience_claim",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 87,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 330,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 2,
+      "per100": 0.6,
+      "codes": [
+        "platform_mixup",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 99,
+      "platform": "视频号",
+      "title": "做10条爆款才发现：素材太整观众秒划走",
+      "bodyLen": 482,
+      "spoken": "文字稿",
+      "workflow": "content_ready",
+      "hitCount": 3,
+      "per100": 0.6,
+      "codes": [
+        "ai_tone_phrase",
+        "platform_mixup",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 67,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 425,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 2,
+      "per100": 0.5,
+      "codes": [
+        "case_claim",
+        "consulting_tone"
+      ]
+    },
+    {
+      "id": 108,
+      "platform": "抖音",
+      "title": "用‘钱是唯一诚实的反馈’重构IP内容评估体系",
+      "bodyLen": 415,
+      "spoken": "文字稿",
+      "workflow": "quality_checked",
+      "hitCount": 2,
+      "per100": 0.5,
+      "codes": [
+        "ai_tone_phrase",
+        "consulting_tone"
+      ]
+    },
+    {
+      "id": 109,
+      "platform": "视频号",
+      "title": "用‘钱是唯一诚实的反馈’重构IP内容评估体系",
+      "bodyLen": 429,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 2,
+      "per100": 0.5,
+      "codes": [
+        "ai_tone_phrase",
+        "experience_claim"
+      ]
+    },
+    {
+      "id": 71,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 246,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 1,
+      "per100": 0.4,
+      "codes": [
+        "platform_mixup"
+      ]
+    },
+    {
+      "id": 102,
+      "platform": "视频号",
+      "title": "情绪无能，是我的第一生产力：从内耗到内容生产的系统转换",
+      "bodyLen": 244,
+      "spoken": "文字稿",
+      "workflow": "needs_revision",
+      "hitCount": 1,
+      "per100": 0.4,
+      "codes": [
+        "ai_tone_phrase"
+      ]
+    },
+    {
+      "id": 103,
+      "platform": "抖音",
+      "title": "犯了「情绪无能」这个不同寻常的错，我反而实现了系统变现",
+      "bodyLen": 512,
+      "spoken": "文字稿",
+      "workflow": "quality_checked",
+      "hitCount": 2,
+      "per100": 0.4,
+      "codes": [
+        "ai_tone_phrase",
+        "opening_question"
+      ]
+    },
+    {
+      "id": 94,
+      "platform": "抖音",
+      "title": "用‘钱是唯一诚实的反馈’重构IP内容评估体系",
+      "bodyLen": 3025,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 5,
+      "per100": 0.2,
+      "codes": [
+        "ai_tone_phrase",
+        "platform_mixup",
+        "case_claim",
+        "experience_claim",
+        "consulting_tone"
+      ]
+    },
+    {
+      "id": 95,
+      "platform": "视频号",
+      "title": "用‘钱是唯一诚实的反馈’重构IP内容评估体系",
+      "bodyLen": 3025,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 5,
+      "per100": 0.2,
+      "codes": [
+        "ai_tone_phrase",
+        "platform_mixup",
+        "case_claim",
+        "experience_claim",
+        "consulting_tone"
+      ]
+    },
+    {
+      "id": 98,
+      "platform": "抖音",
+      "title": "素材太整犯了这个错，我反而摸清了爆款逻辑",
+      "bodyLen": 659,
+      "spoken": "文字稿",
+      "workflow": "content_ready",
+      "hitCount": 1,
+      "per100": 0.2,
+      "codes": [
+        "experience_claim"
+      ]
+    },
+    {
+      "id": 105,
+      "platform": "抖音",
+      "title": "犯了「情绪无能」这个不同寻常的错，我反而实现了系统变现（",
+      "bodyLen": 449,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 1,
+      "per100": 0.2,
+      "codes": [
+        "ai_tone_phrase"
+      ]
+    },
+    {
+      "id": 107,
+      "platform": "视频号",
+      "title": "你以为缺流量？其实是缺变现",
+      "bodyLen": 566,
+      "spoken": "文字稿",
+      "workflow": "content_ready",
+      "hitCount": 1,
+      "per100": 0.2,
+      "codes": [
+        "case_claim"
+      ]
+    },
+    {
+      "id": 78,
+      "platform": "抖音",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 3657,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 5,
+      "per100": 0.1,
+      "codes": [
+        "ai_tone_phrase",
+        "platform_mixup",
+        "case_claim",
+        "experience_claim",
+        "consulting_tone"
+      ]
+    },
+    {
+      "id": 79,
+      "platform": "视频号",
+      "title": "如何用「原子化素材」告别灵感枯竭：让同一观点产生10条爆",
+      "bodyLen": 3657,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 5,
+      "per100": 0.1,
+      "codes": [
+        "ai_tone_phrase",
+        "platform_mixup",
+        "case_claim",
+        "experience_claim",
+        "consulting_tone"
+      ]
+    },
+    {
+      "id": 104,
+      "platform": "视频号",
+      "title": "情绪无能，是我的第一生产力：从内耗到内容生产的系统转换",
+      "bodyLen": 212,
+      "spoken": "文字稿",
+      "workflow": "draft",
+      "hitCount": 0,
+      "per100": 0,
+      "codes": []
+    }
+  ]
+}
