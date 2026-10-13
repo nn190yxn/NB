@@ -116,6 +116,70 @@ DBS（dontbesilent，抖音 49.7 万粉，开源方法论 `dontbesilent2025/dbsk
 
 上游取材（素材分池、选题入口改造、标记式改稿）的规划在 **`.monkeycode/specs/ratio-driven-intake/README.md`**（分 A/B/C/D 四期）。**阶段 0「撤退」与阶段 1「通电」已完成**；阶段 2 起尚未开工。
 
+**四步链路（角度→主张→成稿→装备）的实际状态见 2026-09-21 那一节**，要点三条：① 后台不热重载，改了 `server/` 必须重启，顶栏角标会在代码比进程新时红字，`npm run check-live` 用退出码说真话；② 素材身份只看归一化正文，同一句话从哪个门进来都只有一条，来源往后追加；③ 「提主张」一次跑**一对角度**、逐条入库，选题带 `angle` 与 `viewpoint_material_id`，生成时主观点与反方一定进简报。完整规格：`.monkeycode/specs/angle-claim-pipeline/`。
+
+
+## 让改动可被证明 + 四步链路接通（2026-09-21）
+
+**背景**：内测两个痛点——素材重叠、四步链路（定观点 → 提主张 → 成文 → 装备改写）跑不通。排查结论是**接线断了，不是功能缺**：后端五角色简报、派生素材不入案例位、配比账驱动选题，代码全在且测试全绿；断的是三处连接，外加一个更底层的可验证性问题。
+
+### ① 后台不热重载，导致一整天在测旧代码
+
+端口 3001 的进程启动于 01:15，当天 `server/`+`src/` 提交 36 次；Vite 会热更新、`node server/index.mjs` 不会。22:34 修的「相同素材不再叠份」因此一次都没生效，素材库里那 7 条同 checksum 的记录就是证据。
+
+- `server/build-info.mjs`：启动时记一次源码指纹（文件数 + 最新 mtime + 总字节，跳过 `data.json`、`*.test.mjs`、`node_modules`），每次读 `/api/version` 时重算并比对，得出 `stale`。**为什么不用 git commit 当判据**：工作区有未提交改动时 commit 不变，而那正是最容易「改了没生效」的时候；commit 只用于显示。
+- 顶栏 `BuildStatus` 角标显示后台版本与启动时间，`stale` 时红字「后台是旧代码，重启才生效」；读不到也标红（后台旧到没有这个接口时，正是要说出来的时候）。
+- `scripts/check-live.mjs`：给脚本和 CI 用，非最新退出码 1。
+- `scripts/sandbox-ui.mjs`（`npm run sandbox`）：真界面走查用的沙箱——后台读写 `server/data.json` 的副本、Vite 端口固定不让它悄悄跳号，脚本会先核对 `/api/version` 报出的 `data_file` 确实是副本才开界面。**要点**：界面上点一次「生成草稿」就会往数据文件里落一条真记录，所以任何端到端试错都别在真实后台上做。
+- 后台没应答（重启中、桌面端抢跑）时界面说「后台没有应答」并每 3 秒自探，不再把人推到登录页；顶栏角标悬停会写出「数据写在：哪个文件（json / mysql）」。
+- **一次生成只出抖音、视频号两版**（一次模型调用一版的钱）；**长文（公众号）和小红书笔记版走草稿卡最下面的「多平台发布 → 选平台 → 生成本平台版本」**，适配目标覆盖档案里勾的四个平台。改坏了想回去：草稿卡上「查看历史 → 恢复」，任何一次改写都留着上一版。
+- **「改了没生效」有两台机器，都要查**：① 后台不热重载 → 看顶栏角标 / `npm run check-live`；② 浏览器里的离线缓存（service worker）会喂旧 JS/CSS → 开发环境现在不再注册并会自动清掉旧缓存，若仍看到旧界面，按 **Ctrl+Shift+R** 硬刷新一次。
+- dev 启动改 `node --watch server/index.mjs`（实测 `data.json` 写入不在 import 图里，不会触发重启）；`start-local.mjs` 复用已运行服务前读 `/api/version`，陈旧就记 `reused_stale` 并写日志，不静默复用。
+- `/healthz` 的返回形状**没动**——它被 `auth.test.mjs` 用 `deepStrictEqual` 锁着，是监控契约。
+
+### ② 素材身份收敛成一套（`server/material-key.mjs`）
+
+身份 = `sha256(归一化正文)`，归一化即去掉空白与中英标点，与终稿回流比句子用的是**同一把尺子**（`return-flow.mjs` 那份私有实现改成引用它，不留第二套）。五条入库路径全部改用这一份：原子确认、上传/新建与桌面同步、追问回流、研究转素材（这条路原来干脆没有身份字段）。文件级哈希降级为 `source_checksum` 加一条来源引用。
+
+- 同文再入库：保留原记录、追加来源，返回 `duplicate: true`；`material_kind`/`unit_type` 不同时**只报 `identity_conflicts` 不自动改判**（宁可让人定一次，不让机器猜）。
+- `persistResearch` 同标题复用原编号，`collected` 标记不再被每次搜索冲掉。
+- `PATCH /api/materials/:id` 放开 `content`/`name`/`material_kind`/`unit_type`/`angle`，改正文会重算身份，撞车返回 409 并说出撞了哪一条。
+- 新增 `GET /api/materials/duplicates`；界面补上删除（归档）、编辑、「疑似重复」核对——后端两个 DELETE 路由一直存在，前端此前一次都没调用过。
+- `scripts/dedupe-materials.mjs` 自动合并历史重复（用户口径：不要逐组人工确认）：保留最早、来源合并、其余软删并记 `merged_into`，执行前自动备份到 `backups/`，可重入。已对真实数据执行，7 条并成 1 条。
+
+### ③ 四步链路接的三根线
+
+- **观点要有落点**：新增 `POST /api/topics`（标题 + 角度 + 主观点，也支持 `research_id` 一步把热点变选题）。`topics.angle` 与 `topics.viewpoint_material_id`；**主观点不新建实体，就是素材库里那条主张的编号**，所以它天然带来源、带逻辑判定。`profile.viewpoints` 仍不进提示词（那是账号偏好，不是本条选题的立场）。改角度与主观点走 `PUT /api/topics/:id/stance`，不复用 `revision`——它不改变这条选题值不值得做，不该让旧评估失效。
+- **主张要逐条存在**：「提主张」一次跑**一对角度**（如 老板/员工），产出两组主张并共享 `claims_run`；界面逐条勾选，一条主张 = 一条 OPI 素材。（旧行为是把三栏拼成一段话存一条，`claims[]` 数组当场丢弃。）
+- **料要真进简报**：`ComposePanel` 的请求补上 `material_ids`，选料按五角色分格（`GET /api/materials?by_role=1` 一次拿回五组，避免界面发五次请求、五次都可能失败）；`buildDraftBrief` 新增 `stance` 与 `counterparts`，`draftBriefPrompt` 给 QST/CON/OPI/CAS/SOL 各派一件事，并要求「先驳后立」驳的是 counterparts 里真实存在的另一种立场。主观点与反方即便用户没勾也自动进简报并进溯源。
+- **逻辑判定前移**：`/api/skills/claims/check` 逐条判主张自己站不站得住（三档 + 指得到原文的断点），结果绑在正文上、改文即退回 `stale`。**只标注不拦停**：不成立的主张照常进简报，界面上标灰 + 显示断点，留不留由人定。理由两条——用户明确说「逻辑可能不成立，但它的利观点还能用」；且实测同文同提示词跑 6 次只有 3 次抓到问题，不稳的判据不配当闸门。草稿那四道检查照旧不动。
+- **装备层只补一处漏**：文字稿转口播后原来把 `quality`/`publish_checklist` 清空（等于转完没人验收），现在当场重跑 persona + quality 并重扫不可溯源数字——都是本地判据，不额外花模型调用。
+
+### ④ 顺手清掉的骗人东西
+
+`POST /api/research/:id/analyze` 原来对任何条目都返回同一份写死拆解（连置信度都一样），现由模型看这条热点真拆（`server/research-analysis.mjs`），没配模型返回 422，失败时不落任何分析。另清掉 `script-flow.mjs` 无人调用的 `selfAnsweredPositions` 和与 `structure-flow.mjs` 重复的 `longSentenceLimit` 常量。
+
+### 测试并行的端口锁
+
+`server/test-port.mjs` 的锁目录原先按 `process.ppid` 分，且只发号不查占用：并行跑两套测试会拿到同一个端口，后绑的后台直接 `EADDRINUSE` 退出，测试里只剩一句看不懂的「异常退出: 1」。现在锁是全局共享的，锁文件里写持有者 pid（进程没了就接手），发号前查一次 `netstat` 让开桌面端 / Vite 正在监听的号，启动等待统一 20 秒。**改前双开必挂一片，改后单跑与并行双开都全绿**，并补了三条分配器回归。
+
+同理，陈旧检测只走后台的静态 import 图：把 `test-port.mjs`、`generation-test-helper.mjs` 这类后台不 import 的文件算进指纹，会让角标常年误报——而**报错的角标等于没有角标**。
+
+### 被显式改掉的三条旧测试口径（不是绕过）
+
+`web-assets.test.mjs`（把「请求不带 material_ids」锁成正确）、`claims.test.mjs`（「确认后恰好新增一条」）、`materials-atoms.test.mjs`（「原文完全相同才算重复」）。
+
+### 端到端验收脚本（`npm run verify-m2`）
+
+把「用户在界面上走一遍」变成可重跑的脚本：跑之前复制一份 `server/data.json` 到临时目录，测副本、**绝不碰真实数据**；加 `--run` 才真调模型（约 9 次），不加只跑不需要模型的步骤。步骤覆盖 S0 版本 → S1 无重复 → S2 热点 → S3 一对角度拆主张 → S4 逐条入库 → S5 查逻辑 → S6 立选题 → S7/S8 主观点与主张进简报 → S10 数字可溯源 → S11 转口播后仍有检查 → S13.5/S14 定稿 → S15/S16/S17 回流候选与确认。它把「上游模型故障」和「链路缺陷」分开统计（前者会重试并报 ENV，因为本项目没配备援模型，502 会随机复现）。
+
+### 已验证 / 未验证
+
+- 已验证：508 项自动化测试全绿（起点 445），累计连跑 20 次上下 + 并行双开两套均稳定、零异常退出、`tsc -b`、`vite build`、`check-live` 退出码 0、陈旧检测两条路径实测、重复素材清理实测、**真模型端到端 **19/19 步通过**（含此前一直卡着的「反方进简报」那一步）、**M2 九步在真实浏览器里走到底**（`npm run sandbox` 起的沙箱，读写副本，真实 `server/data.json` 校验和全程未变）。
+- 实机走查抓到的五个问题已当场修掉并加测试：应用「开头句」范式会吞掉整段无空行的正文（数据丢失级）、模型回答读不出时被报成「配置坏了」、老选题卡片显示 `先做这一步：undefined`、后台重启的几秒被当成未登录把人推去登录页、发布数据回填与数据回流候选在界面上根本没有入口。
+- 实跑抓到的三个真缺陷已修并在上面「真模型复验」段落记录；唯一未过的一步是模型那轮只给出一侧角度的主张，已改成界面上显式提示「这个角度没提出不同说法」，不再静默。
+- **仍未验证**：桌面端（Electron 壳）与生产 MySQL 模式下的这批改动——本轮全部验证都在 JSON 文件模式与本机浏览器。
+
 ## 三个加工面板改成左输入右结果，并补上漏写的多行框样式（2026-09-19）
 
 Alex 发了一张提主张的截图说「页面需要调整下，美观一些」。看下来是四件事，前三件是客观缺陷，第四件才是审美。全量 374 / 374 通过（新增 1 条前端静态断言），并在真实浏览器里逐页看了一遍。
@@ -622,6 +686,7 @@ node scripts/import-benchmark.mjs scripts/benchmarks/dontbesilent.json
 ## 项目文档索引
 
 - `.monkeycode/docs/ARCHITECTURE.md`：系统架构和数据边界
+- `docs/audits/2026-10-13-hands-on/README.md`：真界面实测（字号与行距失效、语言层 22 特征实际只响 3 条、去 AI 味改写前后对比、44 条撤回素材找不回）
 - `.monkeycode/docs/INTERFACES.md`：API 接口说明
 - `.monkeycode/docs/DEVELOPER_GUIDE.md`：开发与验证指南
 - `.monkeycode/docs/PRODUCTION_READINESS.md`：生产上线检查清单
