@@ -305,17 +305,18 @@ test('具体案例与数字必须有人确认', () => {
   const evidence = issueItems(invented).find(item => item.code === 'case_claim')
   assert.ok(evidence, '编造的客户案例必须留下证据')
   assert.equal(evidence.severity, 'warning')
-  assert.match(evidence.message, /案例人物/)
-  assert.match(evidence.message, /结果数字/)
+  assert.match(evidence.message, /提到了具体的人，还带着结果数字/, '理由要说成人话（2026-10-13 实测：界面把内部标签「案例人物+结果数字｜」直接给用户看了）')
   assert.match(evidence.message, /我有个客户/)
+  assert.match(evidence.quote, /^我有个客户/, '引用就是那一句原文，不拼标签')
+  assert.doesNotMatch(evidence.message, /｜/, '用户可见文案里不许出现内部分隔符')
   // case_claim 对不上 dbs-ai-check 的任何一条特征，所以只有名字、没有追问：不硬配。
   assert.match(evidence.label, /来路不明/)
   assert.equal(evidence.followup, '', '对不上特征就不给追问')
 
   const vendor = checkQuality({ ...baseDraft, body: '上个月，一位做本地家政的老板，提炼出一个核心观点：干净不是扫出来的，是收纳出来的。' }, {})
-  assert.match(issueItems(vendor).find(item => item.code === 'case_claim').message, /案例人物/)
+  assert.match(issueItems(vendor).find(item => item.code === 'case_claim').message, /提到了具体的人/)
   const numberOnly = checkQuality({ ...baseDraft, body: '- 案例：某本地老板转型三个月，因定位模糊，流量归零。' }, {})
-  assert.match(issueItems(numberOnly).find(item => item.code === 'case_claim').message, /结果数字/)
+  assert.match(issueItems(numberOnly).find(item => item.code === 'case_claim').message, /带着结果数字/)
 
   // 不能误伤：通用判断、单纯反问客户、真实时间描述
   const judgement = checkQuality({ ...baseDraft, body: '定位不清的内容都是无效自晒。先想清楚你卖给谁，再决定写什么。' }, {})
@@ -333,12 +334,12 @@ test('真模型实测绕过词表的两种写法，现在要能挑出来', () =>
   const founderBySide = checkQuality({ ...baseDraft, body: '我身边有个创业者，情绪极敏感，做内容三天打鱼两天晒网。' }, {})
   const bySide = issueItems(founderBySide).find(item => item.code === 'case_claim')
   assert.ok(bySide, '「我身边有个创业者」是人物前缀 + 人物词：必须留下证据')
-  assert.match(bySide.message, /案例人物/)
+  assert.match(bySide.quote, /我身边有个创业者/, '引用指向原句')
   assert.match(bySide.message, /创业者/)
 
   // 人物前缀「有个」单独也认（「有个同行」这类写法）。
   const peer = checkQuality({ ...baseDraft, body: '有个同行上个月把账号停更了两周。' }, {})
-  assert.match(issueItems(peer).find(item => item.code === 'case_claim').message, /案例人物/)
+  assert.match(issueItems(peer).find(item => item.code === 'case_claim').message, /提到了具体的人/)
 
   // 不能因为新加的前缀就误伤作者自己的经历：第一人称不算「来路不明的案例」。
   const own = checkQuality({ ...baseDraft, body: '我以前的内耗，就是总想着感觉对了再动，后来我把这种内耗硬改成了生产力。' }, {})
@@ -353,7 +354,7 @@ test('编经历：自己的经历数量要拿出来让人确认', () => {
   const reviewedHit = issueItems(reviewed).find(item => item.code === 'experience_claim')
   assert.ok(reviewedHit, '「复盘过 5 个账号」必须被挑出来')
   assert.equal(reviewedHit.severity, 'warning', '只提醒，不拦停')
-  assert.match(reviewedHit.message, /经历数量/)
+  assert.match(reviewedHit.message, /你自己做过多少/, '理由要说成人话，不是「经历数量」这种内部说法')
   assert.match(reviewedHit.message, /复盘过/)
 
   // 经历动作 + 量词，没有名词也认（「改了 8 遍」）。

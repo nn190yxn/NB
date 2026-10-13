@@ -110,6 +110,29 @@ function formatLeakHits(body) {
 const casePersonPattern = /(我有个|有个|有一个|有一位|有位|某|某位|一位|一个)(做[^，。]{0,8}的)?(老板|客户|学员|同行|朋友|宝妈|店长|创始人|创业者|阿姨)/
 const caseResultPattern = /(涨粉|粉丝\d|翻了?\d|翻倍|多赚|省下|归零|成交额|复购率|\d+个月涨粉)/
 
+// 内部命中串是「标签｜句子」的形状（去重要按整串算），但不能就这样给用户看：
+// 实测界面里出现过「正文出现自己的经历数量：第一人称经历｜我们常说……」这种把内部标签
+// 和同一句原文重复两遍的文案。用户看到的东西必须是人话，所以这里拆成 reason 和 sentence。
+const claimReasonLabels = {
+  案例人物: '提到了具体的人',
+  结果数字: '带着结果数字',
+  '案例人物+结果数字': '提到了具体的人，还带着结果数字',
+  经历动作: '说自己做过多少',
+  重复次数: '说改过多少回',
+  第一人称经历: '说自己经手过多少',
+}
+
+function splitClaimHit(hit) {
+  const raw = String(hit || '')
+  const index = raw.indexOf('｜')
+  if (index < 0) return { reason: '', sentence: raw }
+  return { reason: claimReasonLabels[raw.slice(0, index)] || '', sentence: raw.slice(index + 1) }
+}
+
+function claimSentences(hits) {
+  return hits.map(hit => splitClaimHit(hit).sentence).filter(Boolean)
+}
+
 function caseClaimHits(body) {
   const hits = []
   for (const rawLine of String(body || '').split(/[\n。！？]/)) {
@@ -733,9 +756,9 @@ function writingIssues(draft) {
   const methodHits = methodTalkHits(draft?.body)
   if (methodHits.length) add('method_talk', `正文在讲方法或分发骨架：${methodHits.join('、')}`, '', methodHits[0])
   const caseHits = caseClaimHits(draft?.body)
-  if (caseHits.length) add('case_claim', `正文出现具体案例或数字：${caseHits.join('、')}`, '', caseHits[0])
+  if (caseHits.length) add('case_claim', `正文里有几句${[...new Set(caseHits.map(hit => splitClaimHit(hit).reason).filter(Boolean))].join('、') || '写了具体的人和数字'}，真假只有你能核实：${claimSentences(caseHits).map(item => `「${item}」`).join('')}`, '', claimSentences(caseHits)[0])
   const experienceHits = experienceClaimHits(draft?.body)
-  if (experienceHits.length) add('experience_claim', `正文出现自己的经历数量：${experienceHits.join('、')}`, '', experienceHits[0])
+  if (experienceHits.length) add('experience_claim', `正文里有几句说的是你自己做过多少（次数、人数、账号数），这些只有你能核实：${claimSentences(experienceHits).map(item => `「${item}」`).join('')}`, '', claimSentences(experienceHits)[0])
   const toneHits = consultingToneWords.filter(word => String(draft?.body || '').includes(word)).slice(0, 6)
   if (toneHits.length) add('consulting_tone', `正文出现咨询腔或工程词：${toneHits.join('、')}`, '', toneHits[0])
   const concessions = concessionHits(draft?.body)
