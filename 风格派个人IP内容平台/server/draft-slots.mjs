@@ -113,7 +113,25 @@ export function bodySegments(body) {
     firstEnd,
     lastStart,
     start,
+    // 整篇没有一处空行（口播稿转换后通常就是一整段）：开头段＝结尾段＝整篇。
+    singleBlock: firstEnd === rest.length && lastStart === 0,
   }
+}
+
+// 一整段没有空行时，「开头」/「结尾」只能按句子算：第一句是开头，最后一句是结尾。
+const firstSentenceEnd = /^[^。！？!?]*[。！？!?]/
+
+export function afterFirstSentence(text) {
+  const match = firstSentenceEnd.exec(text)
+  if (!match || match[0].length >= text.length) return null
+  return text.slice(match[0].length)
+}
+
+export function beforeLastSentence(text) {
+  for (let index = text.length - 2; index >= 0; index -= 1) {
+    if ('。！？!?'.includes(text[index])) return text.slice(0, index + 1)
+  }
+  return null
 }
 
 export function replaceBodySegment(body, position, replacement) {
@@ -122,6 +140,17 @@ export function replaceBodySegment(body, position, replacement) {
   const lines = String(body || '').split('\n')
   const segments = bodySegments(body)
   if (!segments.openingRange || !segments.endingRange) return text
+  if (segments.singleBlock) {
+    // 这时区间覆盖整篇，照区间替换会把正文其余部分全吃掉：
+    // 用户点的是「换开头」，回来稿子只剩一句 —— 静默丢内容，比报错更糟。
+    const whole = segments.opening
+    if (position === 'opening') {
+      const remainder = afterFirstSentence(whole)
+      return remainder ? `${text}${remainder}` : text
+    }
+    const head = beforeLastSentence(whole)
+    return head ? `${head}${text}` : text
+  }
   const [from, to] = position === 'opening' ? segments.openingRange : segments.endingRange
   return [...lines.slice(0, from), ...text.split('\n'), ...lines.slice(to)].join('\n').replace(/\n{3,}/g, '\n\n').trim()
 }

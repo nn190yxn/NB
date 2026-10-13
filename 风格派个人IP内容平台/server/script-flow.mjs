@@ -10,17 +10,17 @@
 //
 // 来源：dbs-script-flow（CC BY-NC 4.0，dontbesilent2025/dbskill）。三维检查法逐条对应源技能第二步。
 
+// 长句门槛与结构层共用一个数：两处各写一遍 30，改一处忘另一处就是两把尺子。
+import { longSentenceLimit } from './structure-flow.mjs'
+
 export const scriptFlowAxes = [
   { id: 'continuity', label: '段落衔接', verdicts: ['断裂', '勉强', '成立'], question: '上一段的最后一句和这一段的第一句之间，缺不缺一句承上启下' },
   { id: 'density', label: '信息密度', verdicts: ['塌陷', '偏松', '合适'], question: '这一段在重复前面说过的、或绕圈子，还是每句都在推进' },
   { id: 'spoken', label: '口播流畅', verdicts: ['拗口', '偏书面', '顺'], question: '这句话能不能一口气念出来，有没有术语和自问自答堆着' },
 ]
 
-// 源技能的标准：超过 30 字的单句要警惕。
-const longSentenceLimit = 30
 // 书面语词表：口播稿里念出来会卡的字眼。
 const writtenStyleWords = ['针对', '鉴于', '基于以上', '综上所述', '与此同时', '值得注意的是', '换言之', '一定程度上', '在此基础', '从而', '以便', '予以', '加以', '进一步而言']
-const questionTailPattern = /[吗呢吧]\s*[？?]\s*$/
 
 function text(value) { return String(value ?? '').trim() }
 
@@ -54,16 +54,6 @@ export function longSentences(body) {
 
 export function writtenStyleHits(body) {
   return sentences(body).filter(sentence => writtenStyleWords.some(word => sentence.includes(word)))
-}
-
-// 自问自答：连续出现才是问题——源技能写的是「偶尔可以，连续用会烦」。
-export function selfAnsweredPositions(body) {
-  const list = sentences(body)
-  const positions = []
-  for (let index = 0; index < list.length - 1; index += 1) {
-    if (questionTailPattern.test(list[index]) || /[？?]$/.test(list[index])) positions.push(index + 1)
-  }
-  return { count: positions.length, sentences: positions.map(index => index).length, sample: positions.slice(0, 3).map(index => list[index - 1]).filter(Boolean) }
 }
 
 // 重复表述：短句按整句比（抓原样重复），长句按前 8 个字比（抓「换了说法讲同一件事」）。

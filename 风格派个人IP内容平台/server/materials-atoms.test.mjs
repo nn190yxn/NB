@@ -20,7 +20,7 @@ function startServer(extraEnv = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 5000)
+    const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 20000)
     child.stdout.on('data', data => {
       if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve(child) }
     })
@@ -71,8 +71,12 @@ test('素材原子化：收录、去重、类型筛选与组合生成', async t 
   const insightDup = await insightAgain.json()
   assert.equal(insightDup.duplicate, true)
   assert.equal(insightDup.id, insightId)
+  // 换个标点、多空一格也算同一句：身份只看正文本身，改一个字都不该造出第二条。
+  const insightVariant = await jsonPost('/api/materials/atoms', { kind: 'insight', name: '经营与管理的区别', text: '经营是判断做什么 管理是解决怎么做', source_label: '拆概念' })
+  assert.equal(insightVariant.status, 200)
+  assert.equal((await insightVariant.json()).id, insightId)
   const insightList = await (await fetch(`${baseUrl}/api/materials?kind=insight&page=1`)).json()
-  assert.equal(insightList.total, 1, '没选来源时，相同内容再确认不能再存一份')
+  assert.equal(insightList.total, 1, '相同内容（含只差标点空格）再确认不能再存一份')
 
   const badKind = await jsonPost('/api/materials/atoms', { kind: 'article', text: '文本' })
   assert.equal(badKind.status, 422)

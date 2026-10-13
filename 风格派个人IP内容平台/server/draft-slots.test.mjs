@@ -75,6 +75,32 @@ test('空改写结果被拒绝，不会把正文清空', () => {
   assert.throws(() => applySlotRewrite({ slot: 'structure', draft: { body: '原文' }, rewritten: '' }), /改写结果为空/)
 })
 
+// 沙箱界面走查抓到的丢内容缺陷：口播稿转换出来就是一整段（没有空行），
+// 这时首尾段区间＝整篇，套区间等于把正文其余部分全删掉——549 字的稿子点一次「开头句」剩 86 字。
+test('一整段没有空行的稿子：换开头只换第一句，换结尾只换最后一句', () => {
+  const spoken = '西贝温州万象城店十年闭店，无数人骂员工人效低。但你以为这是人的问题，就错得离谱了。真正的原因是账算在了人身上，而不是流程上。'
+  assert.equal(bodySegments(spoken).singleBlock, true)
+  const opened = replaceBodySegment(spoken, 'opening', '店关了就关了吧，别急着骂员工。')
+  assert.ok(opened.startsWith('店关了就关了吧，别急着骂员工。但你以为这是人的问题'), `开头没按句界替换：${opened}`)
+  assert.match(opened, /真正的原因是账算在了人身上，而不是流程上。$/, '换开头把后面的正文弄丢了')
+  const ended = replaceBodySegment(spoken, 'ending', '先去看单店账，再谈扩张。')
+  assert.ok(ended.startsWith('西贝温州万象城店十年闭店，无数人骂员工人效低。但你以为这是人的问题'), '换结尾动到了前面的正文')
+  assert.match(ended, /先去看单店账，再谈扩张。$/)
+  assert.ok(ended.length > '先去看单店账，再谈扩张。'.length, '换结尾把整篇清空了')
+})
+
+test('整段只有一句话时，换开头换结尾就是换它，不追加空话', () => {
+  assert.equal(replaceBodySegment('就一句话。', 'opening', '换成了另一句。'), '换成了另一句。')
+  assert.equal(replaceBodySegment('就一句话。', 'ending', '换成了另一句。'), '换成了另一句。')
+})
+
+test('多段稿子的原有行为不动（回归）', () => {
+  const body = '第一段\n\n第三段\n\n最后一段'
+  assert.equal(bodySegments(body).singleBlock, false)
+  assert.equal(replaceBodySegment(body, 'opening', '换了开头'), '换了开头\n\n第三段\n\n最后一段')
+  assert.equal(replaceBodySegment(body, 'ending', '换了结尾'), '第一段\n\n第三段\n\n换了结尾')
+})
+
 test('applySlotRewrite 按槽位产出对应补丁', () => {
   const draft = { title: '旧标题', body: '标题：旧标题\n\n正文：\n第一段\n\n最后一段' }
   assert.deepEqual(applySlotRewrite({ slot: 'title', draft, rewritten: '「新标题」' }), { title: '新标题' })

@@ -53,6 +53,9 @@ export async function startGenerationMock({ adaptBody } = {}) {
       // 于是「越改越短」这种失败形态在测试里永远看不到。现在按原稿回写，长度基本不变。
       const current = String(last.match(/当前正文：\n([\s\S]*?)(?=\n上一稿(?:没过验收)?：|$)/)?.[1] || '').trim()
       if (mode === 'shrink_revise') return reply('点赞会撒谎，询盘不会。')
+      // 「同一稿回写」：长度不减、问题原样留着。测的是「没改善也要落库并说清楚」，
+      // 而不是整笔拒收——拒收在界面上就是「按了没反应」。
+      if (mode === 'same_revise') return reply(current || '点赞会撒谎，询盘不会。')
       if (!current) return reply(`按意见改写：${note}。点赞会撒谑，询盘不会。`)
       return reply(`按意见改写：${note}。\n${current.replace(/？/g, '。')}`)
     }
@@ -160,12 +163,50 @@ export async function startGenerationMock({ adaptBody } = {}) {
       return reply(JSON.stringify({ findings: [{ problem: quote, remedy: '把念头切成碎片', explain: '治的是不知道说什么' }] }))
     }
     if (system.includes('主张提炼')) {
-      const text = JSON.parse(last).text
+      const input = JSON.parse(last)
+      const text = input.text
+      // 「空角度」模拟真模型第二种失败：第二个角度第一轮交白卷，被明确逼问一次才给出这个立场的说法。
+      // 白卷本身是合法回答（素材可能真没角度差），所以只有带 already_stated 的第一轮才装死。
+      if (text.includes('空角度') && input.already_stated && !system.includes('上一次这个角度什么也没提')) {
+        return reply(JSON.stringify({ claims: [], mechanism: '', judgement: '', scope: '', why: '' }))
+      }
       // 「单一主张」用来测不触发提示的那条路径。
       const claims = text.includes('单一主张')
         ? ['先给判断，再给一步能做的动作']
         : ['内容要按成交写，不按流量写', '点赞会撒谎，询盘不会', '案例比观点更能带来咨询']
-      return reply(JSON.stringify({ claims, mechanism: '把内容当成一次可复盘的成交实验', judgement: `核心判断：${claims[0]}`, scope: '适用于已经有成交动作的账号', why: '因为只有询盘能反馈内容有没有用' }))
+      // 一个角度一次调用（真模型把两个角度塞在一起时会全部标成第一个角度）。
+      // mock 按提示词里的角度出话，且不同角度的主张文本不同——否则合并时会被同文去重吃掉。
+      const asked = system.match(/只从「([^」]{1,20})」这个角度/)?.[1] || ''
+      const pool = asked ? [
+        { text: `【${asked}】内容要按成交写，不按点赞写`, angle: asked },
+        { text: `【${asked}】案例比观点更能带来咨询`, angle: asked },
+      ] : claims.map(claim => ({ text: claim, angle: '' }))
+      const shown = text.includes('单一主张') ? [{ text: '先给判断，再给一步能做的动作', angle: asked }] : pool
+      return reply(JSON.stringify({ claims: shown, mechanism: '把内容当成一次可复盘的成交实验', judgement: `核心判断：${asked || shown[0]?.text || claims[0]}`, scope: '适用于已经有成交动作的账号', why: '因为只有询盘能反馈内容有没有用' }))
+    }
+    if (system.includes('主张的逻辑检查员')) {
+      const claim = JSON.parse(last).claim
+      // 「站不住」三个字的主张当反例用，其余一律判成立——只测形状，不测模型判断力。
+      if (String(claim).includes('站不住')) return reply(JSON.stringify({ status: 'failed', breakpoint: String(claim).slice(0, 20), note: '结论跳到了依据管不到的地方' }))
+      // 「只对」这条故意用中文档位 + ```json 围栏返回：真模型就是这么回的，
+      // 解析入口不认这两种写法的话，这里就得红。
+      if (String(claim).includes('只对')) return reply('```json ' + JSON.stringify({ status: '有条件成立', breakpoint: '', note: '只对它声明的那类人成立，正文要带上这个限定' }) + ' ```')
+      return reply(JSON.stringify({ status: 'passed', breakpoint: '', note: '依据能撑住结论' }))
+    }
+    if (system.includes('爆款方法拆解助手')) {
+      const item = JSON.parse(last)
+      // 拆解必须跟着条目走：写死一份就等于原来那个假分析。
+      return reply(JSON.stringify({
+        hook: `${item.title} 靠反常识开场留人`,
+        audience: item.platform || '通用',
+        pain_point: '不知道从哪个角度切',
+        thesis: item.title,
+        structure: ['反常识开场', '真实案例', '方法拆解'],
+        quotes: [],
+        cta: '说说你踩过的坑',
+        transferable_patterns: ['用具体过程替代空泛观点'],
+        confidence: 0.4,
+      }))
     }
     if (system.includes('概念拆解')) {
       const term = JSON.parse(last).term

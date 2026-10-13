@@ -9,6 +9,8 @@
 // 确认时还可以指明它替换掉 22 个通用特征里的哪一条，替换过程同样留在记录里。
 
 import { aiFeatures } from './ai-features.mjs'
+import { normalizeMaterialText } from './material-key.mjs'
+import { viewsMetricWords } from './growth.mjs'
 
 export const preferenceKinds = ['终稿回流', '数据回流']
 export const preferenceStatuses = ['pending', 'active', 'rejected']
@@ -21,7 +23,8 @@ const structureLine = /^(#{1,6}\s*|标题[:：]|正文[:：])/
 const explanationMarkers = ['因为', '所以', '这是因为', '意思是', '也就是说', '举个例子']
 const summaryMarkers = ['总之', '所以说', '记住', '一句话', '归根到底']
 
-const normalize = text => String(text || '').replace(/\s+/g, '').replace(/[，。！？；：、,.!?;:""''（）()「」]/g, '')
+// 比句子用的是素材身份那把尺子，两处共用一份实现（见 material-key.mjs）。
+const normalize = normalizeMaterialText
 
 export function splitSentences(body) {
   const sentences = []
@@ -128,7 +131,13 @@ export function performanceSignalNote(snapshots = []) {
 
 // 数据回流：只认用户确认过的快照。待确认的表现数据不算数，免得拿着没核过的数字去改选题。
 export function performanceCandidates(snapshots = []) {
-  const confirmed = snapshots.filter(item => item?.status === 'confirmed' && typeof item?.metrics?.views === 'number')
+  // 原来这里读 metrics.views（英文键），而界面回填的是「播放量」，
+  // 于是数据回流一条候选都产不出来——闭环最后一段一直是断的（真实数据 preferences 恒为 0 就是这个）。
+  const viewsOf = item => {
+    const entry = Object.entries(item?.metrics || {}).find(([key, value]) => Number(value) > 0 && viewsMetricWords.some(word => String(key).toLowerCase().includes(word)))
+    return entry ? Number(entry[1]) : null
+  }
+  const confirmed = snapshots.map(item => (item ? { ...item, views: viewsOf(item) } : item)).filter(item => item?.status === 'confirmed' && typeof item.views === 'number')
   const byPlatform = new Map()
   for (const item of confirmed) {
     const list = byPlatform.get(item.platform) || []
@@ -138,16 +147,16 @@ export function performanceCandidates(snapshots = []) {
   const candidates = []
   for (const [platform, list] of byPlatform) {
     if (list.length < 2) continue
-    const ranked = [...list].sort((a, b) => (b.metrics.views || 0) - (a.metrics.views || 0))
+    const ranked = [...list].sort((a, b) => (b.views || 0) - (a.views || 0))
     const best = ranked[0]
     const worst = ranked[ranked.length - 1]
     if (best.id === worst.id) continue
     candidates.push({
       local_id: `platform-${platform}`,
       kind: '数据回流',
-      observation: `${platform} 上「${best.draft_id ? `草稿 ${best.draft_id}` : '某条'}」拿了 ${best.metrics.views} 播放，最低那条只有 ${worst.metrics.views}`,
+      observation: `${platform} 上「${best.draft_id ? `草稿 ${best.draft_id}` : '某条'}」拿了 ${best.views} 播放，最低那条只有 ${worst.views}`,
       proposal: `偏好：${platform} 这条选题方向值得再做，下一轮选题可以往这偏。`,
-      evidence: { platform, best: { draft_id: best.draft_id, views: best.metrics.views }, worst: { draft_id: worst.draft_id, views: worst.metrics.views } },
+      evidence: { platform, best: { draft_id: best.draft_id, views: best.views }, worst: { draft_id: worst.draft_id, views: worst.views } },
       source: { snapshot_ids: [best.id, worst.id] },
     })
   }

@@ -127,6 +127,9 @@ export function defaultTopicFields(topic) {
     // 形式判断判完存这里，生成草稿时按它写。没判过就是空，生成时落回平台默认。
     content_format: topic.content_format || '',
     content_format_reason: topic.content_format_reason || '',
+    // 角度与主观点（批次 3）：站哪个角度看这件事、要立住哪条主张。老选题没这两个字段，读出来是空。
+    angle: topic.angle || '',
+    viewpoint_material_id: Number.isFinite(Number(topic.viewpoint_material_id)) && Number(topic.viewpoint_material_id) > 0 ? Number(topic.viewpoint_material_id) : null,
   }
 }
 

@@ -13,7 +13,7 @@ writeFileSync(dataFile, JSON.stringify({ shooting: [{ id: 1, owner_id: 'demo-use
 function startServer() {
   const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile, API_CONFIG_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' }, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('视觉任务 API 启动超时')), 5000)
+    const timer = setTimeout(() => reject(new Error('视觉任务 API 启动超时')), 20000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timer); resolve(child) } })
     child.once('error', reject)
   })

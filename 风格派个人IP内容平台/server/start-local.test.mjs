@@ -79,11 +79,27 @@ test('服务未运行时使用固定 npm 参数启动并等待健康检查', asy
 
   assert.equal(result.ok, true)
   assert.deepEqual(spawns.map(item => item.args), [
-    ['run', 'server'],
+    ['run', 'server:watch'],
     ['run', 'dev', '--', '--host', '127.0.0.1'],
   ])
   assert.ok(spawns.every(item => item.command === 'npm' && item.cwd === projectRoot && item.windowsHide))
   assert.deepEqual(opened, ['http://127.0.0.1:5173/'])
+})
+
+test('复用的后台若跑的是旧代码，要标成 reused_stale 并写进日志', async () => {
+  const lines = []
+  const result = await runLauncher(baseOptions({
+    logger: (scope, message) => lines.push(`${scope} ${message}`),
+    fetchFn: async url => (url.includes(':3001')
+      ? { ok: true, json: async () => ({ status: 'ok', stale: true, started_at: '2026-09-20T01:15:44.000Z' }) }
+      : healthyResponse(url)),
+    spawnFn: () => { throw new Error('不应启动新进程') },
+  }))
+
+  assert.equal(result.ok, true, '旧代码后台仍然能用，不能把它当成启动失败')
+  assert.equal(result.status.API, 'reused_stale')
+  assert.equal(result.status.VITE, 'reused')
+  assert.ok(lines.some(line => line.includes('旧代码') || line.includes('重启')), '要在日志里说清楚：看到的行为不是最新代码的行为')
 })
 
 test('未知服务占用端口时拒绝启动且不打开浏览器', async () => {

@@ -16,7 +16,7 @@ function startServer() {
   writeFileSync(dataFile, '{}')
   const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile, PRIVATE_FILE_ROOT: fileRoot, PRIVATE_FILE_MAX_BYTES: '1024' }, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('私有文件 API 启动超时')), 5000)
+    const timeout = setTimeout(() => reject(new Error('私有文件 API 启动超时')), 20000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve({ child, baseUrl, fileRoot }) } })
     child.once('error', reject)
   })

@@ -7,6 +7,11 @@
     "scripts": {
         "dev": "vite --host 0.0.0.0",
         "server": "node server/index.mjs",
+        "server:watch": "node --watch server/index.mjs",
+        "check-live": "node scripts/check-live.mjs",
+        "dedupe": "node scripts/dedupe-materials.mjs",
+        "verify-m2": "node scripts/verify-m2.mjs",
+        "sandbox": "node scripts/sandbox-ui.mjs",
         "db:migrate": "node server/migrate.mjs",
         "db:backup": "bash scripts/backup-mysql.sh",
         "typecheck": "tsc -b --pretty false",

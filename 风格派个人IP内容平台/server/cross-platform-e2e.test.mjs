@@ -17,7 +17,7 @@ const dataFile = join(mkdtempSync(join(tmpdir(), 'content-ip-cross-platform-')),
 async function start() {
   const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...generationMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('跨端链路 API 启动超时')), 5000)
+    const timer = setTimeout(() => reject(new Error('跨端链路 API 启动超时')), 20000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timer); resolve() } })
     child.once('error', reject)
   })

@@ -20,8 +20,12 @@ async function callPayload(config, body, timeoutMs = DEFAULT_TIMEOUT_MS) {
     })
     if (!response.ok) throw new Error(`服务返回 ${response.status}`)
     const payload = await response.json()
-    const content = payload?.choices?.[0]?.message?.content
+    const choice = payload?.choices?.[0]
+    const content = choice?.message?.content
     if (typeof content !== 'string' || !content.trim()) throw new Error('响应内容为空或格式无效')
+    // 被 token 上限截断的回答一定读不出 JSON。不点名的话，它会以「解析失败」的面目出现，
+    // 人就去看本来没问题的解析代码了。
+    if (choice?.finish_reason === 'length') throw new Error(`模型回答被长度上限截断（${content.length} 字后停住），这次结果不算数，请重试或让输入更短。`)
     return content.trim()
   } catch (error) {
     if (error?.name === 'AbortError') throw new Error('请求超时')

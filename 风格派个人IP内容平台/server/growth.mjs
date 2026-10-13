@@ -36,6 +36,9 @@ export function deterministicAdaptation(draft, platform, profile, prohibitedHits
   return { title, body, hashtags, provider: 'builtin' }
 }
 
+// 界面回填的指标是中文键（播放量、点赞数），截图提取出来的也可能是英文键。
+// 导出口径只有一把：任何按指标算的地方都走这里，别各自 find 一遍。
+export const viewsMetricWords = ['play', 'view', '播放', '阅读']
 const metricValue = (metrics, words) => {
   const entry = Object.entries(metrics || {}).find(([key, value]) => Number(value) > 0 && words.some(word => String(key).toLowerCase().includes(word)))
   return entry ? Number(entry[1]) : 0

@@ -186,14 +186,19 @@ export function groupMaterialsByRole(materials) {
   return groups
 }
 
-export function buildDraftBrief({ topic, structure, quotes, experiences, materials, memories, mechanisms, hookText, format }) {
+export function buildDraftBrief({ topic, structure, quotes, experiences, materials, memories, mechanisms, hookText, format, stance, counterparts }) {
   const roleGroups = groupMaterialsByRole(materials)
   const roleCount = draftMaterialRoles.reduce((sum, role) => sum + roleGroups[role].length, 0)
   const librarySteps = Array.isArray(structure?.steps) ? structure.steps.map(step => String(step)).filter(Boolean) : []
   const usingLibrary = librarySteps.length > 0
+  const stanceText = String(stance?.text || '').trim()
   return {
     title: String(topic?.title || '').trim(),
     strategy_layer: String(topic?.strategy_layer || 'trust'),
+    // 主观点：这条选题要立住的那个判断。之前它压根不在简报里，模型只拿到一个标题。
+    stance: stanceText ? { text: stanceText, angle: String(stance?.angle || '').trim() || null, logic_state: String(stance?.logic_state || 'unchecked'), source: String(stance?.source || '').trim() || null } : null,
+    // 反方：同一件事的另一个角度说出来的主张。写「先驳后立」时驳的就是这些，不是发明的靶子。
+    counterparts: (counterparts || []).map(item => ({ text: String(item.text || '').trim(), angle: String(item.angle || '').trim(), logic_state: String(item.logic_state || 'unchecked') })).filter(item => item.text),
     hook: String(hookText || '').trim(),
     structure: usingLibrary ? librarySteps : [...defaultDraftStructure],
     structure_source: usingLibrary ? 'library' : 'default',
@@ -233,6 +238,11 @@ export function draftBriefPrompt(profile = {}, format = defaultContentFormat(dra
   ].filter(Boolean).join('；')
   return [
     '你是个人 IP 的文案写手。根据写作简报，为每个平台写一篇平铺直叙、逻辑清楚的文字稿（不是提纲，不要写"请补充"之类的占位）。这一步不要写成口播稿。',
+    // 简报里的五种认知角色各派一件事。之前只给案例位派了活，其余角色进了简报也没用途。
+    '简报 material_roles 里各角色的用途：QST 问题=开头要替读者说出的那个疑问；CON 概念=需要澄清的说法，别默认读者懂；OPI 主张=正文要立住的判断；CAS 案例=唯一能引用的事实；SOL 方案=结尾那一步动作。',
+    'brief.stance 有值时，整篇就是要立住它：开头给的是它，结尾回到它。它和标题不是一回事，标题可以起别的说法，判断不许换掉。',
+    'brief.counterparts 有值时，「先驳后立」驳的就是这些反方主张：先写出对方会怎么反驳（点明那是哪个角度的说法），再说明为什么仍然站得住。不许凭空发明「大家都觉得」这种靶子。反方为空才退回常规写法。',
+    '反方主张或主观点的 logic_state 是 conditional 时，写的时候带上它声明的适用条件；failed 只表示推理有断点，不代表不能用，按简报原样写，别自己替它补那一步。',
     '读者是普通人，不是同事。用完整段落把一件事讲清楚，像写给熟人看的长文，不要口播节奏。',
     `禁止咨询腔和工程词：${consultingToneWords.join('、')}。也不要把简报里的英文字段名、公式名写进正文。`,
     '不要写成名词解释（「什么是X」），不要「一、二、三」说明书，不要排比收成「你不是A，你是B」。',

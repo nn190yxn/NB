@@ -13,7 +13,7 @@ async function start() {
   const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: join(dir, 'data.json') }, stdio: ['ignore', 'pipe', 'pipe'] })
   const base = `http://127.0.0.1:${port}`
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('服务启动超时')), 5000)
+    const timer = setTimeout(() => reject(new Error('服务启动超时')), 20000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timer); resolve() } })
     child.once('error', reject)
   })

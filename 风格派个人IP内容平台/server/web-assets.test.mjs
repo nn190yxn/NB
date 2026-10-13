@@ -72,6 +72,16 @@ test('Service Worker 缓存应用壳并绕过 API 请求', () => {
   assert.match(serviceWorker, /caches\.open\(CACHE_NAME\)/)
   assert.match(serviceWorker, /pathname\.startsWith\('\/api\/'\)/)
   assert.match(serviceWorker, /caches\.match\('\/'\)/)
+  // 甲方实机看到的旧界面就是被「缓存优先」喂出来的：改了、刷了，还是上一份。
+  assert.equal(/caches\.match\(event\.request\)\.then\(cached => \{\s*const network/.test(serviceWorker), false, '静态资源不许再回到「先给缓存、后台才更新」')
+  assert.match(serviceWorker, /fetch\(event\.request\)\.then\(response => \{[\s\S]{0,240}\}\)\.catch\(\(\) => caches\.match\(event\.request\)/, '静态资源要网络优先、断网才回缓存')
+})
+
+test('开发环境不注册离线缓存，还要把旧的清掉', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /import\.meta\.env\.PROD\) void navigator\.serviceWorker\.register\('\/sw\.js'\)/, '开发环境也在注册离线缓存，会喂旧文件')
+  assert.match(source, /registration\.unregister\(\)/, '开发环境要把之前装的 service worker 注销')
+  assert.match(source, /caches\.delete\(key\)/, '注销后还要清掉旧缓存，不然刷新还是旧的')
 })
 
 test('样式包含键盘焦点和减少动态效果规则', () => {
@@ -234,7 +244,9 @@ test('素材库原子化与组合生成前端特征', () => {
   assert.match(source, /kind_counts=1/)
   assert.match(source, /function ComposePanel/)
   assert.match(source, /组合生成/)
-  assert.match(source, /quote_ids: quoteIds, experience_ids: experienceIds/)
+  // 断线本身曾经被锁成正确：生成请求必须带按角色选中的 material_ids，否则简报永远是空的。
+  assert.match(source, /material_ids: materialIds, quote_ids: quoteIds, experience_ids: experienceIds/)
+  assert.match(source, /\/api\/materials\?by_role=1/)
   // 对标素材必须看得出出处，并且能直接读到正文
   assert.match(source, /const materialSourceLabel = \(item: MaterialItem\)/)
   assert.match(source, /const materialPatternTag = \(item: MaterialItem\)/)
@@ -379,3 +391,127 @@ test('拆概念/提主张/形式判断是左输入右结果，多行框样式完
     assert.match(source.slice(headEnd, headEnd + 220), /\{error && <p className="structure-error"/, `${kicker} 后面的报错提示丢了`)
   }
 })
+
+// 后台不热重载这件事，之前只能靠人记住（结果就是白测一整天旧代码）。
+// 界面上那一小块角标是唯一的提醒，删掉它就等于把这条教训丢了。
+// 角度必须排在「提主张」按钮之前：放在结果区等于第一次运行被默认那对角度悄悄决定（实机走查时发现的）。
+// datalist 的 id 也要各面板自己带：跨面板共用一个 id，素材库单独打开时就选不到建议词。
+test('提主张的角度要在点按钮之前就能选，两个面板各自带自己的建议词表', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  const claims = source.slice(source.indexOf('function ClaimsPanel'), source.indexOf('function FormPanel'))
+  const pairAt = claims.indexOf('angle-pair')
+  const extractAt = claims.indexOf('onClick={extract}')
+  assert.ok(pairAt > 0 && extractAt > 0 && pairAt < extractAt, '角度选择器必须出现在「提主张」按钮之前')
+
+  const workspace = source.slice(source.indexOf('function MaterialWorkspace'), source.indexOf('function ProfileReviewPanel'))
+  assert.match(workspace, /list="material-angle-options"[\s\S]{0,260}<datalist id="material-angle-options"/, '素材编辑的 datalist 要自己带，不能蹭别的面板的')
+  assert.equal(/id="angle-suggestions"/.test(source), false, '旧的共用 id 已失效，不该再出现')
+})
+
+test('顶栏要显示后台版本，并且代码变旧时红字说出来', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /function BuildStatus/, '版本角标组件没了')
+  assert.match(source, /\/api\/version/, '角标不再读后台版本')
+  assert.match(source, /info\.stale/, '没有「磁盘代码比进程新」的判定分支')
+  assert.match(source, /后台是旧代码/, '陈旧时要直说要重启，不能只显示一个版本号')
+  assert.match(source, /<BuildStatus \/>/, '组件没挂到顶栏上')
+
+  const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
+  assert.match(styles, /\.build-chip\.stale\s*\{[^}]*var\(--coral\)/, '陈旧提示要用醒目色，不能和普通角标长一个样')
+})
+
+// 选题的角度与主观点：后端有 PUT /api/topics/:id/stance 还不够——对一个不写代码的人，
+// 没有按钮就等于没有这个功能。这条锁住界面上的入口，别让下一次重构又把它默默删掉。
+test('选题卡片要能定角度和主观点，素材编辑要能改角度和认知角色', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /function TopicStance\(/, '选题上的角度/主观点编辑器没了')
+  assert.match(source, /\/api\/topics\/\$\{topic\.id\}\/stance/, '保存没接到 stance 路由')
+  assert.match(source, /<TopicStance topic=\{topic\}/, '编辑器没挂到选题卡片上')
+  // 主观点只能选素材库里的「主张」，不给自由文本：否则观点和素材库会变成两套。
+  assert.match(source, /\/api\/materials\?by_role=1/, '主观点下拉不再从素材库取主张')
+  assert.match(source, /不定（模型只按标题写）/, '不选主观点时要如实说后果')
+
+  assert.match(source, /aria-label="素材角度"/, '素材编辑表单里的角度输入没了')
+  assert.match(source, /aria-label="素材认知角色"/, '素材编辑表单里的认知角色选择没了')
+  assert.match(source, /angle: editing\.angle \?\? ''/, '保存时没把角度发出去')
+  // 实机走查抓到：查完逻辑断点出来了、角标还停在「没查逻辑」，因为并回列表时漏了 logic_state。
+  assert.match(source, /logic_state: result\.logic_state \|\| result\.material\.logic_state \|\| result\.status/, '判定角标没跟着结果更新')
+  assert.match(source, /unit_type: editing\.unit_type\?\.trim\(\) \? editing\.unit_type : null/, '保存时没把认知角色发出去')
+
+  const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
+  assert.match(styles, /\.topic-stance-form \{/)
+})
+
+// 沙箱界面走查抓到：老选题存下来的评估里没有 first_step 字段，卡片就把「先做这一步：undefined」
+// 直接摆在了用户眼前。评估是历史快照不重算，所以界面必须认缺字段。
+test('选题卡片的「先做这一步」不许把缺字段渲染成 undefined', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.equal(/先做这一步：\$\{evaluation\.first_step\}/.test(source), false, '又变回直接插值了，缺字段就会显示 undefined')
+  assert.match(source, /evaluation\.first_step \|\| evaluation\.suggestions\?\.\[0\]/, 'first_step 缺失时没有退到建议第一条')
+  assert.match(source, /这一版评估没留下「先做什么」/, '什么可说的都没有时，要如实说没有，而不是空着让人以为坏了')
+})
+
+// 沙箱走查实测：后台没起来的那几秒，界面把 502 当成「没登录」，直接显示登录页。
+// 数据一个字没丢，但看起来像账号没了——对不写代码的用户这是最恐慌的一种错。
+test('后台没应答要说「后台没应答」，不许把人赶去登录', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /'checking' \| 'ok' \| 'need-password' \| 'backend-down'/, '会话状态里少了「后台没应答」这一档')
+  assert.match(source, /status === undefined \|\| status >= 500/, '没有按「网络不通 / 后台没回话」分类失败')
+  assert.match(source, /className="backend-down"/, '没有对应的那块提示界面')
+  assert.match(source, /一个字没丢/, '提示里要直接回答用户最怕的那句：数据还在不在')
+  assert.match(source, /window\.setInterval\(probeSession, 3000\)/, '说了「每 3 秒再问一次」就得真的重复问，不能只问一次')
+})
+
+// 闭环最后一段（回填发布数据）以前只有「截图给视觉模型认」一条路：
+// 没配视觉模型就填不了数，preferences 永远是 0 也是这么来的。手填入口必须在界面上。
+test('拍摄台要能手填发布数据，不只靠截图识别', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /function ManualSnapshotForm\(/, '手填表单组件没了')
+  assert.match(source, /'\/api\/performance-snapshots'/, '手填不再打到快照接口')
+  assert.match(source, /shooting_id: shooting\.id/, '手填没关联到这次拍摄条目')
+  assert.match(source, /手填数据/, '拍摄台上没有手填入口')
+  assert.match(source, /至少填一个数/, '全空也提交会产出没指标的空快照，得有提示')
+  const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
+  assert.match(styles, /\.manual-snapshot \{/)
+})
+
+// Requirement 17 的「候选要用户确认才生效」以前只有接口：界面上没入口，
+// 确认过的数据回流不到下一次创作，等于这一段没做完。
+test('回流候选要在界面上看得见、点得动，确认才生效', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /function PreferenceFlowPanel\(/, '回流候选面板没了')
+  assert.match(source, /\/api\/preferences\/data-flow/, '没有「按现在的数据找规律」的入口')
+  assert.match(source, /\/api\/preferences\/\$\{id\}\/\$\{action\}/, '确认 / 不用没接到后端')
+  assert.match(source, /<PreferenceFlowPanel refreshKey=\{snapshotRefresh\} \/>/, '面板没挂到拍摄台的表现时间线后面')
+  assert.match(source, /至少要有两条「已确认」的表现记录/, '找不出规律时要说清缺什么，不能只回一句空')
+})
+
+// M2 实跑里「某个角度提不出不同说法」是会发生的真事（模型确实给空）。
+// 这时必须把它说出来，而不是悄悄交出一份没有反方的稿子。
+test('某个角度没提出不同说法时，主张面板要明说', () => {  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  const claims = source.slice(source.indexOf('function ClaimsPanel'), source.indexOf('function FormPanel'))
+  assert.match(claims, /className="claim-gap"/, '角度空手而归的提示没了')
+  assert.match(claims, /这个角度没提出不同说法/, '提示没说人话')
+  assert.match(claims, /item\.angle === angle/, '提示是按「这个角度真的一条都没有」判的')
+})
+
+// 甲方实机反馈：档案里勾了 4 个平台，界面上却只找得到抖音和视频号，长文版根本出不来。
+// 后端 /adapt 一直支持全部研究平台，缺的只是入口。
+test('发布面板的适配目标要覆盖档案里那 4 个平台', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  const panel = source.slice(source.indexOf('function DraftPublishPanel'), source.indexOf('function VisionConfirmationCard'))
+  assert.match(panel, /const platforms = \['抖音', '视频号', '小红书', '公众号'\]/, '适配平台又被砍回两个，长文/笔记版没出口')
+  assert.match(panel, /生成只出抖音、视频号两版/, '要写清为什么不一次生成四版（一次模型调用一版的钱），别让人以为漏了')
+})
+
+// 改写落库了但问题没减少，必须说一句；不然是把判断偷偷替用户做了。
+test('改写落库后残留问题要说成一句状态，不是报错', () => {
+  const source = readFileSync(join(root, 'src/main.tsx'), 'utf8')
+  assert.match(source, /revise_notice/, '没接住服务端给的「残留问题」提示')
+  assert.match(source, /className="draft-checks-notice" role="status"/, '提示要用状态样式，不能长得像失败')
+  const server = readFileSync(join(root, 'server/index.mjs'), 'utf8')
+  assert.match(server, /不满意点「恢复」回到上一版/, '要说清可以回上一版——否决权留在人这边')
+  const styles = readFileSync(join(root, 'src/styles.css'), 'utf8')
+  assert.match(styles, /\.draft-checks-notice \{/)
+})
+

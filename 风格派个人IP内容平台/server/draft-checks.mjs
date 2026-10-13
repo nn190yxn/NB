@@ -376,8 +376,14 @@ function actionableIssueCodes({ body, platform }) {
   return codes
 }
 
+// 改写结果的判定分两档，因为这两件事性质不同：
+//   failures —— 稿子被弄坏了（越改越短）。这种必须拒收，用户的正文不能拿来赌。
+//   warnings —— 「被点名的问题没减少」。以前它也是拒收，结果是：用户举的真实案例（case_claim 这类提醒）
+//     本来就该留着，于是「按检查意见改写」永远改不进去，看起来就是按钮没反应；
+//     而要让它通过，最省力的做法反而是把案例删掉——护栏在奖励删内容。改成照改、如实报。
 export function checkReviseOutcome({ before, after, platform, format = '', note = '', requireImprove = false } = {}) {
   const failures = []
+  const warnings = []
   const beforeText = String(before || '')
   const afterText = String(after || '')
   const target = draftLengthTargetFor(platform, format) || draftLengthTargetOf({ platform })
@@ -394,10 +400,10 @@ export function checkReviseOutcome({ before, after, platform, format = '', note 
     const beforeCodes = actionableIssueCodes({ body: beforeText, platform })
     if (beforeCodes.length) {
       const afterCodes = actionableIssueCodes({ body: afterText, platform })
-      if (afterCodes.length >= beforeCodes.length) failures.push(`被点名的问题没减少：改写前 ${beforeCodes.length} 处（${beforeCodes.join('、')}），改写后 ${afterCodes.length} 处（${afterCodes.join('、')}）`)
+      if (afterCodes.length >= beforeCodes.length) warnings.push(`被点名的问题没减少：改写前 ${beforeCodes.length} 处（${beforeCodes.join('、')}），改写后 ${afterCodes.length} 处（${afterCodes.join('、')}）`)
     }
   }
-  return { ok: failures.length === 0, failures }
+  return { ok: failures.length === 0, improved: warnings.length === 0, failures, warnings }
 }
 
 // 生成入库前的硬门：提示词拦不住的那几条。不复用 checkQuality——那边会因还没选开头句、还没补来源直接 blocked。
@@ -849,7 +855,11 @@ const dataNumberPattern = /(\d+(?:\.\d+)?)\s*(%|％|万|倍|元|块)?/g
 // 中文数字走同一把尺子。不补这一条，把数字写成汉字就能绕过不可溯源闸门。
 const chineseNumberPattern = new RegExp(`([${chineseNumberChars}]+)\\s*(%|％|倍|元|块)?`, 'g')
 // 长得像数字、实际不是数据声明的词。这是闸门，误报会直接拦住稿子，宁可先排掉。
-const numeralIdioms = ['十分', '百分', '千万', '万般', '百般', '十足', '百姓']
+// 后面那串是成语：真模型复验时在正文里写下「十万八千里」，被当成编造数字标了出来（2026-09-21）。
+// 不用「含两个数量级词就算成语」那种通用规则——「一百三十」「一千二百」也是两个数量级词，
+// 那是正常的数字写法，通用规则会把它们误杀。成语是固定词表，就按词表排。
+const numeralIdioms = ['十分', '百分', '千万', '万般', '百般', '十足', '百姓',
+  '十万八千', '十拿九稳', '七上八下', '五花八门', '丢三落四', '不三不四', '朝三暮四', '低三下四', '歪七扭八', '七七八八', '三三两两', '七零八落']
 // 「几十条」「十几万」里的「十」是估值，不是数据声明。
 // 中文数字的正则字符集里没有「几」「数」，所以「几十」会被切成孤立的「十」，
 // 不管它的话「拆了几十条片子」会被当成数据声明，直接拦住稿子。

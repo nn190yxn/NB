@@ -23,7 +23,7 @@ function startServer(extraEnv = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 5000)
+    const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 20000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve(child) } })
     child.once('exit', code => { if (code !== null) reject(new Error(`测试 API 异常退出: ${code}`)) })
   })

@@ -57,13 +57,16 @@ test('改写结果护栏：只认能算清的两件事', () => {
   assert.equal(checkReviseOutcome({ before: '口'.repeat(1200), after: '口'.repeat(900), platform: '抖音', format: '短视频' }).ok, true)
   assert.equal(checkReviseOutcome({ before: '口'.repeat(1200), after: '口'.repeat(80), platform: '抖音', format: '短视频' }).ok, false)
 
-  // 「按检查意见改写」时，被点名的问题必须真的少下去，不是换个更简单的说法。
+  // 「按检查意见改写」时问题没减少，要如实报，但**不再有权整笔拒收**：
+  // 用户举的真实案例本来就该留着，逼着问题数变小等于奖励把内容删掉。
   const withIssue = `拆完爆款不会用？${'口'.repeat(360)}`
   const stillQuestion = checkReviseOutcome({ before: withIssue, after: `${withIssue}补充一句。`, platform: '抖音', requireImprove: true })
-  assert.equal(stillQuestion.ok, false)
-  assert.match(stillQuestion.failures[0], /被点名的问题没减少/)
+  assert.equal(stillQuestion.ok, true, '没改善不该被当成把稿子弄坏')
+  assert.equal(stillQuestion.improved, false)
+  assert.match(stillQuestion.warnings[0], /被点名的问题没减少/)
   const fixed = checkReviseOutcome({ before: withIssue, after: `拆完爆款不会用。${'口'.repeat(360)}`, platform: '抖音', requireImprove: true })
   assert.equal(fixed.ok, true)
+  assert.equal(fixed.improved, true)
 })
 
 test('按检查意见改写，模型只压短时拒绝入库', async t => {
@@ -92,7 +95,7 @@ test('按检查意见改写，模型只压短时拒绝入库', async t => {
   const shrunk = await fetch(`${baseUrl}/api/drafts/${douyin.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ from_checks: true, version: checked.version }) })
   assert.equal(shrunk.status, 502)
   const failure = await shrunk.json()
-  assert.equal(failure.code, 'REVISE_NOT_IMPROVED')
+  assert.equal(failure.code, 'REVISE_REJECTED')
   assert.match(failure.error, /越改越短/)
   assert.match(failure.error, /未改库/)
 
@@ -110,4 +113,31 @@ test('按检查意见改写，模型只压短时拒绝入库', async t => {
   assert.equal(next.version, checked.version + 1)
   assert.ok(!next.body.startsWith('拆完爆款不会用？'), '改写后开头不应还是问句')
   assert.ok(next.body.length >= Math.round(overCap.length * 0.85), `改写后不该比原稿短太多，实际 ${next.body.length} 字`)
+})
+
+// 甲方实机反馈：点「按检查意见改写」后一个字没变，看起来就是按钮坏了。
+// 真因是护栏把「问题数没减少」也当成拒收条件，而其中一条是他自己的真实案例（本来就该留着）。
+test('问题没减少也要落库成新稿，并把残留的问题如实说出来', async t => {
+  const mock = await startGenerationMock()
+  t.after(() => mock.close())
+  const server = await startServer(mock.env)
+  t.after(() => server.kill())
+
+  const created = await fetch(`${baseUrl}/api/drafts/generate`, { method: 'POST', headers, body: JSON.stringify({ topic: { title: '改写不再整笔退回', strategy_layer: 'trust', goal_refs: [] }, quote_ids: [], experience_ids: [] }) })
+  const drafts = await created.json()
+  const douyin = drafts.find(item => item.platform === '抖音')
+  assert.ok(douyin)
+  const body = `拆完爆款不会用？上周三我翻了后台，${'口'.repeat(360)}`
+  const saved = await (await fetch(`${baseUrl}/api/drafts/${douyin.id}`, { method: 'PUT', headers, body: JSON.stringify({ body, version: douyin.version }) })).json()
+  await fetch(`${baseUrl}/api/drafts/${douyin.id}/checks/persona`, { method: 'POST', headers, body: '{}' })
+  const checked = await (await fetch(`${baseUrl}/api/drafts/${douyin.id}/checks/quality`, { method: 'POST', headers, body: '{}' })).json()
+
+  mock.setMode('same_revise')
+  const response = await fetch(`${baseUrl}/api/drafts/${douyin.id}/revise`, { method: 'POST', headers, body: JSON.stringify({ from_checks: true, version: checked.version }) })
+  assert.equal(response.status, 200, '没改善不该整笔拒收')
+  const next = await response.json()
+  assert.equal(next.version, checked.version + 1, '要真的落库、抬版本')
+  assert.match(next.revise_notice || '', /被点名的问题没减少/, '落库了但没改善，必须说出来')
+  assert.equal(next.generation_context.revise.remaining.length, 1)
+  assert.ok((next.history || []).some(item => item.version === checked.version), '上一版要能恢复，用户才有否决权')
 })

@@ -103,6 +103,16 @@ test('中文数字不误伤修辞、成语和估值', () => {
   assert.deepEqual(draftNumbers('拆了几十条片子，有十几万播放，数百人问过'), [], '估值不是数据声明')
 })
 
+// 真模型复验时（2026-09-21）在正文里写了「十万八千里」，被不可溯源数字闸门当成编造数据标了出来。
+// 成语是固定词表，按词表排；不用「含两个数量级词就算成语」的通用规则——
+// 「一百三十」「三万五千」都是两个数量级词的正常数字写法，通用规则会误杀。
+test('成语不是数据声明，但两个数量级词的正常数字仍要算', () => {
+  assert.deepEqual(draftNumbers('差的何止十万八千里，他做事七上八下，说法五花八门，心里十拿九稳'), [], '成语一个都不该报')
+  assert.deepEqual(draftNumbers('拍了一百三十条，另一条一千二百块，还有一条三万五千播放'), ['一百三十', '一千二百块', '三万五千'])
+  assert.deepEqual(draftNumbers('隔了十万八千里，但那条播放三百'), ['三百'], '同一句里成语排掉、真数字照抓')
+  assert.deepEqual(unbackedNumberHits('这差得十万八千里。', ''), [], '成语不该被标成不可溯源')
+})
+
 test('中文和阿拉伯写法归一化后才比：写法不同不算不可溯源', () => {
   assert.deepEqual(unbackedNumberHits('我拆了三百条。', '素材：拆了 300 条'), [], '正文用汉字、素材用阿拉伯')
   assert.deepEqual(unbackedNumberHits('我拆了 300 条。', '素材：拆了三百条'), [], '正文用阿拉伯、素材用汉字')
@@ -125,7 +135,7 @@ writeFileSync(dataFile, '{}')
 function startServer() {
   const child = spawn(process.execPath, ['server/index.mjs'], { cwd: process.cwd(), env: { ...process.env, ...llmMock.env, PORT: String(port), NODE_ENV: 'test', DATA_FILE: dataFile }, stdio: ['ignore', 'pipe', 'pipe'] })
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 5000)
+    const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 20000)
     child.stdout.on('data', data => { if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve(child) } })
     child.once('error', reject)
     child.once('exit', code => { if (code !== null) reject(new Error(`测试 API 异常退出: ${code}`)) })

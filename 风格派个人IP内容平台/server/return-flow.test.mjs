@@ -61,6 +61,21 @@ test('数据回流只认确认过的快照，待确认的不参与', () => {
   assert.deepEqual(performanceCandidates([]), [])
 })
 
+// 界面回填的指标键是中文（播放量、点赞数），英文 views 是测试自己写的形状。
+// 只认英文键的话，数据回流一条候选都产不出来——真实数据里 preferences 恒为 0 就是这么来的。
+test('中文指标键也要产出数据回流候选：闭环最后一段靠它', () => {
+  const fromUi = [
+    { id: 7, draft_id: 21, platform: '抖音', status: 'confirmed', metrics: { 播放量: 9000, 点赞数: 300, 评论数: 40 } },
+    { id: 8, draft_id: 22, platform: '抖音', status: 'confirmed', metrics: { 播放量: 900, 点赞数: 12 } },
+  ]
+  const candidates = performanceCandidates(fromUi)
+  assert.equal(candidates.length, 1)
+  assert.match(candidates[0].observation, /9000.*900/s, '观察里要带上两条真实播放数')
+  assert.deepEqual(candidates[0].evidence, { platform: '抖音', best: { draft_id: 21, views: 9000 }, worst: { draft_id: 22, views: 900 } })
+  assert.equal(performanceCandidates([{ id: 9, platform: '抖音', status: 'confirmed', metrics: { 阅读: 1200 } }]).length, 0, '一条不构成对比')
+  assert.equal(performanceCandidates([{ id: 9, platform: '抖音', status: 'pending_confirmation', metrics: { 播放量: 500 } }, { id: 10, platform: '抖音', status: 'pending_confirmation', metrics: { 播放量: 50 } }]).length, 0, '没确认的数据不参与')
+})
+
 test('候选默认待确认：同一条不重复产出，确认才生效，撤回留痕', () => {
   const candidates = [{ local_id: 'length', kind: '终稿回流', observation: '观察', proposal: '提议', source: { draft_id: 5 } }]
   const first = buildPreferenceRecords(candidates, { ownerId: 'u1', existing: [], now: '2026-09-18T00:00:00.000Z' })

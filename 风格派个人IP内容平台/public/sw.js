@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dingweipai-shell-v3'
+const CACHE_NAME = 'dingweipai-shell-v4'
 const SHELL = ['/', '/manifest.webmanifest']
 
 self.addEventListener('install', event => {
@@ -23,18 +23,14 @@ self.addEventListener('fetch', event => {
     }).catch(() => caches.match('/')))
     return
   }
-  event.respondWith(caches.match(event.request).then(cached => {
-    const network = fetch(event.request).then(response => {
-      if (response.ok) {
-        const copy = response.clone()
-        void caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy))
-      }
-      return response
-    })
-    if (cached) {
-      void network.catch(() => undefined)
-      return cached
+  // 静态资源：先走网络，断了才回缓存。
+  // 以前是「缓存优先」——改了代码刷新页面还是拿到旧文件，等于第二台「热更新没生效」的机器；
+  // 打包产物虽然带哈希，但桌面端和本机服务都可能同名覆盖，不值得为省一次请求冒这个险。
+  event.respondWith(fetch(event.request).then(response => {
+    if (response.ok) {
+      const copy = response.clone()
+      void caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy))
     }
-    return network.catch(() => caches.match('/'))
-  }))
+    return response
+  }).catch(() => caches.match(event.request).then(cached => cached || (requestUrl.pathname === '/' ? caches.match('/') : undefined))))
 })

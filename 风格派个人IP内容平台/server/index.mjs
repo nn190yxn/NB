@@ -6,12 +6,16 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { followupAnswerSource, followupMaterialInput, unitTypeFromAnswer } from './followup-answers.mjs'
 import { materialTrustOf, normalizeMaterialFormat, parseMaterialContent, profileGaps, validateDraftUpdate, validRatios, validateMaterialInput, validateSourceRefs } from './validation.mjs'
 import { materialsWithUnitTypes, unitTypeFromKind, unitTypeOf, unitTypes } from './unit-types.mjs'
+import { groupMaterialsByIdentity, materialChecksum, materialIdentityConflict, mergeSourceRefs } from './material-key.mjs'
 import { createRedFoxAdapter, demoHotSearch, demoSearchWork, demoSimilarAccounts, demoTrending, prohibitedHits, prohibitedWordlist } from './redfox.mjs'
 import { buildChecklist, deterministicAdaptation, fitScore, retrospectDeterministic } from './growth.mjs'
 import { deconstructSystemPrompt, parseDeconstruction } from './deconstruct.mjs'
-import { claimsSystemPrompt, parseClaims } from './claims.mjs'
+import { claimsSystemPrompt, mergeClaimRuns, parseClaims } from './claims.mjs'
+import { claimLogicPrompt, claimLogicVariables, claimsAngleNote, logicStateOf, normalizeAngles, parseClaimLogicVerdict } from './claim-logic.mjs'
+import { counterpartClaims, resolveStance } from './topic-stance.mjs'
 import { contentFormSystemPrompt, parseFormJudgement } from './content-form.mjs'
 import { logicCheckSystemPrompt, logicCheckVariables, logicSignalSpans, parseLogicOutput } from './draft-logic.mjs'
+import { parseResearchAnalysis, researchAnalysisPrompt, researchAnalysisVariables } from './research-analysis.mjs'
 import { createMysqlPool, loadCollections, loadMysqlState, loadUserDocs, saveCollections, saveMysqlState, saveUserDocs, collectionNames, userDocNames } from './mysql.mjs'
 import { emptyPublicApiConfigs, emptyPublicRedfoxConfig, parseApiConfigKey, publicApiConfig, publicRedfoxConfig, runtimeApiConfig, runtimeRedfoxConfig, updateApiConfig, updateRedfoxConfig } from './api-settings.mjs'
 import { publicPrivateFile, readPrivateFile, storePrivateFile, validatePrivateFile } from './private-files.mjs'
@@ -22,7 +26,7 @@ import { defaultTopicFields, evaluateTopic } from './topic-evaluation.mjs'
 import { layerLedger, layerLedgerNote } from './layer-ledger.mjs'
 import { hookKindOf, layerOf, topicHookKinds, topicRequestNote, topicStrategyLayers } from './topic-hooks.mjs'
 import { materialPoolOf, materialPoolSummary, materialUseTags, poolFieldsForNew, withPoolFields } from './material-pools.mjs'
-import { briefUsableMaterial, buildDraftBrief, draftBriefPrompt, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthRangeFrom, draftLengthTargetOf, draftPlatformRevisePrompt, draftReviseUserMessage, draftSpokenPrompt, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs, resolveVideoFormat } from './draft-writing.mjs'
+import { briefUsableMaterial, buildDraftBrief, draftBriefPrompt, draftMaterialRoles, draftDeaiPrompt, draftFormatOf, draftGateRewritePrompt, draftLengthRangeFrom, draftLengthTargetOf, draftPlatformRevisePrompt, draftReviseUserMessage, draftSpokenPrompt, draftPlatforms, draftVideoFormats, draftVideoPlatforms, parseDraftBodies, parseReviseBody, draftReplacePrompt, parseReplacePairs, validateReplacePairs, applyReplacePairs, resolveVideoFormat } from './draft-writing.mjs'
 import { defaultDraftWorkflowFields, supersededDraftsForRegenerate, validateHookText } from './draft-workflow.mjs'
 import { applySlotRewrite, buildSlotOptions, findSlotOption, groupScopedSlots, slotIds, slotLabels, slotRewriteMessages } from './draft-slots.mjs'
 import { checkPersona, checkQuality, checkPublishChecklist, checkReviseOutcome, diagnosticReport, draftCheckRewriteNote, generationGate, markableIssues, openingSentence, scanGeneratedBodies, scanGeneratedBody, unbackedNumberHits } from './draft-checks.mjs'
@@ -58,8 +62,11 @@ function coldStartPayload(missing, baseError) {
   }
 }
 import { approveDraftRecord, defaultApproval, revokeDraftRecord, validateApprovalReadiness } from './draft-approval.mjs'
+import { createBuildInfo } from './build-info.mjs'
 
 const port = Number(process.env.PORT || 3001)
+// 代码标识在启动时算一次，之后每次读取只重算磁盘指纹：用来回答「在跑的这份代码还是不是最新的」。
+const buildInfo = createBuildInfo()
 const sessions = new Map()
 
 const crashLogFile = join(process.cwd(), 'logs', 'crash.log')
@@ -458,12 +465,37 @@ async function runRedFox(request, { demo, apply }) {
 }
 
 function persistResearch(userId, entries, { query = '', sourceTag = 'redfox', capturedAt } = {}) {
-  const items = entries.map((entry, index) => {
-    const research = { id: nextId(state.research) + index, owner_id: userId, platform: entry.platform, title: entry.title, author: entry.author || '', url: entry.url || null, metrics: entry.metrics || { discussions: 0, growth: 0 }, query: entry.query || query, analysis: null, strategy_layer: 'reach', content_job: '进入更大的兴趣流量池', goal_refs: [], captured_at: capturedAt, source: entry.source || sourceTag, source_refs: [sourceRef(sourceTag, `${entry.title}`)] }
-    return research
-  })
-  state.research = [...items, ...state.research.filter(existing => existing.owner_id !== userId || !items.some(item => item.title === existing.title))]
-  return items
+  // 同一标题再搜到就复用原记录，不重铸编号。
+  // 原来每次搜索都把命中的旧条目删掉再发新号，而「已收录」标记是绑在编号上的——标记跟着没，
+  // 同一个热点就能被第二次转成素材。
+  const touched = []
+  for (const entry of entries) {
+    const title = String(entry.title || '').trim()
+    if (!title) continue
+    const existing = state.research.find(item => item.owner_id === userId && String(item.title || '').trim() === title && item.platform === entry.platform)
+    if (existing) {
+      Object.assign(existing, { author: entry.author || existing.author || '', url: entry.url || existing.url || null, metrics: entry.metrics || existing.metrics || { discussions: 0, growth: 0 }, query: entry.query || query || existing.query, captured_at: capturedAt || existing.captured_at })
+      touched.push(existing)
+      continue
+    }
+    const research = { id: nextId(state.research), owner_id: userId, platform: entry.platform, title, author: entry.author || '', url: entry.url || null, metrics: entry.metrics || { discussions: 0, growth: 0 }, query: entry.query || query, analysis: null, strategy_layer: 'reach', content_job: '进入更大的兴趣流量池', goal_refs: [], captured_at: capturedAt, source: entry.source || sourceTag, source_refs: [sourceRef(sourceTag, title)] }
+    state.research.push(research)
+    touched.push(research)
+  }
+  return touched
+}
+
+// 热点转素材。研究条目转素材、以及「以这条热点立选题」共用这一份实现——
+// 之前两处各写一套身份判断，正是同一条热点能存两份的原因之一。
+async function collectResearchMaterial(request, item) {
+  const checksum = materialChecksum(item.title)
+  // 先按正文身份查，再按来源编号查：只认编号的话，同一条热点被重新收录（换了编号）就能转第二次。
+  const existing = owned('materials', request).find(material => material.checksum === checksum) || owned('materials', request).find(material => material.source_type === 'research' && material.source_id === item.id)
+  if (existing) { if (!item.collected) { item.collected = true; await saveState('research') }; return { material: existing, duplicate: true } }
+  const material = { id: nextId(state.materials), owner_id: userId(request), name: item.title, material_kind: 'hotspot', material_trust: item.source === 'demo' ? 'derived' : 'sourced', unit_type: unitTypeFromKind('hotspot'), source_type: 'research', source_id: item.id, source_refs: [sourceRef('research', item.id)], url: item.url || null, content: item.title, checksum, status: 'ready', angle: null, claims_run: null, logic_status: 'unchecked', ...poolFieldsForNew({ kind: 'hotspot' }), created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+  state.materials.push(material)
+  item.collected = true
+  return { material, duplicate: false }
 }
 
 const server = createServer(async (request, response) => {
@@ -472,10 +504,18 @@ const server = createServer(async (request, response) => {
   const startedAt = Date.now()
   response.setHeader('x-request-id', requestId)
   response.once('finish', () => console.log(JSON.stringify({ event: 'http_request', request_id: requestId, method: request.method, path: url.pathname, status: response.statusCode, duration_ms: Date.now() - startedAt })))
-  if (request.headers.origin && !allowedOrigins.has(request.headers.origin)) return send(response, 403, { error: '请求来源不被允许' })
+  if (request.headers.origin && !allowedOrigins.has(request.headers.origin)) {
+    // 前端端口一变（5173 被占 Vite 就自动跳 5174）就会整站报这一句，而原文不告诉人怎么解。
+    // 只在开发模式里带上出路；生产仍然只拒绝、不播报允许列表。
+    // 报错原文被 auth.test.mjs 锁着，出路放在单独字段里，不改那句人话。
+    const remedy = developmentMode ? `后台只认 ${allowedOrigin}；前端换了端口就把 APP_ORIGIN 设成那个端口后重启后台。` : ''
+    return send(response, 403, { error: '请求来源不被允许', code: 'origin_not_allowed', remedy })
+  }
   response[responseCorsOrigin] = request.headers.origin || allowedOrigin
   if (request.method === 'OPTIONS') return send(response, 204, {})
+  // /healthz 的返回形状是被测试锁住的监控契约，版本信息单独走 /api/version，不往里加字段。
   if (['/healthz', '/api/health'].includes(url.pathname) && ['GET', 'HEAD'].includes(request.method)) return send(response, 200, { status: 'ok', storage: mysqlPool ? 'mysql' : 'json-mvp' })
+  if (url.pathname === '/api/version' && ['GET', 'HEAD'].includes(request.method)) return send(response, 200, { ...buildInfo.snapshot(), data_file: dataFile, storage: mysqlPool ? 'mysql' : 'json' })
   if (url.pathname.startsWith('/api/') && isRateLimited(request)) return send(response, 429, { error: '请求过于频繁', retryable: true }, { 'retry-after': String(Math.ceil(rateLimitWindowMs / 1000)) })
 
   try {
@@ -702,8 +742,18 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/api/materials' && request.method === 'GET') {
       const params = url.searchParams
-      const hasQuery = ['q', 'format', 'status', 'review_status', 'sort', 'page', 'kind', 'trust', 'unit_type', 'pool', 'kind_counts'].some(key => params.get(key))
-      if (!hasQuery) return send(response, 200, owned('materials', request).map(item => withPoolFields({ ...item, material_trust: materialTrustOf(item), unit_type: unitTypeOf(item) })))
+      const hasQuery = ['q', 'format', 'status', 'review_status', 'sort', 'page', 'kind', 'trust', 'unit_type', 'pool', 'kind_counts', 'by_role'].some(key => params.get(key))
+      // 写稿选料面板按角色取料：一次请求拿回五组，别让界面发五次请求、五次都可能失败。
+      if (params.get('by_role')) {
+        const grouped = Object.fromEntries(draftMaterialRoles.map(role => [role, []]))
+        for (const item of owned('materials', request)) {
+          const role = unitTypeOf(item)
+          if (!role || !grouped[role] || grouped[role].length >= 20 || !String(item.content || '').trim()) continue
+          grouped[role].push(withPoolFields({ ...item, material_trust: materialTrustOf(item), unit_type: role, logic_state: logicStateOf(item) }))
+        }
+        return send(response, 200, { roles: grouped })
+      }
+      if (!hasQuery) return send(response, 200, owned('materials', request).map(item => withPoolFields({ ...item, material_trust: materialTrustOf(item), unit_type: unitTypeOf(item), logic_state: logicStateOf(item) })))
       if (params.get('kind_counts')) {
         const counts = { article: 0, quote: 0, hotspot: 0, insight: 0, experience: 0 }
         const trustCounts = { verified: 0, sourced: 0, derived: 0 }
@@ -744,10 +794,16 @@ const server = createServer(async (request, response) => {
       if (pool) items = items.filter(item => materialPoolOf(item) === pool)
       items = [...items].sort((a, b) => sort === 'name' ? String(a.name).localeCompare(String(b.name), 'zh') : String(b.imported_at || b.created_at || '').localeCompare(String(a.imported_at || a.created_at || '')))
       // 历史素材没有 material_trust 字段，读的时候补齐，缺省 verified。
-      items = items.map(item => withPoolFields({ ...item, material_trust: materialTrustOf(item), unit_type: unitTypeOf(item) }))
+      items = items.map(item => withPoolFields({ ...item, material_trust: materialTrustOf(item), unit_type: unitTypeOf(item), logic_state: logicStateOf(item) }))
       const total = items.length
       const start = (page - 1) * pageSize
       return send(response, 200, { items: items.slice(start, start + pageSize), total, page, page_size: pageSize })
+    }
+    if (url.pathname === '/api/materials/duplicates' && request.method === 'GET') {
+      // 只看活着的素材：归档的不算重复。老数据没有 checksum 字段的，按正文现算一次归组。
+      const live = owned('materials', request)
+      const groups = groupMaterialsByIdentity(live.map(item => (item.checksum ? item : { ...item, checksum: materialChecksum(item.content) })))
+      return send(response, 200, { groups: groups.map(group => ({ checksum: group.checksum, items: group.items.map(item => withPoolFields({ ...item, material_trust: materialTrustOf(item), unit_type: unitTypeOf(item) })) })), group_count: groups.length, redundant_count: groups.reduce((sum, group) => sum + group.items.length - 1, 0) })
     }
     if (url.pathname === '/api/materials/atoms' && request.method === 'POST') {
       const body = await readJson(request)
@@ -760,17 +816,29 @@ const server = createServer(async (request, response) => {
         originSource = owned('materials', request).find(item => item.id === Number(body.source_id) && !item.deleted_at)
         if (!originSource) return send(response, 422, { error: '来源素材不存在' })
       }
-      const checksum = createHash('sha256').update(`atom:${originSource ? originSource.id : ''}:${text}`).digest('hex')
-      const duplicate = owned('materials', request).find(item => item.checksum === checksum)
-      if (duplicate) return send(response, 200, { ...duplicate, duplicate: true })
-      const material = { id: nextId(state.materials), owner_id: userId(request), name: String(body.name || '').trim() || text.slice(0, 40), source_path: null, format: 'text', content: text, url: null, checksum, status: 'ready', error: null, retry_count: 0, extracted_fields: { segments: [], candidate_topics: [], quotes: [] }, review_status: 'pending', strategy_layer: originSource?.strategy_layer || 'trust', goal_refs: originSource?.goal_refs || [], material_kind: body.kind, material_trust: 'verified', unit_type: unitTypes.includes(body.unit_type) ? body.unit_type : unitTypeFromKind(body.kind), source_label: String(body.source_label || '').trim() || null, origin_source_id: originSource ? originSource.id : null, origin_text: text, origin_material_name: originSource ? originSource.name : null, source_refs: originSource ? [sourceRef('material', originSource.id)] : [], ...poolFieldsForNew({ kind: body.kind, expiresAt: body.expires_at, useTag: body.use_tag }), imported_at: new Date().toISOString() }
-      state.materials.push(material)
-      if (originSource && (body.kind === 'quote' || body.kind === 'hotspot')) {
+      // 身份只认归一化后的正文：同一句话不管从哪个门进来都命中同一条，来源往后追加。
+      const checksum = materialChecksum(text)
+      const chosenUnitType = unitTypes.includes(body.unit_type) ? body.unit_type : unitTypeFromKind(body.kind)
+      const markCollected = () => {
+        if (!originSource || (body.kind !== 'quote' && body.kind !== 'hotspot')) return
         if (!originSource.extracted_fields) originSource.extracted_fields = {}
         if (!originSource.extracted_fields.collected) originSource.extracted_fields.collected = { quote: [], hotspot: [] }
         const bucket = originSource.extracted_fields.collected[body.kind]
         if (!bucket.includes(text)) bucket.push(text)
       }
+      const duplicate = owned('materials', request).find(item => item.checksum === checksum)
+      if (duplicate) {
+        const refs = mergeSourceRefs(duplicate.source_refs, originSource ? [sourceRef('material', originSource.id)] : [])
+        const before = JSON.stringify(duplicate.source_refs || [])
+        duplicate.source_refs = refs
+        markCollected()
+        if (before !== JSON.stringify(refs)) await saveState('materials')
+        const conflicts = materialIdentityConflict(duplicate, { material_kind: body.kind, unit_type: chosenUnitType })
+        return send(response, 200, { ...duplicate, duplicate: true, ...(conflicts.length ? { identity_conflicts: conflicts } : {}) })
+      }
+      const material = { id: nextId(state.materials), owner_id: userId(request), name: String(body.name || '').trim() || text.slice(0, 40), source_path: null, format: 'text', content: text, url: null, checksum, status: 'ready', error: null, retry_count: 0, extracted_fields: { segments: [], candidate_topics: [], quotes: [] }, review_status: 'pending', strategy_layer: originSource?.strategy_layer || 'trust', goal_refs: originSource?.goal_refs || [], material_kind: body.kind, material_trust: 'verified', unit_type: chosenUnitType, source_label: String(body.source_label || '').trim() || null, origin_source_id: originSource ? originSource.id : null, origin_text: text, origin_material_name: originSource ? originSource.name : null, source_refs: originSource ? [sourceRef('material', originSource.id)] : [], angle: String(body.angle || '').trim().slice(0, 20) || null, claims_run: String(body.claims_run || '').trim().slice(0, 64) || null, logic_status: 'unchecked', ...poolFieldsForNew({ kind: body.kind, expiresAt: body.expires_at, useTag: body.use_tag }), imported_at: new Date().toISOString() }
+      state.materials.push(material)
+      markCollected()
       await saveState('materials')
       return send(response, 201, withPoolFields(material))
     }
@@ -794,13 +862,22 @@ const server = createServer(async (request, response) => {
       const format = normalizeMaterialFormat(body.name, body.format)
       const parsed = parseMaterialContent({ format, content: body.content, url: body.url })
       const content = parsed.content
-      const checksum = body.checksum || createHash('sha256').update(`${body.name || ''}:${content}`).digest('hex')
-      const duplicate = owned('materials', request).find(item => item.checksum === checksum)
-      if (duplicate) return send(response, 200, { ...duplicate, duplicate: true })
-      const lines = content.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
       const uploadKinds = ['article', 'quote', 'hotspot', 'insight', 'experience']
       const uploadKind = uploadKinds.includes(body.material_kind) ? body.material_kind : 'article'
-        const material = { id: nextId(state.materials), owner_id: userId(request), name: body.name || '未命名素材', source_path: body.path || null, format, content, url: body.url || null, checksum, status: parsed.status, error: parsed.error, retry_count: 0, extracted_fields: { segments: lines.slice(0, 8), candidate_topics: lines.filter(line => line.length >= 8).slice(0, 5), quotes: lines.filter(line => line.length >= 12).slice(0, 5) }, review_status: 'pending', strategy_layer: body.strategy_layer || 'trust', goal_refs: body.goal_refs || [], material_kind: uploadKind, material_trust: 'verified', unit_type: unitTypeFromKind(uploadKind), source_refs: [sourceRef('material', checksum)], ...poolFieldsForNew({ kind: uploadKind, expiresAt: body.expires_at, useTag: body.use_tag }), imported_at: new Date().toISOString() }
+      // 文件级哈希留给来源审计（哪个路径、哪份内容），素材身份一律只看正文本身。
+      const sourceChecksum = body.checksum || createHash('sha256').update(`${body.name || ''}:${content}`).digest('hex')
+      const checksum = materialChecksum(content)
+      const duplicate = owned('materials', request).find(item => item.checksum === checksum)
+      if (duplicate) {
+        const refs = mergeSourceRefs(duplicate.source_refs, [sourceRef('material', sourceChecksum)])
+        const before = JSON.stringify(duplicate.source_refs || [])
+        duplicate.source_refs = refs
+        if (before !== JSON.stringify(refs)) await saveState('materials')
+        const conflicts = materialIdentityConflict(duplicate, { material_kind: uploadKind, unit_type: unitTypeFromKind(uploadKind) })
+        return send(response, 200, { ...duplicate, duplicate: true, ...(conflicts.length ? { identity_conflicts: conflicts } : {}) })
+      }
+      const lines = content.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+        const material = { id: nextId(state.materials), owner_id: userId(request), name: body.name || '未命名素材', source_path: body.path || null, format, content, url: body.url || null, checksum, source_checksum: sourceChecksum, status: parsed.status, error: parsed.error, retry_count: 0, extracted_fields: { segments: lines.slice(0, 8), candidate_topics: lines.filter(line => line.length >= 8).slice(0, 5), quotes: lines.filter(line => line.length >= 12).slice(0, 5) }, review_status: 'pending', strategy_layer: body.strategy_layer || 'trust', goal_refs: body.goal_refs || [], material_kind: uploadKind, material_trust: 'verified', unit_type: unitTypeFromKind(uploadKind), source_refs: [sourceRef('material', sourceChecksum)], ...poolFieldsForNew({ kind: uploadKind, expiresAt: body.expires_at, useTag: body.use_tag }), imported_at: new Date().toISOString() }
       state.materials.push(material)
        await saveState('materials')
       return send(response, 201, withPoolFields(material))
@@ -820,6 +897,36 @@ const server = createServer(async (request, response) => {
         if (body.expires_at !== null && !Number.isFinite(Date.parse(String(body.expires_at)))) return send(response, 422, { error: '保鲜期格式无效' })
         material.expires_at = body.expires_at
       }
+      // 编辑正文就是改身份：撞上别的一条要当场说清楚，不能让人手动造出重复。
+      if (body.content !== undefined) {
+        const nextContent = String(body.content || '').trim()
+        if (!nextContent) return send(response, 422, { error: '素材内容不能为空' })
+        const nextChecksum = materialChecksum(nextContent)
+        if (nextChecksum !== material.checksum) {
+          const clash = owned('materials', request).find(item => item.checksum === nextChecksum && item.id !== material.id)
+          if (clash) return send(response, 409, { error: `这句已经在了：素材 ${clash.id}「${clash.name}」。要并成一条，去素材库的「疑似重复」里处理。`, code: 'material_duplicate', duplicate_id: clash.id })
+        }
+        material.content = nextContent
+        material.checksum = nextChecksum
+        if (body.name === undefined) material.name = nextContent.slice(0, 40)
+      }
+      if (body.name !== undefined) {
+        const nextName = String(body.name || '').trim()
+        if (!nextName) return send(response, 422, { error: '素材名称不能为空' })
+        material.name = nextName
+      }
+      if (body.material_kind !== undefined) {
+        const kinds = ['article', 'quote', 'hotspot', 'insight', 'experience']
+        if (!kinds.includes(body.material_kind)) return send(response, 422, { error: '素材类型无效' })
+        material.material_kind = body.material_kind
+        if (body.unit_type === undefined) material.unit_type = unitTypeFromKind(body.material_kind)
+      }
+      if (body.unit_type !== undefined) {
+        if (body.unit_type !== null && !unitTypes.includes(body.unit_type)) return send(response, 422, { error: '认知角色只认 QST / CON / OPI / CAS / SOL，也可以留空' })
+        material.unit_type = body.unit_type
+      }
+      if (body.angle !== undefined) material.angle = String(body.angle || '').trim() || null
+      if (body.content !== undefined || body.name !== undefined || body.material_kind !== undefined || body.unit_type !== undefined) material.updated_at = new Date().toISOString()
       await saveState('materials')
       return send(response, 200, withPoolFields(material))
     }
@@ -1240,7 +1347,7 @@ const server = createServer(async (request, response) => {
       return send(response, 200, { added: items.length, items: owned('research', request) })
     }
     const researchCollectMatch = url.pathname.match(/^\/api\/research\/(\d+)\/collect$/)
-    if (researchCollectMatch && request.method === 'POST') { const item = owned('research', request).find(existing => existing.id === Number(researchCollectMatch[1])); if (!item) return send(response, 404, { error: '研究条目不存在' }); const existing = owned('materials', request).find(material => material.source_type === 'research' && material.source_id === item.id && !material.deleted_at); if (existing) return send(response, 200, { ...existing, duplicate: true }); const material = { id: nextId(state.materials), owner_id: userId(request), name: item.title, material_kind: 'hotspot', material_trust: item.source === 'demo' ? 'derived' : 'sourced', unit_type: unitTypeFromKind('hotspot'), source_type: 'research', source_id: item.id, source_refs: [sourceRef('research', item.id)], url: item.url || null, content: item.title, status: 'ready', ...poolFieldsForNew({ kind: 'hotspot' }), created_at: new Date().toISOString(), updated_at: new Date().toISOString() }; state.materials.push(material); item.collected = true; await saveState('materials', 'research'); return send(response, 201, withPoolFields(material)) }
+    if (researchCollectMatch && request.method === 'POST') { const item = owned('research', request).find(existing => existing.id === Number(researchCollectMatch[1])); if (!item) return send(response, 404, { error: '研究条目不存在' }); const { material, duplicate } = await collectResearchMaterial(request, item); if (!duplicate) await saveState('materials', 'research'); return send(response, duplicate ? 200 : 201, withPoolFields({ ...material, duplicate })) }
     if (url.pathname === '/api/research/similar' && request.method === 'POST') {
       const body = await readJson(request)
       const account = String(body.account || '').trim()
@@ -1318,7 +1425,16 @@ const server = createServer(async (request, response) => {
     if (analyzeMatch && request.method === 'POST') {
       const item = owned('research', request).find(existing => existing.id === Number(analyzeMatch[1]))
       if (!item) return send(response, 404, { error: '研究条目不存在' })
-      item.analysis = { hook: '公开失败账本', audience: '正在经营个人 IP 的创业者', pain_point: '流量内容缺少可信证据', thesis: '真实经营数据能转化为信任资产', structure: ['反常识开场', '真实案例', '方法拆解', '评论区提问'], quotes: ['可信度来自持续交付'], cta: '分享你最近一次复盘', evidence_refs: item.source_refs, transferable_patterns: ['用具体过程替代空泛观点'], confidence: 0.86 }
+      // 以前这里返回一份写死的分析（连置信度都固定），跟条目内容无关——那是伪装成数据的模板。
+      // 现在真让模型看这条热点；没配模型就明确失败，不给一个看起来专业的假结论。
+      let analysis
+      try {
+        const content = await generateStructured(request, researchAnalysisPrompt, researchAnalysisVariables(item))
+        analysis = parseResearchAnalysis(content)
+      } catch (error) {
+        return modelFailureResponse(response, error, '热点拆解失败，请检查模型配置并重试；条目原样保留。')
+      }
+      item.analysis = { ...analysis, evidence_refs: item.source_refs || [], analyzed_at: new Date().toISOString() }
       const extracted = state.structures.find(existing => existing.owner_id === userId(request) && existing.source_kind === 'research' && existing.source_id === item.id)
       if (extracted) {
         extracted.steps = [...item.analysis.structure]
@@ -1358,11 +1474,46 @@ const server = createServer(async (request, response) => {
       const body = await readJson(request)
       const text = String(body.text || '').trim().slice(0, 8000)
       if (!text) return send(response, 422, { error: '素材内容不能为空' })
+      // 一次跑一对角度（老板 / 员工、经营 / 市场）：同一件事从两个角度看，
+      // 两组主张天生就是正反配对，写稿时「驳」的就是这里真实存在的另一种立场。
+      const angles = normalizeAngles(body.angles)
       try {
-        const content = await generateStructured(request, claimsSystemPrompt, { text })
-        return send(response, 200, parseClaims(content))
+        // 一对角度分两次问：一次问两个角度时，真模型会把两条主张都标成第一个角度，反方就成了空的。
+        const runs = []
+        for (const angle of angles.length ? angles : ['']) {
+          // 第二个角度要看清第一个角度说了什么，否则真模型会把同一句换个位置再交一遍。
+          const already = runs.flatMap(result => result.claims || [])
+          let result = null
+          // 交白卷且前面确实已有主张时，再逼问一次：真模型常常是懒得换位，不是素材真没有角度差。
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            const secondTry = attempt === 1
+            const content = await generateStructured(request, [claimsSystemPrompt, claimsAngleNote(angle ? [angle] : [], already, secondTry)], { text, ...(already.length ? { already_stated: already } : {}) })
+            result = parseClaims(content, angle ? [angle] : [])
+            if (result.claims.length || !angle || !already.length) break
+          }
+          runs.push(result)
+        }
+        // run_id 由服务端生成：用户点几次存素材都归到同一次拆解里，反方才查得出来。
+        return send(response, 200, { ...mergeClaimRuns(runs, angles), angles, run_id: randomUUID() })
       } catch (error) {
-        return modelFailureResponse(response, error, '主张提炼失败，请检查模型配置并重试。')
+        return modelFailureResponse(response, error, '主张提炼失败，请检查模型配置并重试。', [...modelFailureEchoCodes, 'MODEL_OUTPUT_INVALID'])
+      }
+    }
+    // 逐条判主张的逻辑。判定只标注、不拦停（见 claim-logic.mjs 的理由）。
+    if (url.pathname === '/api/skills/claims/check' && request.method === 'POST') {
+      const body = await readJson(request)
+      const material = body.material_id === undefined || body.material_id === null ? null : owned('materials', request).find(item => item.id === Number(body.material_id))
+      const text = String(body.text || material?.content || '').trim()
+      if (!text) return send(response, 422, { error: '要检查的主张不能为空' })
+      try {
+        const content = await generateStructured(request, claimLogicPrompt, claimLogicVariables({ text, scope: body.scope || material?.logic_scope, why: body.why }))
+        const verdict = parseClaimLogicVerdict(content)
+        if (!material) return send(response, 200, { ...verdict, text })
+        Object.assign(material, { logic_status: verdict.status, logic_note: verdict.breakpoint ? `断点：${verdict.breakpoint}` : verdict.note, logic_checked_at: new Date().toISOString(), logic_source_checksum: material.checksum || materialChecksum(text), updated_at: new Date().toISOString() })
+        await saveState('materials')
+        return send(response, 200, { ...verdict, material: withPoolFields({ ...material, material_trust: materialTrustOf(material), unit_type: unitTypeOf(material) }), logic_state: logicStateOf(material) })
+      } catch (error) {
+        return modelFailureResponse(response, error, '逻辑判定失败，请检查模型配置并重试；判定失败不改素材原有结论。')
       }
     }
     // 逻辑检查：只查一种毛病——提了问题，但后文给的办法治的是另一件事。
@@ -1440,6 +1591,45 @@ const server = createServer(async (request, response) => {
         throw error
       }
       return send(response, 201, topics.map(defaultTopicFields))
+    }
+    if (url.pathname === '/api/topics' && request.method === 'POST') {
+      const body = await readJson(request)
+      const title = String(body.title || '').trim()
+      if (!title) return send(response, 422, { error: '选题标题不能为空' })
+      if (title.length > 300) return send(response, 422, { error: '选题标题不能超过 300 字' })
+      const rationale = String(body.rationale || '').trim()
+      if (rationale.length > 1000) return send(response, 422, { error: '依据不能超过 1000 字' })
+      const angle = String(body.angle || '').trim().slice(0, 20)
+      const layer = layerOf(body.strategy_layer) || 'trust'
+      let viewpointId = Number(body.viewpoint_material_id) || null
+      if (body.research_id) {
+        const item = owned('research', request).find(existing => existing.id === Number(body.research_id))
+        if (!item) return send(response, 422, { error: '研究条目不存在' })
+        const collected = await collectResearchMaterial(request, item)
+        viewpointId = collected.material.id
+        await saveState('materials', 'research')
+      }
+      if (viewpointId && !owned('materials', request).some(material => material.id === viewpointId)) return send(response, 422, { error: '主观点对应的素材不存在，先去素材库存下这条主张' })
+      const topic = defaultTopicFields({ id: nextId(state.topics), owner_id: userId(request), title, rationale: rationale || '用户自己立的选题', content_job: '把这条判断讲圆', strategy_layer: layer, hook_kind: hookKindOf(body.hook_kind), angle, viewpoint_material_id: viewpointId, fact_risk: 'needs_review', goal_refs: ['positioning'], source_refs: viewpointId ? [sourceRef('material', viewpointId)] : [], created_at: new Date().toISOString(), generation_context: { manual: true } })
+      state.topics.push(topic)
+      try { await saveState('topics') } catch (error) { state.topics = state.topics.filter(item => item.id !== topic.id); throw error }
+      return send(response, 201, topic)
+    }
+    // 改角度与主观点不重跑评估：它不改变这条选题值不值得做，只改变「从哪个角度说」。
+    const topicStanceMatch = url.pathname.match(/^\/api\/topics\/(\d+)\/stance$/)
+    if (topicStanceMatch && request.method === 'PUT') {
+      const topic = owned('topics', request).find(item => item.id === Number(topicStanceMatch[1]))
+      if (!topic) return send(response, 404, { error: '选题不存在' })
+      const body = await readJson(request)
+      if (body.angle !== undefined) topic.angle = String(body.angle || '').trim().slice(0, 20)
+      if (body.viewpoint_material_id !== undefined) {
+        const id = Number(body.viewpoint_material_id)
+        if (body.viewpoint_material_id === null) topic.viewpoint_material_id = null
+        else if (!Number.isFinite(id) || !owned('materials', request).some(material => material.id === id)) return send(response, 422, { error: '主观点对应的素材不存在' })
+        else topic.viewpoint_material_id = id
+      }
+      await saveState('topics')
+      return send(response, 200, defaultTopicFields(topic))
     }
     const topicRevisionMatch = url.pathname.match(/^\/api\/topics\/(\d+)\/revision$/)
     if (topicRevisionMatch && request.method === 'PUT') {
@@ -1539,6 +1729,13 @@ const server = createServer(async (request, response) => {
       const experienceMaterials = (body.experience_ids || []).map(id => owned('materials', request).find(item => item.id === id && !item.deleted_at)).filter(item => item && item.material_kind === 'experience')
       // 按认知角色取的素材：QST/CON/OPI/CAS/SOL 都进简报，不再只有 quote 和 experience。
       const roleMaterials = (body.material_ids || []).map(id => owned('materials', request).find(item => item.id === id && !item.deleted_at)).filter(Boolean)
+      // 主观点与它的反方：即便用户没勾，也跟着进简报。
+      // 不带 stance 就等于「只按标题写」，不带反方就等于让模型自己发明一个要驳的靶子。
+      const allMaterials = owned('materials', request)
+      const stance = resolveStance(topic, allMaterials)
+      const counterparts = counterpartClaims(stance, allMaterials)
+      const stanceIds = [stance?.material_id, ...counterparts.map(item => item.material_id)].filter(Boolean)
+      const briefMaterials = [...roleMaterials, ...stanceIds.map(id => allMaterials.find(item => item.id === id && !item.deleted_at)).filter(Boolean)]
       if (structure) {
         structure.usage_count += 1
         structure.updated_at = new Date().toISOString()
@@ -1551,7 +1748,7 @@ const server = createServer(async (request, response) => {
       const contentFormat = resolveVideoFormat(body.content_format || topic?.content_format)
       const memories = activeMemories(userId(request)).filter(item => item.memory_type === 'style' || item.memory_type === 'feedback')
       const mechanisms = activeMemories(userId(request)).filter(item => item.memory_type === 'benchmark')
-      const brief = buildDraftBrief({ topic, structure, quotes: quoteMaterials, experiences: experienceMaterials, materials: roleMaterials, memories, mechanisms, hookText: requestedHook, format: contentFormat })
+      const brief = buildDraftBrief({ topic, structure, quotes: quoteMaterials, experiences: experienceMaterials, materials: briefMaterials, memories, mechanisms, hookText: requestedHook, format: contentFormat, stance, counterparts })
       const configs = { primary: runtimeConfig(request, 'text_primary'), fallback: runtimeConfig(request, 'text_fallback') }
       if (!configs.primary && !configs.fallback) return send(response, 422, { code: 'MISSING_CONFIG', reason: 'llm_not_configured', error: '草稿正文由大模型撰写，请先在 API 中心配置文本模型。' })
       if (usesSharedPrimaryLlm(request)) {
@@ -1598,10 +1795,10 @@ const server = createServer(async (request, response) => {
         return send(response, 502, { code: 'GENERATION_FAILED', error: '草稿生成失败，请检查模型配置后重试；本次未生成草稿。', retryable: true, detail: error instanceof Error ? error.message : undefined })
       }
       const variantGroupId = randomUUID()
-      const usableAtoms = [...new Map([...quoteMaterials, ...experienceMaterials, ...roleMaterials].filter(briefUsableMaterial).map(item => [item.id, item])).values()]
+      const usableAtoms = [...new Map([...quoteMaterials, ...experienceMaterials, ...briefMaterials].filter(briefUsableMaterial).map(item => [item.id, item])).values()]
       const atomRefs = usableAtoms.map(item => sourceRef('material', item.id))
       const sourceRefs = uniqueSourceRefs([...(topic.source_refs || []), ...(structure ? [sourceRef('structure', structure.id)] : []), ...atomRefs])
-      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: contentFormat, title: topic.title, body: bodies[platform], plain_body: bodies[platform], spoken_body: null, script_stage: 'plain', version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: usableAtoms.map(item => item.id), hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateSummary } }, created_at: new Date().toISOString() }))
+      const drafts = draftPlatforms.map((platform, index) => defaultDraftWorkflowFields({ id: nextId(state.drafts) + index, owner_id: userId(request), topic_id: topic.id || null, platform, content_format: contentFormat, title: topic.title, body: bodies[platform], plain_body: bodies[platform], spoken_body: null, script_stage: 'plain', version: 1, strategy_layer: topic.strategy_layer, goal_refs: topic.goal_refs || [], source_refs: sourceRefs, fact_check_status: 'needs_review', status: 'draft', workflow_status: gateFailure ? 'needs_revision' : 'draft', hooks: [], selected_hook_id: null, selected_hook: null, platform_variants: [], variant_group_id: variantGroupId, variant_type: 'platform', generation_context: { topic_id: topic.id || null, structure_id: structure?.id || null, material_ids: usableAtoms.map(item => item.id), stance_material_id: stance?.material_id || null, counterpart_ids: counterparts.length ? briefMaterials.filter(item => counterparts.some(entry => entry.material_id === item.id)).map(item => item.id) : [], hook_text: requestedHook || null, brief, provider, gate: { rewritten, failed: Boolean(gateFailure), unbacked_numbers: unbackedByPlatform[platform] || [], summary: gateSummary } }, created_at: new Date().toISOString() }))
       if (persistedTopic?.id) {
         const archivedAt = new Date().toISOString()
         for (const draft of supersededDraftsForRegenerate(state.drafts, { ownerId: userId(request), topicId: persistedTopic.id })) {
@@ -1709,10 +1906,21 @@ const server = createServer(async (request, response) => {
         draft.script_stage = 'spoken'
         draft.version += 1
         draft.updated_at = now
-        draft.workflow_status = 'content_ready'
-        draft.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
+        // 转换完必须当场重跑检查。之前是把上一轮结果清空就当"没问题"，
+        // 等于口播稿这一版从来没被验收过——而它才是要拍的那一版。
+        // persona / quality 都是本地判据，重跑不花模型钱。
+        const profile = userDocument('profile', request)
+        const replaced = new Set(activeFeatureReplacements(state.preferences.filter(item => item.owner_id === userId(request))).keys())
+        const personaCheck = checkPersona(draft, profile)
+        const qualityCheck = { ...checkQuality(draft, profile, { replacedFeatureIds: replaced }), report: diagnosticReport(draft) }
+        const briefText = draft.generation_context?.brief
+        const spokenMaterialText = briefText ? [briefText.title, ...Object.values(briefText.material_roles || {}).flat().map(item => item.text), ...(briefText.quotes || []).map(item => item.text), ...(briefText.experiences || []), ...(briefText.structure || [])].join(' ') : ''
+        const unbacked = spokenMaterialText ? unbackedNumberHits(draft.body, spokenMaterialText) : []
+        draft.workflow_status = qualityCheck.status === 'blocked' ? 'needs_revision' : 'quality_checked'
+        draft.checks = { ...(draft.checks || {}), persona: personaCheck, quality: qualityCheck, publish_checklist: null }
+        draft.generation_context = { ...(draft.generation_context || {}), gate: { ...(draft.generation_context?.gate || {}), unbacked_numbers: unbacked } }
         draft.ideas = null
-        draft.generation_context = { ...(draft.generation_context || {}), spoken: { at: now, provider: result.provider } }
+        draft.generation_context = { ...draft.generation_context, spoken: { at: now, provider: result.provider } }
         await saveState('drafts')
         return send(response, 200, draft)
       } catch (error) {
@@ -1728,10 +1936,16 @@ const server = createServer(async (request, response) => {
       const body = await readJson(request)
       const input = followupMaterialInput({ draft, entry: { code: body.code, label: body.label }, answer: body.answer })
       if (!input) return send(response, 422, { error: '回答不能为空' })
-      const checksum = createHash('sha256').update(`followup:${draft.id}:${input.content}`).digest('hex')
+      const checksum = materialChecksum(input.content)
       const duplicate = owned('materials', request).find(item => item.checksum === checksum)
-      // 同一个回答重复提交就当幂等，不再写第二条。
-      if (duplicate) return send(response, 200, { ...duplicate, material_trust: materialTrustOf(duplicate), unit_type: unitTypeOf(duplicate), duplicate: true })
+      // 同一个回答重复提交就当幂等；这句话要是从别的门进来过，也只追加来源，不再写第二条。
+      if (duplicate) {
+        const refs = mergeSourceRefs(duplicate.source_refs, input.source_refs)
+        const before = JSON.stringify(duplicate.source_refs || [])
+        duplicate.source_refs = refs
+        if (before !== JSON.stringify(refs)) await saveState('materials')
+        return send(response, 200, { ...duplicate, material_trust: materialTrustOf(duplicate), unit_type: unitTypeOf(duplicate), duplicate: true })
+      }
       const material = {
         id: nextId(state.materials),
         owner_id: userId(request),
@@ -1820,9 +2034,11 @@ const server = createServer(async (request, response) => {
         const outcomeOf = body => checkReviseOutcome({ before: draft.body, after: body, platform: draft.platform, format, note: extraNote, requireImprove: fromChecks })
         let outcome = outcomeOf(nextBody)
         let rewritten = false
-        if (scan.failed || !outcome.ok) {
+        // 「没改善」也再要一版（多一次机会真的改到位），但它不再有权整笔拒收——
+        // 拒收等于按钮按下去一个字没变，用户看到的是「没反应」，而唯一能让它变绿的办法是把内容删掉。
+        if (scan.failed || !outcome.ok || !outcome.improved) {
           rewritten = true
-          const reasons = [scan.failed ? scan.summary : '', ...outcome.failures].filter(Boolean).join('；')
+          const reasons = [scan.failed ? scan.summary : '', ...outcome.failures, ...outcome.warnings].filter(Boolean).join('；')
           const retry = await callLlmWithFallback(configs, [
             { role: 'system', content: resolvePrompt(draftPlatformRevisePrompt(draft.platform, format, { fromChecks, scriptStage: draft.script_stage })).system + '\n上一稿没过验收：' + reasons },
             { role: 'user', content: draftReviseUserMessage({ title: draft.title, body: draft.body, note, fromChecks, previous: nextBody, issues: reasons }) },
@@ -1830,10 +2046,10 @@ const server = createServer(async (request, response) => {
           nextBody = parseReviseBody(retry.content)
           scan = scanGeneratedBody(nextBody, draft.platform)
           outcome = outcomeOf(nextBody)
-          if (scan.failed || !outcome.ok) {
-            const finalReasons = [scan.failed ? scan.summary : '', ...outcome.failures].filter(Boolean).join('；')
-            return send(response, 502, { code: 'REVISE_NOT_IMPROVED', error: `这一条没改成：${finalReasons}。未改库。可以再试一次，或在「修改意见」里写清要保留哪几句。`, retryable: true })
-          }
+        }
+        if (scan.failed || !outcome.ok) {
+          const finalReasons = [scan.failed ? scan.summary : '', ...outcome.failures].filter(Boolean).join('；')
+          return send(response, 502, { code: 'REVISE_REJECTED', error: `这一条没改成：${finalReasons}。未改库。可以再试一次，或在「修改意见」里写清要保留哪几句。`, retryable: true })
         }
         const now = new Date().toISOString()
         draft.history ||= []
@@ -1846,9 +2062,10 @@ const server = createServer(async (request, response) => {
         draft.checks = { ...(draft.checks || {}), quality: null, publish_checklist: null }
         // 正文变了，之前那批按旧正文出的标题/开头方案就不能再摆着了。
         draft.ideas = null
-        draft.generation_context = { ...(draft.generation_context || {}), content_format: draft.content_format || format, revise: { note, format, rewritten, at: now } }
+        draft.generation_context = { ...(draft.generation_context || {}), content_format: draft.content_format || format, revise: { note, format, rewritten, at: now, remaining: outcome.warnings } }
         await saveState('drafts')
-        return send(response, 200, draft)
+        // 改是改了，但「被点名的问题还在」必须说出口——不然是把锅悄悄甩给模型没本事。
+        return send(response, 200, { ...draft, revise_notice: outcome.warnings.length ? `${outcome.warnings[0]}。已存成新稿，不满意点「恢复」回到上一版。` : '' })
       } catch (error) {
         return send(response, 502, { error: error?.message || '按意见改写失败，请稍后重试', retryable: true })
       }
@@ -2328,7 +2545,11 @@ const server = createServer(async (request, response) => {
 })
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`Content IP API listening on http://localhost:${port}`)
+  // 不设加密主键时用固定的全零密钥：拿到 data.json 就能解出里面存的 API Key。
+  // 不拦启动（现有配置就是用它存的，硬拦会让工作台直接打不开），但要把话说在明处。
+  if (!process.env.API_CONFIG_ENCRYPTION_KEY) console.warn('API_CONFIG_ENCRYPTION_KEY 未设置：API Key 用默认主键加密，能读到数据文件的人都能解出来。部署或多人使用前请设置（见 .env.example）。')
+  const info = buildInfo.snapshot()
+  console.log(`Content IP API listening on http://localhost:${port} · ${info.commit || 'nogit'} · ${info.source_files} 个源文件`)
 })
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

@@ -9,7 +9,9 @@ const defaultRoot = path.resolve(path.dirname(currentFile), '..')
 const defaultLogFile = path.join(defaultRoot, 'local-app.log')
 
 export const services = [
-  { name: 'API', port: 3001, healthUrl: 'http://127.0.0.1:3001/healthz', npmArgs: ['run', 'server'], responseType: 'api' },
+  // 后台用 --watch：不改代码就白测一整天旧行为的事故出过（2026-09-20，36 个提交没进进程）。
+  // data.json 与日志不在 import 图里，写它们不会触发重启，已实测。
+  { name: 'API', port: 3001, healthUrl: 'http://127.0.0.1:3001/healthz', versionUrl: 'http://127.0.0.1:3001/api/version', npmArgs: ['run', 'server:watch'], responseType: 'api' },
   { name: 'VITE', port: 5173, healthUrl: 'http://127.0.0.1:5173/', npmArgs: ['run', 'dev', '--', '--host', '127.0.0.1'], responseType: 'frontend' },
 ]
 
@@ -47,8 +49,26 @@ export async function probeService(service, fetchFn = fetch, timeoutMs = 1200) {
   }
 }
 
-export function isPortOpen(port, host = '127.0.0.1', timeoutMs = 600) {
-  return new Promise(resolve => {
+// 复用已在跑的后台之前先问一句「你跑的是最新代码吗」。
+// 判据在后台自己身上（启动时的源码指纹 vs 磁盘当前指纹），这里只负责说出来。
+export async function probeApiBuild(service, fetchFn = fetch, timeoutMs = 1200) {
+  if (service.responseType !== 'api' || !service.versionUrl) return null
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetchFn(service.versionUrl, { signal: controller.signal })
+    if (!response.ok) return null
+    const payload = await response.json()
+    return payload?.stale ? payload : null
+  } catch {
+    // 读不到就当作不陈旧：老后台没有 /api/version，下面的日志不该把它说成"没问题"，交给界面那个角标去报。
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export function isPortOpen(port, host = '127.0.0.1', timeoutMs = 600) {  return new Promise(resolve => {
     const socket = net.createConnection({ port, host })
     const finish = result => {
       socket.removeAllListeners()
@@ -144,8 +164,15 @@ export async function runLauncher(options = {}) {
   for (const service of services) {
     const healthy = await probeService(service, fetchFn)
     if (healthy) {
-      status[service.name] = 'reused'
-      logger('launcher', `${service.name} 已运行，直接复用`)
+      const stale = await probeApiBuild(service, fetchFn)
+      if (stale) {
+        status[service.name] = 'reused_stale'
+        const started = stale.started_at ? new Date(stale.started_at).toLocaleString('zh-CN', { hour12: false }) : '未知'
+        logger(service.name, `已运行的后台启动于 ${started}，磁盘上已有比它更新的后台代码：现在界面上看到的行为不是最新代码的行为。请重启后台再验证（界面右上角也会红字提示）。`)
+      } else {
+        status[service.name] = 'reused'
+        logger('launcher', `${service.name} 已运行，直接复用`)
+      }
       continue
     }
     if (await portOpen(service.port)) {

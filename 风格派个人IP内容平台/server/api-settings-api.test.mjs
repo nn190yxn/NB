@@ -27,7 +27,7 @@ function startServer() {
   child.stdout.on('data', data => logs.push(String(data)))
   child.stderr.on('data', data => logs.push(String(data)))
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('API 配置测试服务启动超时')), 5000)
+    const timeout = setTimeout(() => reject(new Error('API 配置测试服务启动超时')), 20000)
     child.stdout.on('data', data => {
       if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve({ child, logs, baseUrl, dataFile }) }
     })

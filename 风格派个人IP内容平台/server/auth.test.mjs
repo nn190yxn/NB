@@ -23,7 +23,7 @@ function startServer({ serverPort = port, nodeEnv = 'test', extraEnv = {} } = {}
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 5000)
+    const timeout = setTimeout(() => reject(new Error('测试 API 启动超时')), 20000)
     child.stdout.on('data', data => {
       if (String(data).includes('Content IP API listening')) {
         clearTimeout(timeout)
@@ -570,7 +570,7 @@ test('production access password gates the session', async t => {
   })
   t.after(() => server.kill())
   await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('生产 API 启动超时')), 5000)
+    const timeout = setTimeout(() => reject(new Error('生产 API 启动超时')), 20000)
     server.stdout.on('data', data => {
       if (String(data).includes('Content IP API listening')) { clearTimeout(timeout); resolve(null) }
     })

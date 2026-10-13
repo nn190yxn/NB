@@ -110,7 +110,7 @@ function App() {
   const [focusedResearchId, setFocusedResearchId] = useState<number | null>(null)
   const [showOnboarding, setShowOnboardingState] = useState(false)
   const setShowOnboarding = (next: boolean) => { if (!next || draftLeaveGuard.current()) setShowOnboardingState(next) }
-  const [authState, setAuthState] = useState<'checking' | 'ok' | 'need-password'>('checking')
+  const [authState, setAuthState] = useState<'checking' | 'ok' | 'need-password' | 'backend-down'>('checking')
   const [expired, setExpired] = useState(false)
   const [accountId, setAccountId] = useState('')
   useEffect(() => {
@@ -187,12 +187,47 @@ function App() {
 
   const dismissOnboarding = () => setShowOnboarding(false)
 
-  useEffect(() => {
-    if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js')
+  // 后台没应答 ≠ 没登录。以前这两种混在一起：桌面端刚启动、后台还在起来的那几秒，
+  // 界面会直接把人推到「登录你的工作台」——数据一个字没丢，看着却像账号没了。
+  const backendSilent = (error: unknown) => {
+    const status = (error as ApiError | undefined)?.status
+    return status === undefined || status >= 500
+  }
+  const probeSession = () => {
     void apiJson('/api/auth/session')
       .then(() => { setAuthState('ok'); checkFirstUse() })
-      .catch(() => apiJson('/api/auth/session', { method: 'POST' }).then(() => { setAuthState('ok'); checkFirstUse() }).catch(() => setAuthState('need-password')))
+      .catch(sessionFailure => {
+        if (backendSilent(sessionFailure)) { setAuthState('backend-down'); return }
+        void apiJson('/api/auth/session', { method: 'POST' })
+          .then(() => { setAuthState('ok'); checkFirstUse() })
+          .catch(createFailure => setAuthState(backendSilent(createFailure) ? 'backend-down' : 'need-password'))
+      })
+  }
+
+  useEffect(() => {
+    // 离线缓存在开发时是有害的：它「缓存优先」地发旧 JS/CSS，盖住 Vite 的不缓存策略，
+    // 于是改了代码、刷新了页面，看到的还是上一份——正是「明明改了怎么没生效」的第二台机器。
+    // 所以只在打包出来的产物里注册；开发环境下顺手把旧的注销并清掉缓存。
+    if ('serviceWorker' in navigator) {
+      if (import.meta.env.PROD) void navigator.serviceWorker.register('/sw.js')
+      else void navigator.serviceWorker.getRegistrations()
+        .then(async list => {
+          await Promise.all(list.map(registration => registration.unregister()))
+          const keys = await caches.keys()
+          await Promise.all(keys.map(key => caches.delete(key)))
+        })
+        .catch(() => { /* 清不掉也不该拦住页面启动 */ })
+    }
+    probeSession()
   }, [])
+
+  useEffect(() => {
+    if (authState !== 'backend-down') return
+    // 用 interval 而不是 setTimeout：一次重探如果还是不通，得继续问下去，
+    // 否则这句「每 3 秒自己再问一次」就是假的，页面会一直停在提示上。
+    const timer = window.setInterval(probeSession, 3000)
+    return () => window.clearInterval(timer)
+  }, [authState])
 
   const syncNow = () => {
     setSyncing(true)
@@ -237,6 +272,7 @@ function App() {
   }
 
   if (authState === 'checking') return <p role="status">正在验证会话...</p>
+  if (authState === 'backend-down') return <section className="backend-down"><strong>后台没有应答</strong><p>界面连的是本机后台，它现在没回话，多半正在启动或刚重启。你的素材、选题、草稿都在原来的文件里，一个字没丢。</p><small>这一页每 3 秒自己再问一次。要是一直不恢复：按 README 的「启动桌面端」重新打开，或在终端里跑 <code>npm run server</code>。</small></section>
   if (authState === 'need-password') {
     return <PasswordGate theme={theme} font={font} onSuccess={() => window.location.reload()} />
   }
@@ -265,7 +301,7 @@ function App() {
       </aside>
 
       <section className="content-shell">
-         <header className="topbar"><button className="mobile-menu" aria-label="打开导航" onClick={() => setShowMobileMenu(!showMobileMenu)}><Menu size={20} /></button><div className="breadcrumbs"><span>我的内容工作台</span><span>/</span><strong>{activeNav}</strong></div><GlobalSearch onNavigate={setActiveNav} /><div className="top-actions"><button className="icon-button" aria-label="帮助" onClick={() => setShowOnboarding(true)}><CircleHelp size={18} /></button><div className="theme-picker"><button className="theme-trigger" onClick={() => setShowThemes(!showThemes)}><SunMedium size={16} /><span>{themes[theme].name}</span><ChevronDown size={14} /></button>{showThemes && <ThemeMenu theme={theme} setTheme={setTheme} close={() => setShowThemes(false)} font={font} setFont={setFont} />}</div><button className="avatar small" aria-label="用户菜单" onClick={() => setShowReview(true)}>我</button></div></header>
+         <header className="topbar"><button className="mobile-menu" aria-label="打开导航" onClick={() => setShowMobileMenu(!showMobileMenu)}><Menu size={20} /></button><div className="breadcrumbs"><span>我的内容工作台</span><span>/</span><strong>{activeNav}</strong></div><GlobalSearch onNavigate={setActiveNav} /><div className="top-actions"><BuildStatus /><button className="icon-button" aria-label="帮助" onClick={() => setShowOnboarding(true)}><CircleHelp size={18} /></button><div className="theme-picker"><button className="theme-trigger" onClick={() => setShowThemes(!showThemes)}><SunMedium size={16} /><span>{themes[theme].name}</span><ChevronDown size={14} /></button>{showThemes && <ThemeMenu theme={theme} setTheme={setTheme} close={() => setShowThemes(false)} font={font} setFont={setFont} />}</div><button className="avatar small" aria-label="用户菜单" onClick={() => setShowReview(true)}>我</button></div></header>
            <div className="page-content">{apiFailure && <div className="api-failure-banner" role="alert"><strong>刚才有一件事没成功</strong><span>{apiFailure.message}</span><button onClick={() => setApiFailure(null)}>知道了</button></div>}{(!online || pendingSync > 0) && <div className="offline-banner" role="status">{online ? `有 ${pendingSync} 个素材等待同步。` : '当前处于离线状态，已加载内容仍可查看。'} <button onClick={syncNow} disabled={!online || syncing}>{syncing ? '同步中...' : '立即同步'}</button></div>}{conflicts.length > 0 && <div className="conflict-banner" role="alert"><strong>{conflicts.length} 个内容版本发生冲突</strong>{conflicts.map(conflict => <span key={conflict.id}>{conflict.resource_type === 'draft' ? '草稿' : '拍摄清单'} #{conflict.resource_id}<button onClick={() => resolveConflict(conflict, 'local')}>保留本地</button><button onClick={() => resolveConflict(conflict, 'remote')}>保留远端</button></span>)}</div>}{damagedQueue && <div className="api-failure-banner" role="alert"><strong>本地有一份待同步记录读坏了</strong><span>{damagedQueue.at ? `备份时间 ${new Date(damagedQueue.at).toLocaleString()}。` : ''}它不会自己消失，但也一直没能同步上去。把备份内容复制出来交给开发者，可以人工找回。</span>{damagedQueue.raw ? <button onClick={() => { void copyText(damagedQueue.raw || '') }}>复制备份内容</button> : null}</div>}
             {showReview && <StrategyReview ratios={strategyRatios} onClose={() => setShowReview(false)} />}
             {showSettings && <SettingsPanel theme={theme} setTheme={setTheme} font={font} setFont={setFont} onClose={() => setShowSettings(false)} />}
@@ -805,7 +841,7 @@ const materialSourceLabel = (item: MaterialItem) => String(item.source_label || 
 // 句式自带的类型标签就写在末尾括号里（数字冲击开场 / 量化损失…），只用于展示。
 const materialPatternTag = (item: MaterialItem) => (String(item.content || '').match(/（([^（）]{2,12})）\s*$/) || [])[1] || ''
 const materialGroupKey = (item: MaterialItem) => !item.material_kind || item.material_kind === 'article' ? '文章素材' : String(item.name || '').trim() || materialKindLabels[item.material_kind]
-type MaterialItem = { id: number; name: string; format: string; status: string; review_status: string; content?: string; url?: string | null; material_kind?: MaterialKind; material_trust?: string; unit_type?: string | null; source_type?: string; source_id?: number | null; source_path?: string | null; device_id?: string | null; research_platform?: string; research_metrics?: { discussions?: number; growth?: number }; origin_source_id?: number | null; origin_text?: string; origin_material_name?: string | null; source_label?: string | null; extracted_fields?: { segments?: string[]; candidate_topics?: string[]; quotes?: string[]; collected?: Partial<Record<'quote' | 'hotspot', string[]>> }; imported_at?: string; use_tag?: string | null; material_pool?: 'hot' | 'built'; days_left?: number | null; expired?: boolean }
+type MaterialItem = { id: number; name: string; format: string; status: string; review_status: string; content?: string; url?: string | null; material_kind?: MaterialKind; material_trust?: string; unit_type?: string | null; angle?: string | null; claims_run?: string | null; logic_status?: string | null; logic_state?: string; logic_note?: string | null; logic_checked_at?: string | null; logic_source_checksum?: string | null; source_type?: string; source_id?: number | null; source_path?: string | null; device_id?: string | null; research_platform?: string; research_metrics?: { discussions?: number; growth?: number }; origin_source_id?: number | null; origin_text?: string; origin_material_name?: string | null; source_label?: string | null; extracted_fields?: { segments?: string[]; candidate_topics?: string[]; quotes?: string[]; collected?: Partial<Record<'quote' | 'hotspot', string[]>> }; imported_at?: string; use_tag?: string | null; material_pool?: 'hot' | 'built'; days_left?: number | null; expired?: boolean }
 const materialKindLabels: Record<MaterialKind, string> = { article: '文章', quote: '金句', hotspot: '热点', insight: '知识点', experience: '经历' }
 // 料台两池（阶段 2）。池名、会不会过期、以及一句说清分池的用处——都取自原型 mockups/素材库-新料台.html。
 const materialPools: { key: 'hot' | 'built'; title: string; pill: string; note: string }[] = [
@@ -821,12 +857,24 @@ const materialTrustLabels: Record<string, string> = { verified: '已确认', sou
 // 五类认知角色：装配按角色取料。QST 问题 / CON 概念 / OPI 主张 / CAS 案例 / SOL 方案。
 const materialUnitKeys = ['QST', 'CON', 'OPI', 'CAS', 'SOL']
 const materialUnitLabels: Record<string, string> = { QST: '问题', CON: '概念', OPI: '主张', CAS: '案例', SOL: '方案' }
+// 每个角色在正文里干的事，和 server/draft-writing.mjs 提示词里的分工是同一套话，别两处各说一套。
+const composeRoleNotes: Record<string, string> = {
+  QST: '开头要替读者说出的那个疑问',
+  CON: '需要澄清的说法，别默认读者懂',
+  OPI: '正文要立住的判断',
+  CAS: '唯一能引用的事实和案例',
+  SOL: '结尾那一步动作',
+}
+// 主张的逻辑判定：四档都得说人话，尤其「正文改过，判定作废」不能显示成"已查过"。
+const materialLogicLabels: Record<string, string> = { unchecked: '没查逻辑', stale: '正文改过，判定作废', passed: '逻辑成立', conditional: '有条件成立', failed: '逻辑不成立' }
+// 选主观点时就把判定亮出来：不成立照样能选（用户的口径：逻辑不通但利观点可能还能用），但要看得见。
+const logicStateHint = (item: MaterialItem) => `逻辑判定：${materialLogicLabels[item.logic_state || 'unchecked']}`
 const strategyLayerLabels: Record<string, string> = { reach: '泛流量触达', trust: '垂直信任', conversion: '核心目标转化' }
 // 四类钩子（阶段 2）：只决定「开头怎么把人留住」，不决定选题值不值得做。可以不选。
 const topicHookKinds = ['counter_consensus', 'contrast_number', 'identity', 'public_emotion'] as const
 const topicHookLabels: Record<string, string> = { counter_consensus: '打翻共识', contrast_number: '反差数字', identity: '身份代入', public_emotion: '公共情绪' }
 type TopicDimension = { score: number; evidence: string[]; suggestions: string[] }
-type TopicItem = { id: number; title: string; rationale: string; content_job: string; strategy_layer: string; workflow_status?: string; content_format?: string; content_format_reason?: string; decision?: 'do' | 'revise' | 'defer' | null; decision_reason?: string; evaluation?: { score: number; decision: 'do' | 'revise' | 'defer'; dimensions: Record<string, TopicDimension>; evidence: { dimension: string; message: string }[]; suggestions: string[]; conclusion?: string; first_step?: string; all_weak?: boolean; evaluated_at: string } | null; generation_context?: { cold_start?: { error?: string; missing_labels?: string[]; gain?: string } | null } | null }
+type TopicItem = { id: number; title: string; rationale: string; content_job: string; strategy_layer: string; workflow_status?: string; content_format?: string; content_format_reason?: string; angle?: string; viewpoint_material_id?: number | null; decision?: 'do' | 'revise' | 'defer' | null; decision_reason?: string; evaluation?: { score: number; decision: 'do' | 'revise' | 'defer'; dimensions: Record<string, TopicDimension>; evidence: { dimension: string; message: string }[]; suggestions: string[]; conclusion?: string; first_step?: string; all_weak?: boolean; evaluated_at: string } | null; generation_context?: { cold_start?: { error?: string; missing_labels?: string[]; gain?: string } | null } | null }
 type DraftHook = { id: string; label: string; text: string; source_refs?: unknown[]; validation: { status: string; evidence: string[]; length: number } }
 // 阶段 4「标记式改稿」：scope 说清这一条该去哪改——
 // locatable 能单独改（有具体词句）；whole_body 是缺了什么，没哪一处可改；
@@ -957,6 +1005,39 @@ function methodCategoryOf(item: Pick<StructureItem, 'title' | 'steps' | 'content
 }
 
 type SearchHit = { kind: string; title: string; sub: string; target: string }
+
+type BuildInfo = { commit?: string | null; started_at?: string; uptime_ms?: number; stale?: boolean; newest_source_at?: string; source_files?: number; dirty?: boolean; data_file?: string; storage?: string }
+
+const uptimeLabel = (ms?: number) => {
+  if (ms == null) return '时间未知'
+  const minutes = Math.floor(ms / 60000)
+  if (minutes < 1) return '刚启动'
+  if (minutes < 60) return `${minutes} 分钟前启动`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前启动`
+  return `${Math.floor(hours / 24)} 天前启动`
+}
+
+// 后台不会热重载：改了 server/ 不重启，跑的还是启动那一刻的代码（2026-09-20 就是这么白测了一整天）。
+// 所以把「后台是哪份代码、什么时候起的、磁盘上有没有比它更新的代码」摆在地方的显眼处。
+// 读失败不安静：后台太旧连这个接口都没有时，正是要说出来的时候。
+function BuildStatus() {
+  const [info, setInfo] = useState<BuildInfo | null>(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void apiJson<BuildInfo>('/api/version').then(value => { if (alive) setInfo(value) }).catch(() => { if (alive) setFailed(true) })
+    return () => { alive = false }
+  }, [])
+
+  if (failed) return <span className="build-chip stale" role="status" title="没读到后台版本：多半是后台没起来，或者跑的是没有这个接口的旧代码">后台版本读不到，重启后台</span>
+  if (!info) return <span className="build-chip">正在读后台版本...</span>
+  const label = `${info.commit || '无 git'} · ${uptimeLabel(info.uptime_ms)}`
+  if (info.stale) return <span className="build-chip stale" role="status" title={`磁盘上的后台代码比正在跑的进程新（最新改动 ${info.newest_source_at || '未知'}）。现在看到的行为不是最新代码的行为，重启后台才生效。数据写在：${info.data_file || '未知'}`}>后台是旧代码，重启才生效（{label}）</span>
+  // 角标还得说清「正在往哪个数据文件写」：前端一换端口就可能连到另一套后台，
+  // 界面上完全看不出是在动真实数据还是副本——这个坑本轮我自己踩过一次。
+  return <span className="build-chip" title={`后台启动于 ${info.started_at || '未知'}，源码 ${info.source_files ?? '未知'} 个文件${info.dirty ? '；工作区有未提交改动' : ''}；数据写在：${info.data_file || '未知'}（${info.storage || '未知'}）`}>后台 {label}</span>
+}
 
 function GlobalSearch({ onNavigate }: { onNavigate: (section: string) => void }) {
   const [query, setQuery] = useState('')
@@ -1367,6 +1448,16 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
       .finally(() => setSkillBusy(''))
   }
 
+  // 认可一条热点当自己的观点：热点先成素材，再作为主观点立一条选题。
+  // 之前这条路根本不存在——选题只能靠"生成"批量出，用户没法说"我要写这个"。
+  const topicFromResearch = (item: ResearchItem) => {
+    setSkillBusy(`topic-${item.id}`); setError('')
+    void apiJson<{ id: number; title: string; viewpoint_material_id?: number | null }>('/api/topics', { method: 'POST', body: JSON.stringify({ title: item.title, research_id: item.id }) })
+      .then(result => setSkillMessage(`已立选题 #${result.id}「${result.title}」，主观点是这条热点（素材 #${result.viewpoint_material_id}）。下一步去「提主张」拆角度，或在选题助手评估后确认做。`))
+      .catch(cause => setError(cause instanceof Error ? cause.message : '立选题失败，请稍后重试。'))
+      .finally(() => setSkillBusy(''))
+  }
+
   const clearFilters = () => { setQuery(''); setPlatform('') }
 
   return <section className="workspace-view"><div className="workspace-view-head"><div><span className="section-kicker">WORKSPACE / RESEARCH PULSE</span><h2>研究脉搏</h2><p>围绕定位和 IP 核心目标，沉淀可追溯的内容资产。</p></div><button className="primary-action" onClick={refreshResearch}>{busy ? '刷新中...' : '刷新研究'} <Radio size={15} /></button></div><div className="structure-library">
@@ -1455,7 +1546,7 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
         <div>
           <h3>{item.title}</h3>
           <p>{item.author || 'RedFox 研究库'} · 讨论 {item.metrics?.discussions || 0} · 增长 {item.metrics?.growth || 0}%</p>
-          {openId === item.id && <div className="research-detail"><strong>爆款方法拆解</strong>{item.analysis?.structure?.length ? <span className="history-list">{item.analysis.structure.map((step, index) => <span key={`${item.id}-${index}`}>{step}</span>)}</span> : <small>暂无拆解方法。可先在爆款方法库中查看可复用框架，或等待刷新研究后重新生成。</small>}<div className="research-collect-row">{item.url && <a href={item.url} target="_blank" rel="noreferrer">打开原链接</a>}<button className="outline-action" disabled={item.collected || skillBusy === `collect-${item.id}`} onClick={() => collectResearch(item)}>{item.collected ? '已收录为素材' : skillBusy === `collect-${item.id}` ? '收录中...' : '收录为素材'}</button></div></div>}
+          {openId === item.id && <div className="research-detail"><strong>爆款方法拆解</strong>{item.analysis?.structure?.length ? <span className="history-list">{item.analysis.structure.map((step, index) => <span key={`${item.id}-${index}`}>{step}</span>)}</span> : <small>暂无拆解方法。可先在爆款方法库中查看可复用框架，或等待刷新研究后重新生成。</small>}<div className="research-collect-row">{item.url && <a href={item.url} target="_blank" rel="noreferrer">打开原链接</a>}<button className="outline-action" disabled={item.collected || skillBusy === `collect-${item.id}`} onClick={() => collectResearch(item)}>{item.collected ? '已收录为素材' : skillBusy === `collect-${item.id}` ? '收录中...' : '收录为素材'}</button><button className="outline-action" disabled={skillBusy === `topic-${item.id}`} onClick={() => topicFromResearch(item)}>{skillBusy === `topic-${item.id}` ? '立选题中...' : '以此立选题'}</button></div></div>}
         </div>
         <button className="row-arrow" onClick={() => setOpenId(openId === item.id ? null : item.id)} aria-label={openId === item.id ? '收起拆解' : '查看拆解'}><ArrowUpRight size={17} /></button>
       </article>)}
@@ -1467,11 +1558,60 @@ function ResearchLibrary({ focusedResearchId }: { focusedResearchId: number | nu
   </div></section>
 }
 
+// 选题的角度与主观点（Requirement 8）。后端早就有 PUT /api/topics/:id/stance，
+// 但界面没有入口——对一个不写代码的人来说，没有入口就等于没有这个功能。
+function TopicStance({ topic, onSaved }: { topic: TopicItem; onSaved: (next: TopicItem) => void }) {
+  const [open, setOpen] = useState(false)
+  const [angle, setAngle] = useState(topic.angle || '')
+  const [viewpointId, setViewpointId] = useState<string>(topic.viewpoint_material_id ? String(topic.viewpoint_material_id) : '')
+  const [claims, setClaims] = useState<MaterialItem[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const toggle = () => {
+    if (open) { setOpen(false); return }
+    setOpen(true)
+    if (claims !== null) return
+    // 主观点必须是素材库里的一条主张：只列 OPI，不给自由文本，避免观点和素材库两套。
+    void apiJson<{ roles: Record<string, MaterialItem[]> }>('/api/materials?by_role=1')
+      .then(result => setClaims(result.roles?.OPI || []))
+      .catch(() => setClaims([]))
+  }
+
+  const save = () => {
+    setBusy(true); setError('')
+    void apiJson<TopicItem>(`/api/topics/${topic.id}/stance`, { method: 'PUT', body: JSON.stringify({ angle: angle.trim(), viewpoint_material_id: viewpointId ? Number(viewpointId) : null }) })
+      .then(next => { onSaved(next); setOpen(false) })
+      .catch(cause => setError(cause instanceof Error ? cause.message : '角度与主观点没存上，请重试。'))
+      .finally(() => setBusy(false))
+  }
+
+  const chosen = claims?.find(item => String(item.id) === viewpointId)
+  return <div className="topic-stance">
+    <button className="text-action" disabled={busy} onClick={toggle}>{open ? '收起' : `角度：${topic.angle || '未定'} · 主观点：${topic.viewpoint_material_id ? `素材 #${topic.viewpoint_material_id}` : '未定'}`}</button>
+    {open && <div className="topic-stance-form">
+      <label><span>这条站在哪个角度说</span><input list="stance-angles" aria-label="选题角度" value={angle} disabled={busy} placeholder="经营 / 管理 / 老板 / 市场…也可自己填" onChange={event => setAngle(event.target.value)} /><datalist id="stance-angles">{materialAngleSuggestions.map(name => <option key={name} value={name} />)}</datalist></label>
+      <label><span>要立住的主观点</span><select aria-label="主观点素材" value={viewpointId} disabled={busy} onChange={event => setViewpointId(event.target.value)}>
+        <option value="">不定（模型只按标题写）</option>
+        {(claims || []).map(item => <option key={item.id} value={item.id}>{item.angle ? `[${item.angle}] ` : ''}{(item.content || '').slice(0, 30)}</option>)}
+      </select></label>
+      {claims !== null && !claims.length && <small className="compose-hint">素材库里还没有「主张」类素材：先去「提主张」拆一对角度，或手动新建一条。</small>}
+      {chosen && <small>选定后写作简报会带上这条，并把它作为反方的对照；{logicStateHint(chosen)}</small>}
+      {error && <p role="alert">{error}</p>}
+      <div className="topic-stance-actions"><button className="primary-action" disabled={busy} onClick={save}>保存</button><button className="skip-action" disabled={busy} onClick={() => setOpen(false)}>取消</button></div>
+    </div>}
+  </div>
+}
+
 function ComposePanel({ preset, onGenerated }: { preset: { topicId: number | null; structureId: number | null } | null; onGenerated: (drafts: DraftItem[]) => void }) {
   const [topics, setTopics] = useState<TopicItem[]>([])
   const [structures, setStructures] = useState<StructureItem[]>([])
   const [quotes, setQuotes] = useState<MaterialItem[]>([])
   const [experiences, setExperiences] = useState<MaterialItem[]>([])
+  // 按认知角色选料：问题 / 概念 / 主张 / 案例 / 方案。后端早就按这套分组写简报，
+  // 之前界面从来没把素材送进去，所以模型只拿到一个标题——这就是"总有各种 bug"的那根断线。
+  const [rolePools, setRolePools] = useState<Record<string, MaterialItem[]>>({})
+  const [materialIds, setMaterialIds] = useState<number[]>([])
   const [topicId, setTopicId] = useState('')
   const [structureId, setStructureId] = useState('')
   const [quoteIds, setQuoteIds] = useState<number[]>([])
@@ -1486,6 +1626,7 @@ function ComposePanel({ preset, onGenerated }: { preset: { topicId: number | nul
     void apiJson<{ items: StructureItem[] }>('/api/structures?page=1').then(result => setStructures(result.items || [])).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
     void apiJson<{ items: MaterialItem[] }>('/api/materials?kind=quote&page=1').then(result => setQuotes(result.items || [])).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
     void apiJson<{ items: MaterialItem[] }>('/api/materials?kind=experience&page=1').then(result => setExperiences(result.items || [])).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
+    void apiJson<{ roles: Record<string, MaterialItem[]> }>('/api/materials?by_role=1').then(result => setRolePools(result.roles || {})).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }, [])
 
   useEffect(() => { if (preset?.topicId != null) setTopicId(String(preset.topicId)) }, [preset])
@@ -1495,10 +1636,16 @@ function ComposePanel({ preset, onGenerated }: { preset: { topicId: number | nul
 
   const toggle = (list: number[], id: number) => list.includes(id) ? list.filter(item => item !== id) : [...list, id]
 
+  const selectedTopic = topics.find(item => String(item.id) === topicId)
+  const stanceMaterial = (rolePools.OPI || []).find(item => item.id === selectedTopic?.viewpoint_material_id)
+  const stanceHint = selectedTopic?.viewpoint_material_id
+    ? (stanceMaterial ? `${stanceMaterial.angle ? `[${stanceMaterial.angle}] ` : ''}${(stanceMaterial.content || '').slice(0, 24)}` : `素材 #${selectedTopic.viewpoint_material_id}`)
+    : ''
+
   const generate = () => {
     if (!topicId) { setError('先选一条已确认的选题。可在「选题助手」点「确认做」直接生成草稿。'); return }
     setBusy(true); setError(''); setNotice('')
-    void apiJson<DraftItem[]>('/api/drafts/generate', { method: 'POST', body: JSON.stringify({ topic_id: Number(topicId), ...(structureId ? { structure_id: Number(structureId) } : {}), ...(contentFormat ? { content_format: contentFormat } : {}), quote_ids: quoteIds, experience_ids: experienceIds }) })
+    void apiJson<DraftItem[]>('/api/drafts/generate', { method: 'POST', body: JSON.stringify({ topic_id: Number(topicId), ...(structureId ? { structure_id: Number(structureId) } : {}), ...(contentFormat ? { content_format: contentFormat } : {}), material_ids: materialIds, quote_ids: quoteIds, experience_ids: experienceIds }) })
       .then(result => { onGenerated(result); setNotice(`已生成 ${result.length} 条最新平台草稿。同一选题的上一轮未确认稿已归档。`); setStructureId(''); setQuoteIds([]); setExperienceIds([]) })
       .catch((error: unknown) => setError(error instanceof Error && error.message ? error.message : '生成失败，请稍后重试。'))
       .finally(() => setBusy(false))
@@ -1528,6 +1675,12 @@ function ComposePanel({ preset, onGenerated }: { preset: { topicId: number | nul
       <span className="filter-label">经历</span>
       {experiences.length ? experiences.map(item => <button className={experienceIds.includes(item.id) ? 'chip active' : 'chip'} onClick={() => setExperienceIds(current => toggle(current, item.id))} key={item.id}>{item.name}</button>) : <span className="compose-hint">素材库暂无经历素材，可手动新建几条"我的经历"。</span>}
     </div>
+    {/* 按认知角色选料：问题 / 概念 / 主张 / 案例 / 方案。后端一直按这五组写简报，之前界面从没喂过。 */}
+    {materialUnitKeys.map(role => <div className="compose-row" key={role}>
+      <span className="filter-label" title={composeRoleNotes[role]}>{materialUnitLabels[role]}</span>
+      {(rolePools[role] || []).length ? (rolePools[role] || []).map(item => <button className={materialIds.includes(item.id) ? 'chip active' : 'chip'} onClick={() => setMaterialIds(current => toggle(current, item.id))} key={item.id} title={item.content}>{item.angle ? `${item.angle}｜` : ''}{item.name}</button>) : <span className="compose-hint">还没有{materialUnitLabels[role]}类素材</span>}
+    </div>)}
+    <p className="compose-note">已选 {materialIds.length} 条按角色喂给写手{stanceHint ? `。这条选题的主观点：${stanceHint}` : '。这条选题还没定主观点——不定的话模型只能按标题自己发挥。'}</p>
     {error && <p className="structure-error" role="alert">{error}</p>}
     {notice && <p className="skill-message" role="status">{notice}</p>}
     <div className="compose-actions">{topics.length ? <button className="primary-action" disabled={busy} onClick={generate}>{busy ? '生成中...（约 30 秒）' : `重新生成${draftVideoPlatforms.join('、')}草稿`} <PenLine size={15} /></button> : <span className="compose-hint">还没有已确认的选题。先去「选题助手」运行七维评估并点「确认做」，会自动生成草稿。</span>}</div>
@@ -1626,7 +1779,10 @@ function DeconstructPanel() {
   </section>
 }
 
-type ClaimsProposal = { claims: string[]; mechanism: string; judgement: string; scope: string; why: string; notice: string | null }
+type ClaimsProposal = { claims: string[]; claim_items?: { text: string; angle: string }[]; mechanism: string; judgement: string; scope: string; why: string; notice: string | null; angles?: string[]; run_id?: string }
+
+// 与 server/claim-logic.mjs 的 angleSuggestions 保持一致，两处漂移由 web-assets 测试直接拦下。
+const materialAngleSuggestions = ['市场', '经营', '管理', '财务', '老板', '员工', '客户', '同行', '平台']
 
 function ClaimsPanel() {
   const materials = useMaterialLibrary()
@@ -1638,27 +1794,54 @@ function ClaimsPanel() {
   const [error, setError] = useState('')
   const [saved, setSaved] = useState('')
 
+  // 一次跑一对角度：同一件事从两个角度看，两组主张天生就是正反配对。
+  const [angles, setAngles] = useState<string[]>(['老板', '员工'])
+  const [picked, setPicked] = useState<number[]>([])
+
   const extract = () => {
     setBusy(true); setError(''); setSaved('')
-    void apiJson<ClaimsProposal>('/api/skills/claims', { method: 'POST', body: JSON.stringify({ text: text.trim() }) })
-      .then(result => { setProposal(result); setDrafting({ judgement: result.judgement, scope: result.scope, why: result.why }) })
+    void apiJson<ClaimsProposal>('/api/skills/claims', { method: 'POST', body: JSON.stringify({ text: text.trim(), angles }) })
+      .then(result => {
+        setProposal(result)
+        setDrafting({ judgement: result.judgement, scope: result.scope, why: result.why })
+        setPicked((result.claim_items || result.claims.map(item => ({ text: item, angle: '' }))).map((_, index) => index))
+      })
       .catch(reason => setError(reason instanceof Error ? reason.message : '提主张失败，请重试。'))
       .finally(() => setBusy(false))
   }
 
-  // 同拆概念：模型产出只是提案，确认且改过之后才落库。
-  const confirmIntoMaterials = () => {
-    if (!proposal) return
-    const body = [drafting.judgement, drafting.scope, drafting.why].map(value => String(value || '').trim()).filter(Boolean).join('\n')
-    if (!body) { setError('至少要留下一栏内容再入库。'); return }
-    const materialText = `${body}${proposal.mechanism ? `\n核心机制：${proposal.mechanism}` : ''}`
+  const claimItems = () => proposal?.claim_items || proposal?.claims.map(item => ({ text: item, angle: '' })) || []
+
+  const storeAtoms = async (entries: { text: string; angle: string }[]) => {
+    const lines: string[] = []
+    let stored = 0
+    let reused = 0
+    for (const item of entries) {
+      try {
+        const result = await apiJson<{ id: number; duplicate?: boolean }>('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: 'insight', text: item.text, name: item.text.slice(0, 40), unit_type: 'OPI', source_label: '提主张', angle: item.angle || null, ...(proposal?.run_id ? { claims_run: proposal.run_id } : {}), ...(source ? { source_id: source.id } : {}) }) })
+        if (result.duplicate) reused += 1
+        else stored += 1
+        lines.push(`${result.duplicate ? '已在库里' : '新存'} #${result.id}　${item.angle ? `[${item.angle}] ` : ''}${item.text.slice(0, 24)}`)
+      } catch (reason) {
+        lines.push(`没存进去：${item.text.slice(0, 20)} —— ${reason instanceof Error ? reason.message : '入库失败'}`)
+      }
+    }
+    setSaved(`存了 ${stored} 条主张${reused ? `，另有 ${reused} 条库里本来就有（没再存第二份）` : ''}：\n${lines.join('\n')}`)
+  }
+
+  // 模型产出只是提案：一条主张存一条素材，勾着的才进库。
+  const storePicked = () => {
+    const chosen = picked.map(index => claimItems()[index]).filter(Boolean)
+    if (!chosen.length) { setError('先勾上至少要存一条主张。'); return }
     setBusy(true); setError('')
-    void apiJson<{ id: number; duplicate?: boolean }>('/api/materials/atoms', { method: 'POST', body: JSON.stringify({ kind: 'insight', text: materialText, name: String(drafting.judgement || '').slice(0, 40) || '主张', unit_type: 'OPI', source_label: '提主张', ...(source ? { source_id: source.id } : {}) }) })
-      .then(result => setSaved(result.duplicate
-        ? `这条已经在库里了（素材 #${result.id}），没有再存一份`
-        : `已入库：素材 #${result.id}（主张 · 已确认${source ? ` · 来源：${source.name || `素材 #${source.id}`}` : ''}）`))
-      .catch(reason => setError(reason instanceof Error ? reason.message : '入库失败，请重试。'))
-      .finally(() => setBusy(false))
+    void storeAtoms(chosen).finally(() => setBusy(false))
+  }
+
+  const storeJudgement = () => {
+    const judgement = String(drafting.judgement || '').trim()
+    if (!judgement) { setError('核心判断是空的，先写一句再存。'); return }
+    setBusy(true); setError('')
+    void storeAtoms([{ text: judgement, angle: angles[0] || '' }]).finally(() => setBusy(false))
   }
 
   return <section className="workspace-view">
@@ -1669,18 +1852,28 @@ function ClaimsPanel() {
       <div className="workspace-pane">
         <div className="deconstruct-input"><textarea aria-label="要提炼的素材" placeholder="粘一段素材或文案，看它到底立了几条主张" value={text} disabled={busy} onChange={event => { setText(event.target.value); setProposal(null); setSaved('') }} /></div>
         <SourceMaterialSelect value={source?.id ?? null} materials={materials} busy={busy} label="从素材库选一条来提炼" onChange={item => { setSource(item); setProposal(null); setSaved(''); setText(item && item.content ? String(item.content) : '') }} />
+        {/* 角度要在点「提主张」之前就选好：放在结果区等于是默认那一对悄悄替你决定了第一次运行。 */}
+        <div className="angle-pair">
+          <span className="filter-label">这一对角度</span>
+          {[0, 1].map(slot => <input key={slot} className="angle-input" list="claim-angle-options" aria-label={`角度 ${slot + 1}`} value={angles[slot] ?? ''} disabled={busy} placeholder={slot ? '对比角度' : '主角度'} onChange={event => setAngles(current => { const next = [...current]; next[slot] = event.target.value; return next })} />)}
+          <datalist id="claim-angle-options">{materialAngleSuggestions.map(name => <option key={name} value={name} />)}</datalist>
+          <small>也可以自己填。一次只跑一对，换角度再点一次「提主张」。</small>
+        </div>
         <div className="workspace-pane-actions"><button className="primary-action" disabled={busy || !text.trim()} onClick={extract}>{busy ? '提炼中...' : '提主张'} <Sparkles size={15} /></button><small>结果可改，确认后才入库。</small></div>
       </div>
       <div className="workspace-pane">
       {proposal ? <article className="trend-card">
       <div className="card-top"><span className="platform-tag douyin">主张</span><span className="draft-format">{proposal.claims.length} 条主张</span></div>
       {proposal.notice && <p className="draft-basis">{proposal.notice}</p>}
-      {proposal.claims.length ? <ul className="claims-list">{proposal.claims.map((claim, index) => <li key={`${index}-${claim}`}>{claim}</li>)}</ul> : null}
+      {(proposal.angles || []).filter(Boolean).map(angle => (claimItems().some(item => item.angle === angle) ? null : <p key={angle} className="claim-gap" role="status">「{angle}」这个角度没提出不同说法——这条素材里没有它的立场差，换一份素材或换个角度再拆一次。</p>))}
+      {proposal.claims.length ? <ul className="claims-list">{claimItems().map((item, index) => <li key={`${index}-${item.text}`}>
+        <label className="claim-pick"><input type="checkbox" disabled={busy} checked={picked.includes(index)} onChange={() => setPicked(current => current.includes(index) ? current.filter(row => row !== index) : [...current, index])} />{item.angle && <span className="claim-angle">{item.angle}</span>}<em>{item.text}</em></label>
+      </li>)}</ul> : <p className="draft-basis">一条主张都没提到，上面那句提示就是原因——没有替它编一条。</p>}
       <p className="draft-basis">核心机制：{proposal.mechanism || '模型没给出'}</p>
       <label className="deconstruct-field">核心判断<textarea className="draft-body-input" disabled={busy} value={drafting.judgement} onChange={event => setDrafting({ ...drafting, judgement: event.target.value })} /></label>
       <label className="deconstruct-field">适用范围<textarea className="draft-body-input" disabled={busy} value={drafting.scope} onChange={event => setDrafting({ ...drafting, scope: event.target.value })} /></label>
       <label className="deconstruct-field">为什么重要<textarea className="draft-body-input" disabled={busy} value={drafting.why} onChange={event => setDrafting({ ...drafting, why: event.target.value })} /></label>
-      <div className="topic-actions"><button className="primary-action" disabled={busy} onClick={confirmIntoMaterials}>确认入库</button><small>确认前不会写入素材库。</small></div>
+      <div className="topic-actions"><button className="primary-action" disabled={busy || !picked.length} onClick={storePicked}>把勾着的 {picked.length} 条存进素材库</button><button className="outline-action" disabled={busy} onClick={storeJudgement}>另存核心判断</button><small>确认前不写库；一条主张存一条，库里已有同一句的不会再存第二份。</small></div>
     </article> : <div className="structure-empty"><p className="empty-state">粘一段素材进来，看看它到底立了几条主张。</p></div>}
       </div>
     </div>
@@ -1771,6 +1964,7 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId,
   const [reviseNotes, setReviseNotes] = useState<Record<number, string>>({})
   const [reviseBusy, setReviseBusy] = useState<number | null>(null)
   const [reviseError, setReviseError] = useState<Record<number, string>>({})
+  const [reviseNotice, setReviseNotice] = useState<Record<number, string>>({})
   const [topicError, setTopicError] = useState('')
   // 这一批做哪层、用哪类钩子。两个都可以不选——不选就交给系统自己判。
   const [topicLayer, setTopicLayer] = useState('')
@@ -1976,8 +2170,13 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId,
     }
     setReviseBusy(draft.id)
     setReviseError(current => { const next = { ...current }; delete next[draft.id]; return next })
-    void apiJson<DraftItem>(`/api/drafts/${draft.id}/revise`, { method: 'POST', body: JSON.stringify({ note, format, from_checks: fromChecks || undefined, extend: extend || undefined, version: draft.version }) })
-      .then(updated => { setDrafts(current => current.map(item => item.id === updated.id ? updated : item)); setReviseNotes(current => { const next = { ...current }; delete next[draft.id]; return next }) })
+    void apiJson<DraftItem & { revise_notice?: string }>(`/api/drafts/${draft.id}/revise`, { method: 'POST', body: JSON.stringify({ note, format, from_checks: fromChecks || undefined, extend: extend || undefined, version: draft.version }) })
+      .then(({ revise_notice, ...updated }) => {
+        setDrafts(current => current.map(item => item.id === updated.id ? updated : item))
+        // 「改了，但被点名的问题还在」要说一句；不说就等于把判断偷偷替用户做了。
+        setReviseNotice(current => { const next = { ...current }; if (revise_notice) next[draft.id] = revise_notice; else delete next[draft.id]; return next })
+        setReviseNotes(current => { const next = { ...current }; delete next[draft.id]; return next })
+      })
       .catch((error: unknown) => setReviseError(current => ({ ...current, [draft.id]: error instanceof Error ? error.message : '按意见改写失败，请稍后重试。' })))
       .finally(() => setReviseBusy(null))
   }
@@ -2045,8 +2244,8 @@ function WorkspaceView({ section, onNavigate, onOpenShooting, focusedResearchId,
       {topicHookKinds.map(kind => <button className={topicHook === kind ? 'chip active' : 'chip'} onClick={() => setTopicHook(topicHook === kind ? '' : kind)} key={kind}>{topicHookLabels[kind]}</button>)}
       <span className="chip-gap" />
       <span className="structure-meta">{topicHook ? '三个选题都用这一类钩子' : '不选就让系统自己挑开头怎么写'}</span>
-    </div>}{section === '爆款方法库' && <StructureLibrary onUse={useStructure} />}{section === '选题助手' && <>{topicError === '历史选题加载失败，请重新加载。' && <button disabled={busy || topicsLoading} onClick={loadTopics}>重新加载历史选题</button>}{topicsLoading && <p role="status">正在加载历史选题...</p>}{topicEdit && <div><input aria-label="选题标题" value={topicEdit.title} disabled={busy} onChange={event => setTopicEdit({ ...topicEdit, title: event.target.value })} /><textarea aria-label="选题说明" value={topicEdit.rationale} disabled={busy} onChange={event => setTopicEdit({ ...topicEdit, rationale: event.target.value })} /><button disabled={busy} onClick={() => void topicAction(`/api/topics/${topicEdit.id}/revision`, 'PUT', topicEdit)}>保存调整</button><button disabled={busy} onClick={() => setTopicEdit(null)}>取消</button></div>}</>}{section === '选题助手' && <div className="asset-list">{topics.length ? topics.map(topic => { const evaluation = topic.evaluation; return <article className="asset-row topic-evaluation-card" key={topic.id}><div><h3>{topic.title}</h3><p>{strategyLayerLabels[topic.strategy_layer] ? `${strategyLayerLabels[topic.strategy_layer]} · ` : ''}{topic.content_job} · {topic.rationale}</p>{topic.generation_context?.cold_start?.error && <p className="draft-basis">{topic.generation_context.cold_start.error}</p>}{evaluation ? <>{/* 前台只给两句话：做不做、先做什么。七维收进折叠里——维度一个不减，只是不再挡在眼前。 */}<div className={`topic-verdict ${evaluation.decision}`}><strong>{topicDecisionLabels[evaluation.decision]}</strong><small>{evaluation.all_weak ? evaluation.conclusion : `先做这一步：${evaluation.first_step}`}</small></div><div className="topic-score-row"><small>{evaluation.score} 分 · {topic.workflow_status === 'approved' ? '已确认进入创作' : topic.workflow_status === 'needs_revision' ? '等待调整后重新评估' : '已完成评估'}</small></div><details className="topic-evidence"><summary>七维明细与评分证据</summary><div className="topic-dimensions">{Object.entries(evaluation.dimensions).map(([key, dimension]) => <span key={key}><b>{topicDimensionLabels[key] || key}</b><strong>{dimension.score}</strong></span>)}</div><ul>{evaluation.evidence.map((item, index) => <li key={`${item.dimension}-${index}`}>{topicDimensionLabels[item.dimension] || item.dimension}：{item.message}</li>)}</ul>{evaluation.suggestions.length > 0 && <p>下一步：{evaluation.suggestions.join('；')}</p>}</details></> : <p className="topic-pending">尚未评估：先运行七维评估，再决定是否进入创作。</p>}</div><div className="topic-actions">{topic.workflow_status === 'needs_revision' && <button disabled={busy || topicsLoading} onClick={() => setTopicEdit({ id: topic.id, title: topic.title, rationale: topic.rationale })}>编辑方向</button>}{(!evaluation || topic.workflow_status === 'needs_revision') && <button className="primary-action" disabled={busy} onClick={() => evaluateTopicItem(topic)}>七维评估</button>}{evaluation && topic.workflow_status === 'evaluated' && <><button className="primary-action" disabled={busy} onClick={() => decideTopic(topic, 'do')}>确认做</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'revise')}>调整方向</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'defer')}>暂缓</button></>}{evaluation && topic.workflow_status === 'approved' && <button className="primary-action" disabled={busy} onClick={() => openComposeFor(topic)}>查看这组草稿</button>}</div></article> }) : <div className="structure-empty"><p className="empty-state">{topicsLoading ? '正在读取历史选题...' : '还没有选题。点右上角「生成选题」，系统会根据当前研究和素材给出方向。'}</p></div>}</div>}{section === '内容创作' && <>{draftError && !draftError.startsWith('保存失败') && <p role="alert">{draftError}</p>}<ComposePanel preset={composePreset} onGenerated={handleGenerated} />{drafts.length ? <div className="draft-workbench" ref={draftGridRef}><aside className="draft-rail"><div className="draft-rail-filters">{([['active', '进行中'], ['archived', '已归档'], ['all', '全部']] as const).map(([key, label]) => <button className={draftFilter === key ? 'on' : ''} disabled={busy} onClick={() => setDraftFilter(key)} key={key}>{label} {key === 'active' ? activeDrafts.length : key === 'archived' ? archivedDrafts.length : drafts.length}</button>)}</div>{draftGroups.length ? draftGroups.map(group => <div className="draft-group" key={group.id}><div className="draft-group-head"><strong>{group.topic ? `选题 #${group.topic.id}` : '未关联选题'}</strong><span>{group.topic ? (group.topic.workflow_status === 'approved' ? '已确认' : group.topic.workflow_status || '未确认') : '—'}</span></div>{group.topic && <p className="draft-group-title">{group.topic.title}</p>}{group.items.map(item => <button className={item.id === shownDraft?.id ? 'draft-rail-item on' : 'draft-rail-item'} disabled={busy} onClick={() => setActiveDraftId(item.id)} key={item.id}><span className="draft-rail-top"><span className="draft-rail-platform">{item.platform}</span>{item.variant_type === 'manual' && <span className="draft-rail-flag">变体</span>}{item.script_stage === 'spoken' ? <span className="draft-rail-flag">口播稿</span> : <span className="draft-rail-flag">文字稿</span>}{item.archived_at && <span className="draft-rail-flag muted">已归档</span>}<span className={draftLengthWarning(item) ? 'draft-rail-count warn' : 'draft-rail-count'} title={draftLengthWarning(item) || undefined}>{String(item.body || '').length} 字</span></span><span className="draft-rail-title">{item.title}</span><span className="draft-rail-state">{draftWorkflowLabel(item)}</span></button>)}</div>) : <p className="empty-state">这个筛选下没有草稿。</p>}</aside><div className="draft-editor-pane">{shownDraft ? visibleDrafts.filter(item => item.id === shownDraft.id).map(draft => <article className={freshDraftIds.includes(draft.id) ? 'trend-card draft-card draft-row-focused' : 'trend-card draft-card'} key={draft.id}><div className="card-top"><span className="platform-tag douyin">{draft.platform}</span><span className="draft-format">{draftFormatLabel(draft)}</span><span className="draft-version">v{draft.version || 1}</span>{draftBriefSummary(draft) && <span className="draft-basis">{draftBriefSummary(draft)}</span>}{draft.variant_type === 'manual' && <span className="draft-variant-flag">人工变体</span>}<button className="text-action" disabled={busy} onClick={() => toggleArchiveDraft(draft)}>{draft.archived_at ? '取消归档' : '归档'}</button>{draft.archived_at && <button className="text-action danger-action" disabled={busy} onClick={() => deleteDraft(draft)}>删除</button>}</div><input className="draft-title-input" disabled={busy} value={draft.title} onChange={event => editDraftText(draft, { title: event.target.value })} />{(draft.platform === '抖音' || draft.platform === '视频号') && <div className="draft-formats" role="group" aria-label="视频体裁">{(['短视频', '中视频', '长视频'] as const).map(format => <button className={draftVideoFormatOf(draft) === format ? 'on' : ''} disabled={busy || reviseBusy === draft.id} onClick={() => { if (draftVideoFormatOf(draft) === format) return; reviseDraft(draft, format) }} key={format}>{format}<small>{format === '短视频' ? '15–60秒' : format === '中视频' ? '1–5分钟' : '5分钟以上'}</small></button>)}<small>点一下只重写这一条</small></div>}<div className="draft-slots"><div className="draft-slots-bar" role="group" aria-label="槽位选择器">{slotOrder.map(slot => { const label = slotCatalog[draft.platform]?.labels?.[slot] || slotDefaultLabels[slot]; const applied = slotStatus[`${draft.id}-${slot}`]; return <button className={slotOpen?.draftId === draft.id && slotOpen.slot === slot ? 'slot-button on' : 'slot-button'} disabled={busy || slotBusy} onClick={() => openSlotPanel(draft, slot)} key={slot}>{label}{applied ? `：${applied}` : ''}</button> })}{slotCatalog[draft.platform] && <small className="slot-hint">选中只重写对应那一段{slotCatalog[draft.platform].group_scoped.includes('title') ? '；标题会把这一组草稿一起改' : ''}</small>}</div>{slotOpen?.draftId === draft.id ? <div className="slot-panel">{slotBusy ? <p role="status">正在按所选写法改写...</p> : <>{slotError && <p role="alert">{slotError}</p>}{(() => { const catalog = slotCatalog[draft.platform]; if (!catalog) return <p role="status">正在加载可选项...</p>; const options = catalog.options[slotOpen.slot] || []; if (!options.length) return <p className="empty-state">爆款方法库里还没有可用的{slotOpen.slot === 'opening' ? '开头范式' : slotOpen.slot === 'ending' ? '结尾范式' : '结构'}，先去那里补一条。</p>; return options.map(option => <button className="slot-option" disabled={busy || slotBusy} onClick={() => applySlot(draft, slotOpen.slot, option.id)} key={option.id}><span className="slot-option-top"><b>{option.name}</b><span className={option.source === '对标dbs' ? 'slot-source dbs' : 'slot-source'}>{option.source}</span></span><small>{option.formula || (option.steps || [])[0]}</small></button>) })()}<button className="skip-action" onClick={() => setSlotOpen(null)}>收起</button></>}</div> : null}</div><div className="draft-script-stage"><strong>{draft.script_stage === 'spoken' ? '当前是口播稿' : '当前是文字稿'}</strong>{draft.script_stage !== 'spoken' ? <button className="primary-action" disabled={busy || spokenBusy === draft.id} onClick={() => spokenDraft(draft)}>{spokenBusy === draft.id ? '改口播中...' : '改成口播'}</button> : null}{draft.script_stage === 'spoken' && draft.plain_body ? <details className="draft-plain-compare"><summary>对照文字稿</summary><pre>{draft.plain_body}</pre></details> : null}</div><textarea className="draft-body-input" disabled={busy} value={draft.body} onChange={event => editDraftText(draft, { body: event.target.value })} /><div className={draftLengthWarning(draft) ? 'draft-body-meta warn' : 'draft-body-meta'}><strong>{String(draft.body || '').length} 字</strong><small>{draftLengthWarning(draft) || `${draft.platform}${draftVideoFormatOf(draft)}目标${draftLengthTargetOf(draft)?.min ? `${draftLengthTargetOf(draft).min}–${draftLengthTargetOf(draft).max}` : `不超过 ${draftLengthTargetOf(draft)?.max}`} 字`}</small></div><div className={dirtyDrafts.has(draft.id) ? 'draft-edit-bar dirty' : 'draft-edit-bar'}><div><strong>{dirtyDrafts.has(draft.id) ? '有未保存修改' : '正文已保存'}</strong><small>{dirtyDrafts.has(draft.id) ? '保存后会生成新版本，旧检查需要重新运行。' : `当前是 v${draft.version || 1}`}</small>{draftError.startsWith('保存失败') && <small className="draft-edit-error" role="alert">{draftError}</small>}</div><div className="draft-edit-actions"><button className="outline-action" disabled={busy || !dirtyDrafts.has(draft.id)} onClick={() => undoDraftText(draft)}>撤销本次修改</button><button className="primary-action" disabled={busy || !dirtyDrafts.has(draft.id)} onClick={() => updateDraft(draft, { title: draft.title, body: draft.body })}>{busy && dirtyDrafts.has(draft.id) ? '保存中...' : '保存修改'}</button></div></div><DraftIdeasPanel draft={draft} busy={busy} onUpdated={next => setDrafts(current => current.map(item => item.id === next.id ? next : item))} /><div className="draft-revise"><div className="draft-revise-head"><label htmlFor={`revise-note-${draft.id}`}>AI 修改</label><small>按你的意见只重写这一条{draft.platform}</small></div><textarea id={`revise-note-${draft.id}`} aria-label="修改意见" placeholder={draftLengthWarning(draft) ? `例如：压到 ${draftLengthTargetOf(draft)?.max} 字以内，开头别设问，别编客户` : '例如：再短一点，开头别设问，别编客户'} disabled={busy || reviseBusy === draft.id} value={reviseNotes[draft.id] || ''} onChange={event => setReviseNotes(current => ({ ...current, [draft.id]: event.target.value }))} /><div className="draft-revise-foot"><small>只重写这一条{draft.platform}，其他平台不动。上面那个按钮会把整组草稿一起换掉。</small><button className="primary-action" disabled={busy || reviseBusy === draft.id || !(reviseNotes[draft.id] || '').trim()} onClick={() => reviseDraft(draft)}>{reviseBusy === draft.id ? '改写中...' : `按意见重写${draft.platform}`}</button><button className="outline-action" disabled={busy || replaceBusy === draft.id} onClick={() => planReplace(draft)}>{replaceBusy === draft.id ? '定位中...' : '定位替换'}</button>
-          </div>{reviseError[draft.id] && <p role="alert">{reviseError[draft.id]}</p>}{replacePlans[draft.id] && <div className="deai-result replace-plan"><div className="draft-check-top"><strong>定位替换</strong><small>{replacePlans[draft.id].pairs.length ? `选中的替换直接落进正文，其余不动；换完还剩 ${replacePlans[draft.id].remaining} 处命中` : replacePlans[draft.id].message || '没有可替换的句子。'}</small></div>{replacePlans[draft.id].pairs.map((pair, index) => <label className="replace-pair" key={`${index}-${pair.old.slice(0, 8)}`}><input type="checkbox" checked={replacePlans[draft.id].picked.includes(index)} onChange={() => setReplacePlans(current => { const plan = current[draft.id]; if (!plan) return current; const picked = plan.picked.includes(index) ? plan.picked.filter(item => item !== index) : [...plan.picked, index]; return { ...current, [draft.id]: { ...plan, picked } } })} /><span className="replace-old">{pair.old}</span><span className="replace-new">{pair.new}</span></label>)}{replacePlans[draft.id].dropped.length > 0 && <small className="replace-dropped">退回了 {replacePlans[draft.id].dropped.length} 条：{replacePlans[draft.id].dropped.map(item => item.reason || '不合规').join('、')}</small>}<div className="deai-actions"><button className="primary-action" disabled={busy || replacePlans[draft.id].picked.length === 0} onClick={() => applyPickedReplacements(draft)}>替换选中的 {replacePlans[draft.id].picked.length} 处</button><button className="skip-action" onClick={() => setReplacePlans(current => { const next = { ...current }; delete next[draft.id]; return next })}>放弃</button></div></div>}</div>{(draft.checks || draftCheckError[draft.id]) && <div className="draft-checks"><div className="draft-checks-head"><span>发布前检查</span><small>{draftWorkflowLabel(draft)}</small><button className="primary-action" disabled={reviseBusy === draft.id} onClick={() => reviseDraft(draft, undefined, { fromChecks: true })}>{reviseBusy === draft.id ? '改写中...' : '按检查意见改写'}</button></div>{reviseError[draft.id] && <p className="draft-checks-error" role="alert">{reviseError[draft.id]}</p>}{draftCheckError[draft.id] && <p className="draft-checks-error" role="alert">{draftCheckError[draft.id]}</p>}<small className="draft-checks-hint">改正文：字数、设问开头、咨询腔、编客户、升华句、凑数三连。整篇重写改不动就用「定位替换」按句换。开头句槽位和档案短词还是要你点。</small>{(['persona', 'quality', 'publish', 'logic'] as const).map(check => { const key = check === 'publish' ? 'publish_checklist' : check; const item = draft.checks?.[key]; const current = item?.draft_version === draft.version; const personaReady = draft.checks?.persona?.draft_version === draft.version; const qualityReady = personaReady && draft.checks?.quality?.draft_version === draft.version && draft.checks?.quality?.status === 'passed'; const allowed = check === 'logic' ? true : check === 'persona' || check === 'quality' ? (check === 'quality' ? personaReady : true) : qualityReady; const labels = { persona: '人设检查', quality: '质量门', publish: '发布清单', logic: '逻辑检查' }; const reminderCount = item && current && item.status === 'passed' ? item.evidence.filter(entry => entry.severity === 'warning').length : 0; return <div className="draft-check" key={check}><div className="draft-check-top"><strong>{labels[check]}</strong><span className={item?.status || 'pending'}>{item && current ? draftCheckStatusLabel(check, item.status) : '待检查'}{reminderCount ? `（${reminderCount} 条提醒）` : ''}</span>{item?.score != null && <b>{item.score} 分</b>}</div><button className="outline-action" disabled={busy || !allowed} onClick={() => runDraftCheck(draft, check, Boolean(item && current))}>{item && current ? '重新检查' : check === 'quality' && !personaReady ? '先做人设检查' : check === 'publish' && !qualityReady ? '先通过质量门' : '开始检查'}</button>{item && current && item.report && <details className="draft-report-details"><summary>语言层 22 特征：命中 {item.report.entries.length} 处 · 视为可选，点开看</summary><ul className="draft-report">{item.report.entries.map((entry, index) => { const answerKey = `${draft.id}:${entry.code}`; const answer = followupAnswers[answerKey] || ''; return <li key={`${entry.code}-${index}`}><span className={`report-severity ${entry.severity}`}>{item.report?.severity_labels?.[entry.severity] || entry.severity}</span>{entry.label && <span className="report-label">{entry.label}</span>}{entry.quote && <q>{entry.quote}</q>}<span className="report-note">{entry.note}</span><MarkerScope scope={entry.scope} code={entry.code} />{entry.followup && <span className="report-question">追问：{entry.followup}</span>}{entry.followup && <span className="report-answer"><input aria-label={`回答追问：${entry.label || entry.code}`} value={answer} disabled={followupBusy === answerKey} onChange={event => setFollowupAnswers(current => ({ ...current, [answerKey]: event.target.value }))} placeholder="用你自己的话回答" /><button className="text-action" disabled={busy || followupBusy === answerKey || !answer.trim()} onClick={() => submitFollowup(draft, entry)}>{followupBusy === answerKey ? '存入中...' : '存成素材'}</button>{followupSaved[answerKey] && <small className="report-answer-saved">{followupSaved[answerKey]}</small>}</span>}{entry.code === 'length_severe' && <span className="report-extend"><button className="text-action" disabled={busy || reviseBusy === draft.id} onClick={() => reviseDraft(draft, undefined, { extend: true })}>{reviseBusy === draft.id ? '补写中...' : '补写'}</button></span>}</li> })}</ul></details>}{item && current && item.evidence.length > 0 && <ul className="draft-check-evidence">{item.evidence.map((evidence, index) => <li key={`${evidence.code}-${index}`}><span>{evidence.message}</span><MarkerScope scope={evidence.scope} code={evidence.code} /></li>)}</ul>}{item && current && item.suggestions.length > 0 && <small className="draft-check-suggestions">建议：{item.suggestions.join('；')}</small>}{item && current && item.report && item.report.summary && <p className="draft-report-empty">{item.report.summary}</p>}{item && current && item.report && <p className="draft-report-foot">{item.report.footer}</p>}</div> })}</div>}<DraftApprovalPanel draft={draft} busy={busy} dirty={dirtyDrafts.has(draft.id)} onApprove={() => approveDraft(draft)} onRevoke={() => revokeDraftApproval(draft)} onOpenShooting={onOpenShooting} /><div className="card-foot"><span>{draft.fact_check_status === 'verified' ? '事实已核验' : '事实待核验'}</span><div>{draft.fact_check_status !== 'verified' && <button className="outline-action" disabled={busy || dirtyDrafts.has(draft.id)} onClick={() => updateDraft(draft, { fact_check_status: 'verified' })}>标记已核验</button>}</div></div>{history[draft.id] && <div className="history-list">{history[draft.id].map(item => <span key={`${draft.id}-${item.version}`}><small>v{item.version || 1}</small><button className="text-action" disabled={busy} onClick={() => restoreDraft(draft, item.version || 1)}>恢复</button></span>)}</div>}{compliance[draft.id] && <div className="compliance-result">{compliance[draft.id].source === 'error' ? <small role="alert">合规检查失败，请稍后重试。</small> : compliance[draft.id].hits.length ? compliance[draft.id].hits.map(hit => <span className="compliance-hit" key={hit.word}><strong>{hit.word}</strong><small>{hit.level} · {hit.suggestion}</small></span>) : <small>未检测到违禁词风险（本地词库）。</small>}</div>}<div className="draft-actions"><button className="outline-action" onClick={() => loadHistory(draft)}>查看历史</button><button className="outline-action" disabled={complianceBusy === draft.id || !loadSkillToggles().compliance} onClick={() => checkCompliance(draft)}>{complianceBusy === draft.id ? '检测中...' : '合规检查'}</button><button className="outline-action" disabled={busy} onClick={() => copyDraft(draft)}>复制成变体</button><button className="outline-action" disabled={deaiBusy === draft.id} onClick={() => deaiDraft(draft)}>{deaiBusy === draft.id ? '改写中...' : '改成你自己的说法'}</button></div>{deaiResults[draft.id] && <div className="deai-result"><div className="draft-check-top"><strong>改写预览</strong><small>只改说法，不动你的事实；人工过目后再替换</small></div><p>{deaiResults[draft.id]}</p><div className="deai-actions"><button className="primary-action" disabled={busy} onClick={() => { if (draftActionBlocked(draft)) return; updateDraft(draft, { body: deaiResults[draft.id] }); setDeaiResults(current => { const next = { ...current }; delete next[draft.id]; return next }) }}>替换正文</button><button className="skip-action" onClick={() => setDeaiResults(current => { const next = { ...current }; delete next[draft.id]; return next })}>放弃</button></div></div>}<DraftPublishPanel draft={draft} onUpdated={next => setDrafts(current => current.map(item => item.id === next.id ? next : item))} /></article>) : <div className="draft-editor-empty"><p className="empty-state">左侧没有可编辑的草稿。</p></div>}</div></div> : <div className="structure-empty">{draftsLoading ? <p role="status">正在读取草稿...</p> : draftLoadError ? <><p role="alert">{draftLoadError}</p><button disabled={busy} onClick={loadDrafts}>重新加载草稿</button></> : <p className="empty-state">还没有草稿。在「选题助手」点「确认做」会直接生成{draftVideoPlatforms.join('、')}草稿并进入检查。</p>}</div>}</>}</section>
+    </div>}{section === '爆款方法库' && <StructureLibrary onUse={useStructure} />}{section === '选题助手' && <>{topicError === '历史选题加载失败，请重新加载。' && <button disabled={busy || topicsLoading} onClick={loadTopics}>重新加载历史选题</button>}{topicsLoading && <p role="status">正在加载历史选题...</p>}{topicEdit && <div><input aria-label="选题标题" value={topicEdit.title} disabled={busy} onChange={event => setTopicEdit({ ...topicEdit, title: event.target.value })} /><textarea aria-label="选题说明" value={topicEdit.rationale} disabled={busy} onChange={event => setTopicEdit({ ...topicEdit, rationale: event.target.value })} /><button disabled={busy} onClick={() => void topicAction(`/api/topics/${topicEdit.id}/revision`, 'PUT', topicEdit)}>保存调整</button><button disabled={busy} onClick={() => setTopicEdit(null)}>取消</button></div>}</>}{section === '选题助手' && <div className="asset-list">{topics.length ? topics.map(topic => { const evaluation = topic.evaluation; return <article className="asset-row topic-evaluation-card" key={topic.id}><div><h3>{topic.title}</h3><p>{strategyLayerLabels[topic.strategy_layer] ? `${strategyLayerLabels[topic.strategy_layer]} · ` : ''}{topic.content_job} · {topic.rationale}</p>{topic.generation_context?.cold_start?.error && <p className="draft-basis">{topic.generation_context.cold_start.error}</p>}{evaluation ? <>{/* 前台只给两句话：做不做、先做什么。七维收进折叠里——维度一个不减，只是不再挡在眼前。 */}<div className={`topic-verdict ${evaluation.decision}`}><strong>{topicDecisionLabels[evaluation.decision]}</strong><small>{(() => { const nextStep = evaluation.all_weak ? evaluation.conclusion : evaluation.first_step || evaluation.suggestions?.[0]; return nextStep ? (evaluation.all_weak ? nextStep : `先做这一步：${nextStep}`) : '这一版评估没留下「先做什么」，展开七维明细看依据。' })()}</small></div><div className="topic-score-row"><small>{evaluation.score} 分 · {topic.workflow_status === 'approved' ? '已确认进入创作' : topic.workflow_status === 'needs_revision' ? '等待调整后重新评估' : '已完成评估'}</small></div><details className="topic-evidence"><summary>七维明细与评分证据</summary><div className="topic-dimensions">{Object.entries(evaluation.dimensions).map(([key, dimension]) => <span key={key}><b>{topicDimensionLabels[key] || key}</b><strong>{dimension.score}</strong></span>)}</div><ul>{evaluation.evidence.map((item, index) => <li key={`${item.dimension}-${index}`}>{topicDimensionLabels[item.dimension] || item.dimension}：{item.message}</li>)}</ul>{evaluation.suggestions.length > 0 && <p>下一步：{evaluation.suggestions.join('；')}</p>}</details></> : <p className="topic-pending">尚未评估：先运行七维评估，再决定是否进入创作。</p>}</div><TopicStance topic={topic} onSaved={next => setTopics(current => current.map(item => item.id === next.id ? { ...item, ...next } : item))} /><div className="topic-actions">{topic.workflow_status === 'needs_revision' && <button disabled={busy || topicsLoading} onClick={() => setTopicEdit({ id: topic.id, title: topic.title, rationale: topic.rationale })}>编辑方向</button>}{(!evaluation || topic.workflow_status === 'needs_revision') && <button className="primary-action" disabled={busy} onClick={() => evaluateTopicItem(topic)}>七维评估</button>}{evaluation && topic.workflow_status === 'evaluated' && <><button className="primary-action" disabled={busy} onClick={() => decideTopic(topic, 'do')}>确认做</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'revise')}>调整方向</button><button className="outline-action" disabled={busy} onClick={() => decideTopic(topic, 'defer')}>暂缓</button></>}{evaluation && topic.workflow_status === 'approved' && <button className="primary-action" disabled={busy} onClick={() => openComposeFor(topic)}>查看这组草稿</button>}</div></article> }) : <div className="structure-empty"><p className="empty-state">{topicsLoading ? '正在读取历史选题...' : '还没有选题。点右上角「生成选题」，系统会根据当前研究和素材给出方向。'}</p></div>}</div>}{section === '内容创作' && <>{draftError && !draftError.startsWith('保存失败') && <p role="alert">{draftError}</p>}<ComposePanel preset={composePreset} onGenerated={handleGenerated} />{drafts.length ? <div className="draft-workbench" ref={draftGridRef}><aside className="draft-rail"><div className="draft-rail-filters">{([['active', '进行中'], ['archived', '已归档'], ['all', '全部']] as const).map(([key, label]) => <button className={draftFilter === key ? 'on' : ''} disabled={busy} onClick={() => setDraftFilter(key)} key={key}>{label} {key === 'active' ? activeDrafts.length : key === 'archived' ? archivedDrafts.length : drafts.length}</button>)}</div>{draftGroups.length ? draftGroups.map(group => <div className="draft-group" key={group.id}><div className="draft-group-head"><strong>{group.topic ? `选题 #${group.topic.id}` : '未关联选题'}</strong><span>{group.topic ? (group.topic.workflow_status === 'approved' ? '已确认' : group.topic.workflow_status || '未确认') : '—'}</span></div>{group.topic && <p className="draft-group-title">{group.topic.title}</p>}{group.items.map(item => <button className={item.id === shownDraft?.id ? 'draft-rail-item on' : 'draft-rail-item'} disabled={busy} onClick={() => setActiveDraftId(item.id)} key={item.id}><span className="draft-rail-top"><span className="draft-rail-platform">{item.platform}</span>{item.variant_type === 'manual' && <span className="draft-rail-flag">变体</span>}{item.script_stage === 'spoken' ? <span className="draft-rail-flag">口播稿</span> : <span className="draft-rail-flag">文字稿</span>}{item.archived_at && <span className="draft-rail-flag muted">已归档</span>}<span className={draftLengthWarning(item) ? 'draft-rail-count warn' : 'draft-rail-count'} title={draftLengthWarning(item) || undefined}>{String(item.body || '').length} 字</span></span><span className="draft-rail-title">{item.title}</span><span className="draft-rail-state">{draftWorkflowLabel(item)}</span></button>)}</div>) : <p className="empty-state">这个筛选下没有草稿。</p>}</aside><div className="draft-editor-pane">{shownDraft ? visibleDrafts.filter(item => item.id === shownDraft.id).map(draft => <article className={freshDraftIds.includes(draft.id) ? 'trend-card draft-card draft-row-focused' : 'trend-card draft-card'} key={draft.id}><div className="card-top"><span className="platform-tag douyin">{draft.platform}</span><span className="draft-format">{draftFormatLabel(draft)}</span><span className="draft-version">v{draft.version || 1}</span>{draftBriefSummary(draft) && <span className="draft-basis">{draftBriefSummary(draft)}</span>}{draft.variant_type === 'manual' && <span className="draft-variant-flag">人工变体</span>}<button className="text-action" disabled={busy} onClick={() => toggleArchiveDraft(draft)}>{draft.archived_at ? '取消归档' : '归档'}</button>{draft.archived_at && <button className="text-action danger-action" disabled={busy} onClick={() => deleteDraft(draft)}>删除</button>}</div><input className="draft-title-input" disabled={busy} value={draft.title} onChange={event => editDraftText(draft, { title: event.target.value })} />{(draft.platform === '抖音' || draft.platform === '视频号') && <div className="draft-formats" role="group" aria-label="视频体裁">{(['短视频', '中视频', '长视频'] as const).map(format => <button className={draftVideoFormatOf(draft) === format ? 'on' : ''} disabled={busy || reviseBusy === draft.id} onClick={() => { if (draftVideoFormatOf(draft) === format) return; reviseDraft(draft, format) }} key={format}>{format}<small>{format === '短视频' ? '15–60秒' : format === '中视频' ? '1–5分钟' : '5分钟以上'}</small></button>)}<small>点一下只重写这一条</small></div>}<div className="draft-slots"><div className="draft-slots-bar" role="group" aria-label="槽位选择器">{slotOrder.map(slot => { const label = slotCatalog[draft.platform]?.labels?.[slot] || slotDefaultLabels[slot]; const applied = slotStatus[`${draft.id}-${slot}`]; return <button className={slotOpen?.draftId === draft.id && slotOpen.slot === slot ? 'slot-button on' : 'slot-button'} disabled={busy || slotBusy} onClick={() => openSlotPanel(draft, slot)} key={slot}>{label}{applied ? `：${applied}` : ''}</button> })}{slotCatalog[draft.platform] && <small className="slot-hint">选中只重写对应那一段{slotCatalog[draft.platform].group_scoped.includes('title') ? '；标题会把这一组草稿一起改' : ''}</small>}</div>{slotOpen?.draftId === draft.id ? <div className="slot-panel">{slotBusy ? <p role="status">正在按所选写法改写...</p> : <>{slotError && <p role="alert">{slotError}</p>}{(() => { const catalog = slotCatalog[draft.platform]; if (!catalog) return <p role="status">正在加载可选项...</p>; const options = catalog.options[slotOpen.slot] || []; if (!options.length) return <p className="empty-state">爆款方法库里还没有可用的{slotOpen.slot === 'opening' ? '开头范式' : slotOpen.slot === 'ending' ? '结尾范式' : '结构'}，先去那里补一条。</p>; return options.map(option => <button className="slot-option" disabled={busy || slotBusy} onClick={() => applySlot(draft, slotOpen.slot, option.id)} key={option.id}><span className="slot-option-top"><b>{option.name}</b><span className={option.source === '对标dbs' ? 'slot-source dbs' : 'slot-source'}>{option.source}</span></span><small>{option.formula || (option.steps || [])[0]}</small></button>) })()}<button className="skip-action" onClick={() => setSlotOpen(null)}>收起</button></>}</div> : null}</div><div className="draft-script-stage"><strong>{draft.script_stage === 'spoken' ? '当前是口播稿' : '当前是文字稿'}</strong>{draft.script_stage !== 'spoken' ? <button className="primary-action" disabled={busy || spokenBusy === draft.id} onClick={() => spokenDraft(draft)}>{spokenBusy === draft.id ? '改口播中...' : '改成口播'}</button> : null}{draft.script_stage === 'spoken' && draft.plain_body ? <details className="draft-plain-compare"><summary>对照文字稿</summary><pre>{draft.plain_body}</pre></details> : null}</div><textarea className="draft-body-input" disabled={busy} value={draft.body} onChange={event => editDraftText(draft, { body: event.target.value })} /><div className={draftLengthWarning(draft) ? 'draft-body-meta warn' : 'draft-body-meta'}><strong>{String(draft.body || '').length} 字</strong><small>{draftLengthWarning(draft) || `${draft.platform}${draftVideoFormatOf(draft)}目标${draftLengthTargetOf(draft)?.min ? `${draftLengthTargetOf(draft).min}–${draftLengthTargetOf(draft).max}` : `不超过 ${draftLengthTargetOf(draft)?.max}`} 字`}</small></div><div className={dirtyDrafts.has(draft.id) ? 'draft-edit-bar dirty' : 'draft-edit-bar'}><div><strong>{dirtyDrafts.has(draft.id) ? '有未保存修改' : '正文已保存'}</strong><small>{dirtyDrafts.has(draft.id) ? '保存后会生成新版本，旧检查需要重新运行。' : `当前是 v${draft.version || 1}`}</small>{draftError.startsWith('保存失败') && <small className="draft-edit-error" role="alert">{draftError}</small>}</div><div className="draft-edit-actions"><button className="outline-action" disabled={busy || !dirtyDrafts.has(draft.id)} onClick={() => undoDraftText(draft)}>撤销本次修改</button><button className="primary-action" disabled={busy || !dirtyDrafts.has(draft.id)} onClick={() => updateDraft(draft, { title: draft.title, body: draft.body })}>{busy && dirtyDrafts.has(draft.id) ? '保存中...' : '保存修改'}</button></div></div><DraftIdeasPanel draft={draft} busy={busy} onUpdated={next => setDrafts(current => current.map(item => item.id === next.id ? next : item))} /><div className="draft-revise"><div className="draft-revise-head"><label htmlFor={`revise-note-${draft.id}`}>AI 修改</label><small>按你的意见只重写这一条{draft.platform}</small></div><textarea id={`revise-note-${draft.id}`} aria-label="修改意见" placeholder={draftLengthWarning(draft) ? `例如：压到 ${draftLengthTargetOf(draft)?.max} 字以内，开头别设问，别编客户` : '例如：再短一点，开头别设问，别编客户'} disabled={busy || reviseBusy === draft.id} value={reviseNotes[draft.id] || ''} onChange={event => setReviseNotes(current => ({ ...current, [draft.id]: event.target.value }))} /><div className="draft-revise-foot"><small>只重写这一条{draft.platform}，其他平台不动。上面那个按钮会把整组草稿一起换掉。</small><button className="primary-action" disabled={busy || reviseBusy === draft.id || !(reviseNotes[draft.id] || '').trim()} onClick={() => reviseDraft(draft)}>{reviseBusy === draft.id ? '改写中...' : `按意见重写${draft.platform}`}</button><button className="outline-action" disabled={busy || replaceBusy === draft.id} onClick={() => planReplace(draft)}>{replaceBusy === draft.id ? '定位中...' : '定位替换'}</button>
+          </div>{reviseError[draft.id] && <p role="alert">{reviseError[draft.id]}</p>}{replacePlans[draft.id] && <div className="deai-result replace-plan"><div className="draft-check-top"><strong>定位替换</strong><small>{replacePlans[draft.id].pairs.length ? `选中的替换直接落进正文，其余不动；换完还剩 ${replacePlans[draft.id].remaining} 处命中` : replacePlans[draft.id].message || '没有可替换的句子。'}</small></div>{replacePlans[draft.id].pairs.map((pair, index) => <label className="replace-pair" key={`${index}-${pair.old.slice(0, 8)}`}><input type="checkbox" checked={replacePlans[draft.id].picked.includes(index)} onChange={() => setReplacePlans(current => { const plan = current[draft.id]; if (!plan) return current; const picked = plan.picked.includes(index) ? plan.picked.filter(item => item !== index) : [...plan.picked, index]; return { ...current, [draft.id]: { ...plan, picked } } })} /><span className="replace-old">{pair.old}</span><span className="replace-new">{pair.new}</span></label>)}{replacePlans[draft.id].dropped.length > 0 && <small className="replace-dropped">退回了 {replacePlans[draft.id].dropped.length} 条：{replacePlans[draft.id].dropped.map(item => item.reason || '不合规').join('、')}</small>}<div className="deai-actions"><button className="primary-action" disabled={busy || replacePlans[draft.id].picked.length === 0} onClick={() => applyPickedReplacements(draft)}>替换选中的 {replacePlans[draft.id].picked.length} 处</button><button className="skip-action" onClick={() => setReplacePlans(current => { const next = { ...current }; delete next[draft.id]; return next })}>放弃</button></div></div>}</div>{(draft.checks || draftCheckError[draft.id]) && <div className="draft-checks"><div className="draft-checks-head"><span>发布前检查</span><small>{draftWorkflowLabel(draft)}</small><button className="primary-action" disabled={reviseBusy === draft.id} onClick={() => reviseDraft(draft, undefined, { fromChecks: true })}>{reviseBusy === draft.id ? '改写中...' : '按检查意见改写'}</button></div>{reviseError[draft.id] && <p className="draft-checks-error" role="alert">{reviseError[draft.id]}</p>}{reviseNotice[draft.id] && <p className="draft-checks-notice" role="status">{reviseNotice[draft.id]}</p>}{draftCheckError[draft.id] && <p className="draft-checks-error" role="alert">{draftCheckError[draft.id]}</p>}<small className="draft-checks-hint">改正文：字数、设问开头、咨询腔、编客户、升华句、凑数三连。整篇重写改不动就用「定位替换」按句换。开头句槽位和档案短词还是要你点。</small>{(['persona', 'quality', 'publish', 'logic'] as const).map(check => { const key = check === 'publish' ? 'publish_checklist' : check; const item = draft.checks?.[key]; const current = item?.draft_version === draft.version; const personaReady = draft.checks?.persona?.draft_version === draft.version; const qualityReady = personaReady && draft.checks?.quality?.draft_version === draft.version && draft.checks?.quality?.status === 'passed'; const allowed = check === 'logic' ? true : check === 'persona' || check === 'quality' ? (check === 'quality' ? personaReady : true) : qualityReady; const labels = { persona: '人设检查', quality: '质量门', publish: '发布清单', logic: '逻辑检查' }; const reminderCount = item && current && item.status === 'passed' ? item.evidence.filter(entry => entry.severity === 'warning').length : 0; return <div className="draft-check" key={check}><div className="draft-check-top"><strong>{labels[check]}</strong><span className={item?.status || 'pending'}>{item && current ? draftCheckStatusLabel(check, item.status) : '待检查'}{reminderCount ? `（${reminderCount} 条提醒）` : ''}</span>{item?.score != null && <b>{item.score} 分</b>}</div><button className="outline-action" disabled={busy || !allowed} onClick={() => runDraftCheck(draft, check, Boolean(item && current))}>{item && current ? '重新检查' : check === 'quality' && !personaReady ? '先做人设检查' : check === 'publish' && !qualityReady ? '先通过质量门' : '开始检查'}</button>{item && current && item.report && <details className="draft-report-details"><summary>语言层 22 特征：命中 {item.report.entries.length} 处 · 视为可选，点开看</summary><ul className="draft-report">{item.report.entries.map((entry, index) => { const answerKey = `${draft.id}:${entry.code}`; const answer = followupAnswers[answerKey] || ''; return <li key={`${entry.code}-${index}`}><span className={`report-severity ${entry.severity}`}>{item.report?.severity_labels?.[entry.severity] || entry.severity}</span>{entry.label && <span className="report-label">{entry.label}</span>}{entry.quote && <q>{entry.quote}</q>}<span className="report-note">{entry.note}</span><MarkerScope scope={entry.scope} code={entry.code} />{entry.followup && <span className="report-question">追问：{entry.followup}</span>}{entry.followup && <span className="report-answer"><input aria-label={`回答追问：${entry.label || entry.code}`} value={answer} disabled={followupBusy === answerKey} onChange={event => setFollowupAnswers(current => ({ ...current, [answerKey]: event.target.value }))} placeholder="用你自己的话回答" /><button className="text-action" disabled={busy || followupBusy === answerKey || !answer.trim()} onClick={() => submitFollowup(draft, entry)}>{followupBusy === answerKey ? '存入中...' : '存成素材'}</button>{followupSaved[answerKey] && <small className="report-answer-saved">{followupSaved[answerKey]}</small>}</span>}{entry.code === 'length_severe' && <span className="report-extend"><button className="text-action" disabled={busy || reviseBusy === draft.id} onClick={() => reviseDraft(draft, undefined, { extend: true })}>{reviseBusy === draft.id ? '补写中...' : '补写'}</button></span>}</li> })}</ul></details>}{item && current && item.evidence.length > 0 && <ul className="draft-check-evidence">{item.evidence.map((evidence, index) => <li key={`${evidence.code}-${index}`}><span>{evidence.message}</span><MarkerScope scope={evidence.scope} code={evidence.code} /></li>)}</ul>}{item && current && item.suggestions.length > 0 && <small className="draft-check-suggestions">建议：{item.suggestions.join('；')}</small>}{item && current && item.report && item.report.summary && <p className="draft-report-empty">{item.report.summary}</p>}{item && current && item.report && <p className="draft-report-foot">{item.report.footer}</p>}</div> })}</div>}<DraftApprovalPanel draft={draft} busy={busy} dirty={dirtyDrafts.has(draft.id)} onApprove={() => approveDraft(draft)} onRevoke={() => revokeDraftApproval(draft)} onOpenShooting={onOpenShooting} /><div className="card-foot"><span>{draft.fact_check_status === 'verified' ? '事实已核验' : '事实待核验'}</span><div>{draft.fact_check_status !== 'verified' && <button className="outline-action" disabled={busy || dirtyDrafts.has(draft.id)} onClick={() => updateDraft(draft, { fact_check_status: 'verified' })}>标记已核验</button>}</div></div>{history[draft.id] && <div className="history-list">{history[draft.id].map(item => <span key={`${draft.id}-${item.version}`}><small>v{item.version || 1}</small><button className="text-action" disabled={busy} onClick={() => restoreDraft(draft, item.version || 1)}>恢复</button></span>)}</div>}{compliance[draft.id] && <div className="compliance-result">{compliance[draft.id].source === 'error' ? <small role="alert">合规检查失败，请稍后重试。</small> : compliance[draft.id].hits.length ? compliance[draft.id].hits.map(hit => <span className="compliance-hit" key={hit.word}><strong>{hit.word}</strong><small>{hit.level} · {hit.suggestion}</small></span>) : <small>未检测到违禁词风险（本地词库）。</small>}</div>}<div className="draft-actions"><button className="outline-action" onClick={() => loadHistory(draft)}>查看历史</button><button className="outline-action" disabled={complianceBusy === draft.id || !loadSkillToggles().compliance} onClick={() => checkCompliance(draft)}>{complianceBusy === draft.id ? '检测中...' : '合规检查'}</button><button className="outline-action" disabled={busy} onClick={() => copyDraft(draft)}>复制成变体</button><button className="outline-action" disabled={deaiBusy === draft.id} onClick={() => deaiDraft(draft)}>{deaiBusy === draft.id ? '改写中...' : '改成你自己的说法'}</button></div>{deaiResults[draft.id] && <div className="deai-result"><div className="draft-check-top"><strong>改写预览</strong><small>只改说法，不动你的事实；人工过目后再替换</small></div><p>{deaiResults[draft.id]}</p><div className="deai-actions"><button className="primary-action" disabled={busy} onClick={() => { if (draftActionBlocked(draft)) return; updateDraft(draft, { body: deaiResults[draft.id] }); setDeaiResults(current => { const next = { ...current }; delete next[draft.id]; return next }) }}>替换正文</button><button className="skip-action" onClick={() => setDeaiResults(current => { const next = { ...current }; delete next[draft.id]; return next })}>放弃</button></div></div>}<DraftPublishPanel draft={draft} onUpdated={next => setDrafts(current => current.map(item => item.id === next.id ? next : item))} /></article>) : <div className="draft-editor-empty"><p className="empty-state">左侧没有可编辑的草稿。</p></div>}</div></div> : <div className="structure-empty">{draftsLoading ? <p role="status">正在读取草稿...</p> : draftLoadError ? <><p role="alert">{draftLoadError}</p><button disabled={busy} onClick={loadDrafts}>重新加载草稿</button></> : <p className="empty-state">还没有草稿。在「选题助手」点「确认做」会直接生成{draftVideoPlatforms.join('、')}草稿并进入检查。</p>}</div>}</>}</section>
 }
 
 type ProfileReview = { id: string; status: string; extracted: Record<string, unknown>; source_refs?: unknown[] }
@@ -2102,6 +2301,61 @@ function MaterialWorkspace() {
       .then(next => { setMaterials(current => current.map(row => row.id === next.id ? { ...row, ...next } : row)); refreshCounts(); setError('') })
       .catch(() => setError('用途签没存上，请重试。'))
       .finally(() => setBusy(false))
+  }
+
+  // 素材改得动、删得掉，库才算是你在管。后端一直有这两个接口，前端之前一次都没接上，
+  // 所以重复进来之后只能看着它堆。
+  const [editing, setEditing] = useState<{ id: number; name: string; content: string; angle?: string; unit_type?: string } | null>(null)
+  const [editError, setEditError] = useState<Record<number, string>>({})
+  const [duplicates, setDuplicates] = useState<{ checksum: string; items: MaterialItem[] }[] | null>(null)
+  const [showDuplicates, setShowDuplicates] = useState(false)
+
+  const saveEdit = () => {
+    if (!editing) return
+    setBusy(true)
+    void apiJson<MaterialItem>(`/api/materials/${editing.id}`, { method: 'PATCH', body: JSON.stringify({ name: editing.name, content: editing.content, angle: editing.angle ?? '', unit_type: editing.unit_type?.trim() ? editing.unit_type : null }) })
+      .then(next => {
+        setMaterials(current => current.map(row => row.id === next.id ? { ...row, ...next } : row))
+        setEditing(null)
+        setEditError(current => { const copy = { ...current }; delete copy[next.id]; return copy })
+        refreshCounts()
+        setError('')
+      })
+      // 撞上别的素材时服务端会带「已经在了：#id」回话，原样贴出来，不糊成「保存失败」。
+      .catch(cause => setEditError(current => ({ ...current, [editing.id]: cause.message })))
+      .finally(() => setBusy(false))
+  }
+
+  // 逐条查主张的逻辑。判定只标注、不拦停：不成立的照样能选去写稿，断点摊开给你看。
+  const [logicNote, setLogicNote] = useState<Record<number, string>>({})
+  const checkLogic = (item: MaterialItem) => {
+    setBusy(true)
+    void apiJson<{ status: string; note?: string; breakpoint?: string; logic_state?: string; material: MaterialItem }>(`/api/skills/claims/check`, { method: 'POST', body: JSON.stringify({ material_id: item.id }) })
+      .then(result => {
+        // 角标读的是 logic_state，只并 material 不并它就会让角标停在「没查逻辑」——
+        // 断点出来了、状态没变，比两个都不变更误导人。
+        setMaterials(current => current.map(row => row.id === result.material.id ? { ...row, ...result.material, logic_state: result.logic_state || result.material.logic_state || result.status } : row))
+        setLogicNote(current => ({ ...current, [item.id]: result.breakpoint ? `断点：${result.breakpoint}` : result.note || '' }))
+        setError('')
+      })
+      .catch(cause => setError(`逻辑判定没跑成：${cause instanceof Error ? cause.message : '稍后重试'}。素材原有的判定没动。`))
+      .finally(() => setBusy(false))
+  }
+
+  const archiveMaterial = (item: MaterialItem) => {
+    setBusy(true)
+    void apiJson<MaterialItem>(`/api/materials/${item.id}`, { method: 'DELETE' })
+      .then(() => { setMaterials(current => current.filter(row => row.id !== item.id)); setTotal(current => Math.max(0, current - 1)); refreshCounts(); setError('') })
+      .catch(() => setError(`素材 ${item.id}「${item.name}」没删掉，请重试。`))
+      .finally(() => setBusy(false))
+  }
+
+  const toggleDuplicates = () => {
+    if (showDuplicates) { setShowDuplicates(false); setDuplicates(null); return }
+    setShowDuplicates(true)
+    void apiJson<{ groups: { checksum: string; items: MaterialItem[] }[] }>('/api/materials/duplicates')
+      .then(result => setDuplicates(result.groups || []))
+      .catch(() => { setShowDuplicates(false); setError('没读到疑似重复清单，稍后再试。') })
   }
 
   const refreshCounts = () => {
@@ -2202,7 +2456,21 @@ function MaterialWorkspace() {
       {(['article', ...atomKindKeys] as MaterialKind[]).map(name => <button className={kind === name ? 'chip active' : 'chip'} onClick={() => setKind(kind === name ? '' : name)} key={name}>{materialKindLabels[name]}{kindCounts[name] ? ` · ${kindCounts[name]}` : ''}</button>)}
       <span className="chip-gap" />
       <button className="outline-action" onClick={() => setShowAtomForm(!showAtomForm)}>{showAtomForm ? '收起' : '手动新建'}</button>
+      {/* 新入库的重复已经被身份合并挡住了，这个入口是给你核对老数据用的。 */}
+      <button className="outline-action" disabled={busy} onClick={toggleDuplicates}>{showDuplicates ? '收起重复核对' : '疑似重复'}</button>
     </div>
+    {showDuplicates && <div className="duplicate-panel" role="region" aria-label="疑似重复素材">
+      {duplicates === null ? <p role="status">正在按正文比对...</p> : !duplicates.length ? <p className="empty-state">没有同文的素材。同一句话从不同门进来现在只会存一条。</p> : <>
+        <p className="duplicate-note">{duplicates.length} 组同一句话。留下你想留的那条，其余归档——合并不会改你定过的类型。</p>
+        {duplicates.map(group => <div className="duplicate-group" key={group.checksum}>
+          <strong>{group.items[0]?.content?.slice(0, 40) || '（空正文）'}</strong>
+          {group.items.map(item => <div className="duplicate-row" key={item.id}>
+            <span>{materialKindLabels[item.material_kind || 'article'] || item.material_kind} · {item.unit_type || '未定角色'} · {item.source_label || materialSourceLabel(item) || '手动创建'} · #{item.id}</span>
+            <button className="text-action danger-action" disabled={busy} onClick={() => archiveMaterial(item)}>归档这条</button>
+          </div>)}
+        </div>)}
+      </>}
+    </div>}
     {showAtomForm && <div className="atom-mini-form">
       <select value={atomKind} onChange={event => setAtomKind(event.target.value as MaterialKind)} aria-label="素材类型">
         {atomKindKeys.map(name => <option key={name} value={name}>{materialKindLabels[name]}</option>)}
@@ -2257,11 +2525,29 @@ function MaterialWorkspace() {
         <span className={item.material_kind && item.material_kind !== 'article' ? `kind-tag kind-${item.material_kind}` : 'platform-tag wechat'}>{item.material_kind && item.material_kind !== 'article' ? materialKindLabels[item.material_kind] : item.format}</span>
         <div>
           <h3>{item.name}</h3>
-          {item.content && <p className="material-text" title={item.content}>{item.content}</p>}
+          {editing?.id === item.id ? <div className="material-edit">
+            <label><span>名称</span><input value={editing.name} disabled={busy} onChange={event => setEditing(current => current ? { ...current, name: event.target.value } : current)} /></label>
+            <label><span>正文（改完身份会跟着重算：同一句话不会存下第二条）</span><textarea value={editing.content} disabled={busy} onChange={event => setEditing(current => current ? { ...current, content: event.target.value } : current)} /></label>
+            {/* 角度与认知角色都要能改：录入那一刻定死是错的，导入器也早就说过「没角色的 insight 进去就是死料」。 */}
+            <label><span>角度</span><input list="material-angle-options" aria-label="素材角度" value={editing.angle ?? ''} disabled={busy} placeholder="经营 / 老板 / 员工…也可自己填" onChange={event => setEditing(current => current ? { ...current, angle: event.target.value } : current)} /><datalist id="material-angle-options">{materialAngleSuggestions.map(name => <option key={name} value={name} />)}</datalist></label>
+            <label><span>认知角色</span><select aria-label="素材认知角色" value={editing.unit_type ?? ''} disabled={busy} onChange={event => setEditing(current => current ? { ...current, unit_type: event.target.value } : current)}>
+              <option value="">按类型自动</option>
+              {materialUnitKeys.map(role => <option key={role} value={role}>{materialUnitLabels[role]}</option>)}
+            </select></label>
+            {editError[item.id] && <p role="alert">{editError[item.id]}</p>}
+            <div className="material-edit-actions"><button className="primary-action" disabled={busy || !editing.content.trim()} onClick={saveEdit}>保存</button><button className="skip-action" disabled={busy} onClick={() => { setEditing(null); setEditError(current => { const copy = { ...current }; delete copy[item.id]; return copy }) }}>取消</button></div>
+          </div> : item.content && <p className="material-text" title={item.content}>{item.content}</p>}
           <p className="material-meta">{item.unit_type && <span className="unit-tag">{materialUnitLabels[item.unit_type] || item.unit_type}</span>}<span className={`trust-tag trust-${item.material_trust || 'verified'}`}>{materialTrustLabels[item.material_trust || 'verified']}</span>{item.material_trust === 'sourced' && (item.url ? <a href={item.url} target="_blank" rel="noreferrer">来源链接 · </a> : <span className="trust-warning">来源缺失 · </span>)}{materialPatternTag(item) && <span className="pattern-tag">{materialPatternTag(item)}</span>}{materialSourceLabel(item) ? <span className="material-source">来源：{materialSourceLabel(item)} · </span> : item.material_kind && item.material_kind !== 'article' ? <span className="material-source">来源：{item.origin_material_name || '手动创建'} · </span> : null}状态：{item.status} · 核验：{item.review_status}{item.imported_at ? ` · 导入 ${new Date(item.imported_at).toLocaleDateString()}` : ''}</p>
           <div className="pool-tags">
             <button className={item.use_tag === 'pierce' ? 'chip active' : 'chip'} disabled={busy} onClick={() => setUseTag(item, item.use_tag === 'pierce' ? null : 'pierce')}>戳人的</button>
             <button className={item.use_tag === 'proof' ? 'chip active' : 'chip'} disabled={busy} onClick={() => setUseTag(item, item.use_tag === 'proof' ? null : 'proof')}>证明的</button>
+            <button className="text-action" disabled={busy} onClick={() => { setEditing({ id: item.id, name: item.name, content: item.content || '', angle: item.angle || '', unit_type: item.unit_type || '' }); setEditError(current => { const copy = { ...current }; delete copy[item.id]; return copy }) }}>{editing?.id === item.id ? '收起' : '改正文'}</button>
+            <button className="text-action danger-action" disabled={busy} onClick={() => archiveMaterial(item)}>删掉这条</button>
+            {/* 只有主张查逻辑：案例和经历是事实，不是推理，判它没意义。 */}
+            {item.unit_type === 'OPI' && <button className="text-action" disabled={busy} onClick={() => checkLogic(item)}>查逻辑</button>}
+            {item.unit_type === 'OPI' && <span className={`logic-state logic-${item.logic_state || 'unchecked'}`}>{materialLogicLabels[item.logic_state || 'unchecked']}</span>}
+            {item.angle && <span className="angle-tag">{item.angle}</span>}
+            {item.unit_type === 'OPI' && logicNote[item.id] && <span className="logic-note">{logicNote[item.id]}</span>}
             {item.material_pool === 'hot' && typeof item.days_left === 'number' && <span className={`shelf${item.days_left <= 3 ? ' urgent' : item.days_left <= 7 ? ' warn' : ''}`}>保鲜期 剩 {item.days_left} 天</span>}
             {item.expired && <span className="shelf expired">已过期，沉到底下了</span>}
           </div>
@@ -2480,8 +2766,9 @@ function DraftIdeasPanel({ draft, busy, onUpdated }: { draft: DraftItem; busy: b
 }
 
 function DraftPublishPanel({ draft, onUpdated }: { draft: DraftItem; onUpdated: (next: DraftItem) => void }) {
-  // 平台收敛到抖音与视频号：适配目标也只留这两个，跨平台改稿就是在这两条之间转。
-  const platforms = ['抖音', '视频号']
+  // 生成只出抖音、视频号两版（一次模型调用一版，四版就是四次的钱）；
+  // 但适配要覆盖档案里勾的四个平台，否则「长文/笔记版」在界面上根本没有出口。
+  const platforms = ['抖音', '视频号', '小红书', '公众号']
   const [platform, setPlatform] = useState(draft.platform && platforms.includes(draft.platform) ? draft.platform : '抖音')
   const [busy, setBusy] = useState(false)
   const [diagnosing, setDiagnosing] = useState(false)
@@ -2801,6 +3088,75 @@ function VisionConfirmationCard({ task, shooting, onChanged, onConfirmed }: { ta
   </section>
 }
 
+// 回填不只有「截图给视觉模型认」一条路：没配视觉模型、或者平台数据就是想自己敲两个数，
+// 都得能记下来。后端早收 POST /api/performance-snapshots，复盘的提示语也写着「或手动填写」，
+// 界面上却没有入口 —— 闭环最后一段就等于没有。
+function ManualSnapshotForm({ shooting, onSaved }: { shooting: ShootingItem; onSaved: () => void }) {
+  const [metrics, setMetrics] = useState<Record<string, string>>(() => Object.fromEntries(Object.keys(metricLabels).map(key => [key, ''])))
+  const [publishedAt, setPublishedAt] = useState(new Date().toISOString().slice(0, 10))
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const filled = Object.values(metrics).filter(value => value.trim() !== '')
+  const save = async () => {
+    setBusy(true); setMessage('')
+    const normalized: Record<string, number | null> = {}
+    for (const [key, value] of Object.entries(metrics)) {
+      const raw = value.trim().replace(/,/g, '')
+      if (raw === '') { normalized[key] = null; continue }
+      const number = Number(raw)
+      if (!Number.isFinite(number)) { setMessage(`「${metricLabels[key] || key}」得是数字，或者留空`); setBusy(false); return }
+      normalized[key] = number
+    }
+    try {
+      // draft_id 要一起送：数据回流的候选靠它说清「赢的是哪条稿子」，也靠它去重。
+      await apiJson('/api/performance-snapshots', { method: 'POST', body: JSON.stringify({ shooting_id: shooting.id, draft_id: shooting.draft_id ?? undefined, platform: shooting.platform, published_at: publishedAt, metrics: normalized, status: 'confirmed' }) })
+      setMetrics(current => Object.fromEntries(Object.keys(current).map(key => [key, ''])))
+      setMessage('存好了。这条数据会进表现时间线，也会当复盘和下次选题的参考。')
+      onSaved()
+    } catch (error) { setMessage(error instanceof Error ? error.message : '保存失败，请重试') } finally { setBusy(false) }
+  }
+  return <div className="manual-snapshot">
+    <div className="manual-snapshot-head"><strong>手填这次的数据</strong><small>发出去之后回来填一次，不用截图</small></div>
+    <label className="manual-snapshot-date">发布日期<input type="date" value={publishedAt} onChange={event => setPublishedAt(event.target.value)} /></label>
+    <div className="vision-metrics">{Object.entries(metrics).map(([key, value]) => <label key={key}><span>{metricLabels[key]}</span><input inputMode="numeric" value={value} onChange={event => setMetrics(current => ({ ...current, [key]: event.target.value }))} placeholder="没填就留空" /></label>)}</div>
+    <div className="vision-actions"><button className="primary-action" disabled={busy || !filled.length} onClick={() => void save()}>{busy ? '保存中…' : '存入表现'}</button>{message && <small role="status">{message}</small>}</div>
+    {!filled.length && <small className="compose-hint">至少填一个数，空快照进不了复盘。</small>}
+  </div>
+}
+
+// 回流候选（Requirement 17）后端早就有了：候选要用户确认才生效、系统不自动改写判据。
+// 但界面上一个入口都没有 —— 对用户来说这段等于不存在，填了数据也影响不到下一次写稿。
+type PreferenceItem = { id: number; kind: string; status: string; observation?: string; proposal?: string; replaces_feature?: number | null; confirmed_at?: string | null }
+
+function PreferenceFlowPanel({ refreshKey }: { refreshKey: number }) {
+  const [items, setItems] = useState<PreferenceItem[]>([])
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const load = () => { void apiJson<{ preferences: PreferenceItem[] }>('/api/preferences').then(value => setItems(value.preferences || [])).catch(() => setMessage('回流候选读不出来，稍后再试')) }
+  useEffect(load, [refreshKey])
+  const runFlow = async () => {
+    setBusy(true); setMessage('')
+    try {
+      const result = await apiJson<{ created: PreferenceItem[]; preferences: PreferenceItem[] }>('/api/preferences/data-flow', { method: 'POST', body: JSON.stringify({}) })
+      setItems(result.preferences || [])
+      setMessage(result.created?.length ? `从你确认过的表现里找到 ${result.created.length} 条候选。确认之后才影响下一次创作。` : '这一轮还找不出规律：同一个平台至少要有两条「已确认」的表现记录，差距够大才谈得上规律。')
+    } catch (error) { setMessage(error instanceof Error ? error.message : '找规律失败，请重试') } finally { setBusy(false) }
+  }
+  const decide = (id: number, action: 'confirm' | 'reject') => {
+    void apiJson<{ preferences?: PreferenceItem[] }>(`/api/preferences/${id}/${action}`, { method: 'POST', body: JSON.stringify({}) })
+      .then(load)
+      .catch(error => setMessage(error instanceof Error ? error.message : '这条候选没处理掉，请重试'))
+  }
+  const pending = items.filter(item => item.status === 'pending')
+  const active = items.filter(item => item.status === 'active')
+  return <div className="preference-flow">
+    <div className="manual-snapshot-head"><strong>数据回流</strong><small>确认过的发布数据才会变成下次的判据；系统不自作主张改你的标准</small></div>
+    <div className="vision-actions"><button className="outline-action" disabled={busy} onClick={() => void runFlow()}>{busy ? '正在找…' : '按现在的数据找规律'}</button>{message && <small role="status">{message}</small>}</div>
+    {pending.map(item => <div className="preference-row" key={item.id}><div><b>{item.kind}</b><p>{item.observation}</p><p className="preference-proposal">{item.proposal}</p></div><div className="preference-actions"><button className="primary-action" onClick={() => decide(item.id, 'confirm')}>照这个来</button><button className="skip-action" onClick={() => decide(item.id, 'reject')}>不用</button></div></div>)}
+    {!!active.length && <details className="preference-active"><summary>已经在用的 {active.length} 条</summary>{active.map(item => <p key={item.id}>{item.kind}：{item.proposal || item.observation}</p>)}</details>}
+  </div>
+}
+
 function ShootingWorkspace({ onClose }: { onClose: () => void }) {
   const [items, setItems] = useState<ShootingItem[]>([])
   const [active, setActive] = useState<ShootingItem | null>(null)
@@ -2808,6 +3164,7 @@ function ShootingWorkspace({ onClose }: { onClose: () => void }) {
   const [fontSize, setFontSize] = useState(24)
   const [scrollSpeed, setScrollSpeed] = useState(3)
   const [visionBusy, setVisionBusy] = useState(false)
+  const [manualOpen, setManualOpen] = useState(false)
   const [visionMessage, setVisionMessage] = useState('')
   const [visionTasks, setVisionTasks] = useState<VisionTask[]>([])
   const [snapshotRefresh, setSnapshotRefresh] = useState(0)
@@ -2870,7 +3227,7 @@ function ShootingWorkspace({ onClose }: { onClose: () => void }) {
   const update = (id: number, patch: Record<string, unknown>) => {
     void apiJson<ShootingItem>(`/api/shooting/${id}`, { method: 'PUT', body: JSON.stringify(patch) }).then(next => { setItems(current => current.map(item => item.id === id ? next : item)); setActive(next) }).catch(() => { /* 顶部提示已报，这里只吞掉未处理的 rejection */ })
   }
-  return <section className="shoot-workspace"><div className="shoot-workspace-head"><div><span className="section-kicker">TODAY / SHOOTING DESK</span><h2>今日拍摄清单</h2><p>把准备好的内容，转成可以直接开拍的动作。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="shoot-workspace-grid"><div className="shoot-items">{items.length ? items.map(item => <article className={active?.id === item.id ? 'shoot-item selected' : 'shoot-item'} key={item.id}><div><span className={`platform-tag ${item.platform === '小红书' ? 'xhs' : item.platform === '公众号' ? 'wechat' : 'douyin'}`}>{item.platform}</span><h3>{item.title}</h3></div><select value={item.status} onChange={event => update(item.id, { status: event.target.value })}><option value="ready_to_shoot">待拍摄</option><option value="in_progress">拍摄中</option><option value="completed">已完成</option></select><button className="row-arrow" onClick={() => { setActive(item); setFontSize(item.font_size || 24); setScrollSpeed(item.scroll_speed || 3) }}><ArrowUpRight size={17} /></button></article>) : <p className="empty-state">暂无待拍摄内容。先在内容创作中准备一条脚本。</p>}</div>{active && <div className="teleprompter"><div className="teleprompter-tools"><button onClick={() => setPlaying(!playing)}>{playing ? <Pause size={15} /> : <Play size={15} />} {playing ? '暂停' : '开始滚动'}</button><label>字号 <input type="range" min="16" max="42" value={fontSize} onChange={event => setFontSize(Number(event.target.value))} /></label><label>速度 <input type="range" min="1" max="8" value={scrollSpeed} onChange={event => setScrollSpeed(Number(event.target.value))} /></label><label className="outline-action">{visionBusy ? '上传中…' : '上传表现截图'}<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={event => { void analyzeScreenshots(event.target.files); event.currentTarget.value = '' }} /></label></div>{visionMessage && <p className="error-note" role="status">{visionMessage}</p>}{visionTasks.filter(task => task.match_status !== 'confirmed').map(task => <VisionConfirmationCard key={task.id} task={task} shooting={active} onChanged={next => setVisionTasks(current => next ? current.map(item => item.id === next.id ? next : item) : current.filter(item => item.id !== task.id))} onConfirmed={() => setSnapshotRefresh(value => value + 1)} />)}<PerformanceTimeline shooting={active} refreshKey={snapshotRefresh} /><div className={playing ? 'teleprompter-script is-playing' : 'teleprompter-script'} ref={scriptRef} style={{ fontSize }}><span>{active.platform} · 提词模式</span><h3>{active.title}</h3><p>{active.script || '脚本内容将在内容创作完成后显示。你可以先确认镜头节奏，再开始拍摄。'}</p></div><button className="primary-action" onClick={() => update(active.id, { status: active.status === 'completed' ? 'ready_to_shoot' : 'completed', font_size: fontSize, scroll_speed: scrollSpeed })}>{active.status === 'completed' ? '重新安排拍摄' : '标记为已完成'} <Check size={16} /></button></div>}</div></section>
+  return <section className="shoot-workspace"><div className="shoot-workspace-head"><div><span className="section-kicker">TODAY / SHOOTING DESK</span><h2>今日拍摄清单</h2><p>把准备好的内容，转成可以直接开拍的动作。</p></div><button className="close-review" onClick={onClose}><X size={16} /></button></div><div className="shoot-workspace-grid"><div className="shoot-items">{items.length ? items.map(item => <article className={active?.id === item.id ? 'shoot-item selected' : 'shoot-item'} key={item.id}><div><span className={`platform-tag ${item.platform === '小红书' ? 'xhs' : item.platform === '公众号' ? 'wechat' : 'douyin'}`}>{item.platform}</span><h3>{item.title}</h3></div><select value={item.status} onChange={event => update(item.id, { status: event.target.value })}><option value="ready_to_shoot">待拍摄</option><option value="in_progress">拍摄中</option><option value="completed">已完成</option></select><button className="row-arrow" onClick={() => { setActive(item); setFontSize(item.font_size || 24); setScrollSpeed(item.scroll_speed || 3) }}><ArrowUpRight size={17} /></button></article>) : <p className="empty-state">暂无待拍摄内容。先在内容创作中准备一条脚本。</p>}</div>{active && <div className="teleprompter"><div className="teleprompter-tools"><button onClick={() => setPlaying(!playing)}>{playing ? <Pause size={15} /> : <Play size={15} />} {playing ? '暂停' : '开始滚动'}</button><label>字号 <input type="range" min="16" max="42" value={fontSize} onChange={event => setFontSize(Number(event.target.value))} /></label><label>速度 <input type="range" min="1" max="8" value={scrollSpeed} onChange={event => setScrollSpeed(Number(event.target.value))} /></label><label className="outline-action">{visionBusy ? '上传中…' : '上传表现截图'}<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={event => { void analyzeScreenshots(event.target.files); event.currentTarget.value = '' }} /></label><button className="outline-action" onClick={() => setManualOpen(open => !open)}>{manualOpen ? '收起手填' : '手填数据'}</button></div>{visionMessage && <p className="error-note" role="status">{visionMessage}</p>}{manualOpen && <ManualSnapshotForm shooting={active} onSaved={() => setSnapshotRefresh(value => value + 1)} />}{visionTasks.filter(task => task.match_status !== 'confirmed').map(task => <VisionConfirmationCard key={task.id} task={task} shooting={active} onChanged={next => setVisionTasks(current => next ? current.map(item => item.id === next.id ? next : item) : current.filter(item => item.id !== task.id))} onConfirmed={() => setSnapshotRefresh(value => value + 1)} />)}<PerformanceTimeline shooting={active} refreshKey={snapshotRefresh} /><PreferenceFlowPanel refreshKey={snapshotRefresh} /><div className={playing ? 'teleprompter-script is-playing' : 'teleprompter-script'} ref={scriptRef} style={{ fontSize }}><span>{active.platform} · 提词模式</span><h3>{active.title}</h3><p>{active.script || '脚本内容将在内容创作完成后显示。你可以先确认镜头节奏，再开始拍摄。'}</p></div><button className="primary-action" onClick={() => update(active.id, { status: active.status === 'completed' ? 'ready_to_shoot' : 'completed', font_size: fontSize, scroll_speed: scrollSpeed })}>{active.status === 'completed' ? '重新安排拍摄' : '标记为已完成'} <Check size={16} /></button></div>}</div></section>
 }
 
 function PasswordGate({ theme, font, onSuccess, expectedUser }: { theme: ThemeKey; font: FontKey; onSuccess: () => void; expectedUser?: string }) {
