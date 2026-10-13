@@ -511,7 +511,9 @@ textarea 退回浏览器默认尺寸（默认 20 字符宽，正好是截图里�
 
 ## 当前状态
 
-当前内测版本已完成红狐官网 API、多用户账号与数据隔离、服务器共享 API Key 及每日额度、发布适配/复盘闭环、记忆自动提炼和用户反馈通道。账号首次登录会自动进入 4 步定位访谈，可稍后填写并从“定位发现”继续；首页不再展示固定演示身份和示例选题。质量门当前为 322 项自动化测试、TypeScript 检查和生产构建。
+线上 `https://content.woyai.cn` 已同步到 2026-10-13 这一版（2026-09-07 之后服务端一直没再部署过，9 月 19 日到 21 日的后端模块这轮才补上；部署备份见服务器 `deploy-backups/pre-20261013T142031Z-*.tgz` 与 `backups/content_ip_workbench-20261013T142032Z.sql.gz`）。本轮另外修掉了可读性：六条 `font: 尺寸/行距 inherit` 的无效简写全部改成有效写法（草稿正文因此从「标题宋体 + 半粗 + 默认行距」回到 16px / 常规 / 1.85），全站设了 11.5px 的字号下限并给 `small` 兜住浏览器默认的 80%，草稿正文框改成按内容长高，检查折叠标题按「语言层 / 口播结构」分开计数。实测数据、未验证范围与下一步在 `docs/audits/2026-10-13-hands-on/README.md`。
+
+当前内测版本已完成红狐官网 API、多用户账号与数据隔离、服务器共享 API Key 及每日额度、发布适配/复盘闭环、记忆自动提炼和用户反馈通道。账号首次登录会自动进入 4 步定位访谈，可稍后填写并从“定位发现”继续；首页不再展示固定演示身份和示例选题。质量门当前为 515 项自动化测试、TypeScript 检查和生产构建。
 
 ## 内测数据状态
 
@@ -534,7 +536,7 @@ public/sw.js          # Service Worker（缓存版本 dingweipai-shell-v3）
 server/index.mjs      # 全部 API 路由 + 业务逻辑 + 静态托管
 server/mysql.mjs      # MySQL 适配层（collection 读写）
 server/redfox.mjs     # 红狐官网 API 适配（服务端读取账号加密 Key 或项目共享 Key）
-server/*.test.mjs     # Node 原生测试（当前全量 322 个，含 desktop）
+server/*.test.mjs     # Node 原生测试（当前全量 515 个，含 desktop）
 desktop/              # 桌面壳（Electron）
 scripts/import-benchmark.mjs # 对标账号资料包导入器（方法库/素材原子/AI 记忆）
 scripts/benchmarks/   # 对标账号资料包（如 dontbesilent.json）
@@ -568,7 +570,7 @@ npm run dev
 npm run verify
 ```
 
-完整链 = `node --test`（当前 322 个测试，使用独立临时 DATA_FILE，不碰真实数据）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
+完整链 = `node --test`（当前 515 个测试，使用独立临时 DATA_FILE，不碰真实数据；必须在仓库根目录跑，在 server/ 里跑会报「测试 API 异常退出: 1」）+ `tsc` 类型检查 + Vite 生产构建。全部通过才允许交付。
 
 新增后端功能必须在 `server/*.test.mjs` 补测试；新增前端能力在 `server/web-assets.test.mjs` 加特征断言（该测试读取 src 源码验证关键类名/组件存在）。
 
